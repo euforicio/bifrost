@@ -149,6 +149,11 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 	const isSGL = effectiveProvider === "sgl";
 	const isDeepseek = effectiveProvider === "deepseek";
 	const isFireworks = effectiveProvider === "fireworks";
+	const isOpenAICodex = effectiveProvider === "openai-codex";
+	const isXAI = effectiveProvider === "xai";
+	const isCursor = effectiveProvider === "cursor";
+	const nameLabel = isOpenAICodex || isCursor ? "Account name" : isXAI ? "Credential name" : "Name";
+	const namePlaceholder = isOpenAICodex ? "Work ChatGPT" : isCursor ? "Work Cursor" : isXAI ? "Production xAI" : "Production Key";
 	const isKeylessProvider = isOllama || isSGL;
 	const supportsBatchAPI = BATCH_SUPPORTED_PROVIDERS.includes(effectiveProvider);
 
@@ -253,9 +258,9 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 						name={`key.name`}
 						render={({ field }) => (
 							<FormItem>
-								<FormLabel>Name</FormLabel>
+								<FormLabel>{nameLabel}</FormLabel>
 								<FormControl>
-									<Input placeholder="Production Key" type="text" {...field} />
+									<Input placeholder={namePlaceholder} type="text" {...field} />
 								</FormControl>
 								<FormMessage />
 							</FormItem>
@@ -315,16 +320,19 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 				/>
 			</div>
 			{/* Hide API Key field for providers with dedicated auth tabs */}
-			{!isAzure && !isBedrock && !isBedrockMantle && !isVertex && (
+			{!isAzure && !isBedrock && !isBedrockMantle && !isVertex && !isOpenAICodex && !isCursor && (
 				<FormField
 					control={control}
 					name={`key.value`}
 					render={({ field }) => (
 						<FormItem>
-							<FormLabel>API Key {isVLLM ? "(Optional)" : ""}</FormLabel>
+							<FormLabel>API Key {isVLLM || isXAI ? "(Optional)" : ""}</FormLabel>
 							<FormControl>
 								<SecretVarInput placeholder="API Key or env.MY_KEY" type="text" {...field} />
 							</FormControl>
+							{isXAI ? (
+								<FormDescription>Keep using an xAI API key, or leave this blank and connect an xAI account after saving.</FormDescription>
+							) : null}
 							<FormMessage />
 						</FormItem>
 					)}

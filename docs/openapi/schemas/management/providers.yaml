@@ -498,3 +498,66 @@ ListModelDetailsResponse:
         $ref: '#/ModelDetailsResponse'
     total:
       type: integer
+
+ProviderCredentialStatus:
+  type: object
+  required: [credential_id, provider, status, version]
+  properties:
+    credential_id:
+      type: string
+      description: Provider key ID that owns this account binding
+    provider:
+      type: string
+      enum: [openai-codex, xai, cursor]
+    account_id:
+      type: string
+    status:
+      type: string
+      enum: [connected, connecting, expired, disconnected, error]
+    expires_at:
+      type: string
+      format: date-time
+    last_refresh:
+      type: string
+      format: date-time
+    version:
+      type: integer
+      format: uint64
+
+ListProviderCredentialsResponse:
+  type: object
+  required: [credentials, total]
+  properties:
+    credentials:
+      type: array
+      items:
+        $ref: '#/ProviderCredentialStatus'
+    total:
+      type: integer
+
+ProviderCredentialLoginStatus:
+  type: object
+  required: [login_id, credential_id, provider, status]
+  properties:
+    login_id:
+      type: string
+    credential_id:
+      type: string
+    provider:
+      type: string
+      enum: [openai-codex, xai, cursor]
+    status:
+      type: string
+      enum: [connecting, connected, disconnected, error]
+    verification_url:
+      type: string
+      format: uri
+    user_code:
+      type: string
+    expires_at:
+      type: string
+      format: date-time
+    poll_interval_seconds:
+      type: integer
+    error_code:
+      type: string

@@ -1,0 +1,59 @@
+---
+title: "Cursor"
+description: "Use multiple Cursor subscriptions through encrypted browser authorization and the Responses API"
+icon: "computer-mouse"
+---
+
+## Overview
+
+The Cursor provider connects Bifrost to models available through a Cursor subscription. It uses a PKCE browser authorization flow, stores access and refresh tokens encrypted in the Bifrost config store, discovers the account's usable models dynamically, and exposes them through Bifrost's Responses API.
+
+<Warning>
+Cursor does not publish its AgentService account transport as a stable third-party API. This integration is experimental and can require updates if Cursor changes its endpoints, headers, protobuf fields, or account policy. Use it only where your Cursor terms and organization policy permit it.
+</Warning>
+
+### Supported operations
+
+| Operation | Non-streaming | Streaming |
+|---|---:|---:|
+| Responses API | ✅ | ✅ |
+| Model discovery | ✅ | — |
+| Tool calls and results | ✅ | ✅ |
+| Reasoning and text deltas | ✅ | ✅ |
+| Chat Completions | ❌ | ❌ |
+| Embeddings, images, audio, files, and batches | ❌ | ❌ |
+
+Unsupported operations fail explicitly instead of being translated to a different API.
+
+## Connect an account
+
+1. Navigate to **Models** > **Model Providers** and add **Cursor**.
+2. Add a provider key and give it a recognizable account name.
+3. Select **Connect Cursor account**.
+4. Open the displayed Cursor login URL and approve access in your browser.
+5. Return to Bifrost. The account status changes to **Connected** and its available models can be refreshed.
+
+The browser receives only a short-lived authorization URL and sanitized status. Access and refresh tokens are never returned by the management API or shown in the dashboard.
+
+## Multiple accounts
+
+Every Cursor provider key owns an independent encrypted account binding. Add one key per subscription, then use key weights, model allowlists, routing rules, budgets, and virtual-key policies to control selection. Login, refresh, reconnect, and disconnect actions affect only the selected account.
+
+## Requests
+
+Use the normal Bifrost Responses endpoint with a `cursor/` model prefix:
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "cursor/auto",
+    "input": "Explain this repository"
+  }'
+```
+
+Bifrost converts the normalized Responses request to Cursor's HTTP/2 Connect/protobuf conversation stream. Tool definitions are projected as Cursor MCP tools, but Bifrost remains the tool executor and continues to apply its governance, approval, and persistence policies.
+
+## Credential lifecycle
+
+Bifrost refreshes a connected account proactively before expiry. If Cursor returns `401`, Bifrost performs exactly one forced refresh and retries the same request once. It does not refresh for rate limits, forbidden requests, timeouts, or ordinary provider failures. Disconnecting removes the encrypted account credential without deleting the provider key.

@@ -154,6 +154,16 @@ func (h *ProviderHandler) RegisterRoutes(r *router.Router, middlewares ...schema
 	// newly served model (or re-check a failing key) without waiting.
 	r.POST("/api/providers/{provider}/refresh-models", lib.ChainMiddlewares(h.refreshProviderModels, middlewares...))
 	r.POST("/api/providers/{provider}/keys/{key_id}/refresh-models", lib.ChainMiddlewares(h.refreshProviderKeyModels, middlewares...))
+	// Subscription-backed, multi-account provider credentials. Credential IDs
+	// are provider key IDs, preserving existing governance and key selection.
+	r.GET("/api/providers/{provider}/credentials", lib.ChainMiddlewares(h.listProviderCredentials, middlewares...))
+	r.POST("/api/providers/{provider}/credentials/{credential_id}/login/device", lib.ChainMiddlewares(h.startProviderCredentialLogin, middlewares...))
+	r.POST("/api/providers/{provider}/credentials/{credential_id}/login/browser", lib.ChainMiddlewares(h.startProviderCredentialBrowserLogin, middlewares...))
+	r.GET("/api/providers/{provider}/credentials/{credential_id}/login/{login_id}", lib.ChainMiddlewares(h.getProviderCredentialLogin, middlewares...))
+	r.DELETE("/api/providers/{provider}/credentials/{credential_id}/login/{login_id}", lib.ChainMiddlewares(h.cancelProviderCredentialLogin, middlewares...))
+	r.GET("/api/providers/{provider}/credentials/{credential_id}/status", lib.ChainMiddlewares(h.getProviderCredentialStatus, middlewares...))
+	r.POST("/api/providers/{provider}/credentials/{credential_id}/refresh", lib.ChainMiddlewares(h.refreshProviderCredential, middlewares...))
+	r.DELETE("/api/providers/{provider}/credentials/{credential_id}", lib.ChainMiddlewares(h.deleteProviderCredential, middlewares...))
 	r.GET("/api/keys", lib.ChainMiddlewares(h.listKeys, middlewares...))
 	r.GET("/api/models", lib.ChainMiddlewares(h.listModels, middlewares...))
 	r.GET("/api/models/details", lib.ChainMiddlewares(h.listModelDetails, middlewares...))

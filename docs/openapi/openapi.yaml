@@ -771,6 +771,20 @@ paths:
     $ref: "./paths/management/providers.yaml#/provider-keys"
   /api/providers/{provider}/keys/{key_id}:
     $ref: "./paths/management/providers.yaml#/provider-key-by-id"
+  /api/providers/{provider}/credentials:
+    $ref: "./paths/management/providers.yaml#/provider-credentials"
+  /api/providers/{provider}/credentials/{credential_id}:
+    $ref: "./paths/management/providers.yaml#/provider-credential-by-id"
+  /api/providers/{provider}/credentials/{credential_id}/status:
+    $ref: "./paths/management/providers.yaml#/provider-credential-status"
+  /api/providers/{provider}/credentials/{credential_id}/refresh:
+    $ref: "./paths/management/providers.yaml#/provider-credential-refresh"
+  /api/providers/{provider}/credentials/{credential_id}/login/device:
+    $ref: "./paths/management/providers.yaml#/provider-credential-device-login"
+  /api/providers/{provider}/credentials/{credential_id}/login/browser:
+    $ref: "./paths/management/providers.yaml#/provider-credential-browser-login"
+  /api/providers/{provider}/credentials/{credential_id}/login/{login_id}:
+    $ref: "./paths/management/providers.yaml#/provider-credential-login-status"
   /api/keys:
     $ref: "./paths/management/providers.yaml#/keys"
   /api/models:
@@ -1301,6 +1315,12 @@ components:
       $ref: "./paths/inference/async.yaml#/components/parameters/AsyncWebhookEndpoint"
     WebhookEndpointId:
       $ref: "./paths/management/webhooks.yaml#/components/parameters/WebhookEndpointId"
+    ProviderName:
+      $ref: "./paths/management/providers.yaml#/provider-name-parameter"
+    ProviderCredentialId:
+      $ref: "./paths/management/providers.yaml#/provider-credential-id-parameter"
+    ProviderLoginId:
+      $ref: "./paths/management/providers.yaml#/provider-login-id-parameter"
 
   responses:
     BadRequest:
@@ -1617,6 +1637,12 @@ components:
       $ref: "./schemas/management/providers.yaml#/Key"
     ListProviderKeysResponse:
       $ref: "./schemas/management/providers.yaml#/ListProviderKeysResponse"
+    ProviderCredentialStatus:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialStatus"
+    ListProviderCredentialsResponse:
+      $ref: "./schemas/management/providers.yaml#/ListProviderCredentialsResponse"
+    ProviderCredentialLoginStatus:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialLoginStatus"
     NetworkConfig:
       $ref: "./schemas/management/providers.yaml#/NetworkConfig"
     ConcurrencyAndBufferSize:

@@ -326,86 +326,87 @@ export const aliasConfigSchema = z.preprocess(
 );
 
 // Model provider key schema
-export const modelProviderKeySchema = z
-	.object({
-		id: z.string().min(1, "Id is required"),
-		name: z.string().min(1, "Name is required"),
-		value: secretVarSchema.optional(),
-		models: z.array(z.string()).optional().default(["*"]),
-		blacklisted_models: z.array(z.string()).default([]).optional(),
-		weight: z
-			.union([z.number(), z.string()])
-			.transform((val, ctx) => {
-				if (typeof val === "number") return val;
-				if (val.trim() === "") return 1.0;
-				// Use Number() rather than parseFloat() so that strings like "0.5abc"
-				// are rejected outright instead of silently parsing to 0.5.
-				const num = Number(val);
-				if (!Number.isFinite(num)) {
-					ctx.addIssue({
-						code: "custom",
-						message: "Weight must be a valid number between 0 and 1",
-					});
-					return z.NEVER;
-				}
-				return num;
-			})
-			.pipe(z.number().min(0, "Weight must be equal to or greater than 0").max(1, "Weight must be equal to or less than 1")),
-		aliases: z.record(z.string(), aliasConfigSchema).optional(),
-		azure_key_config: azureKeyConfigSchema.optional(),
-		vertex_key_config: vertexKeyConfigSchema.optional(),
-		bedrock_key_config: bedrockKeyConfigSchema.optional(),
-		bedrock_mantle_key_config: bedrockMantleKeyConfigSchema.optional(),
-		vllm_key_config: vllmKeyConfigSchema.optional(),
-		replicate_key_config: replicateKeyConfigSchema.optional(),
-		ollama_key_config: ollamaKeyConfigSchema.optional(),
-		sgl_key_config: sglKeyConfigSchema.optional(),
-		use_for_batch_api: z.boolean().optional(),
-		use_anthropic_endpoints: z.boolean().optional(),
-		enabled: z.boolean().optional(),
-	})
-	.refine(
-		(data) => {
-			if (data.vllm_key_config || data.ollama_key_config || data.sgl_key_config) {
-				return true;
+export const accountProviderKeySchema = z.object({
+	id: z.string().min(1, "Id is required"),
+	name: z.string().min(1, "Name is required"),
+	value: secretVarSchema.optional(),
+	models: z.array(z.string()).optional().default(["*"]),
+	blacklisted_models: z.array(z.string()).default([]).optional(),
+	weight: z
+		.union([z.number(), z.string()])
+		.transform((val, ctx) => {
+			if (typeof val === "number") return val;
+			if (val.trim() === "") return 1.0;
+			// Use Number() rather than parseFloat() so that strings like "0.5abc"
+			// are rejected outright instead of silently parsing to 0.5.
+			const num = Number(val);
+			if (!Number.isFinite(num)) {
+				ctx.addIssue({
+					code: "custom",
+					message: "Weight must be a valid number between 0 and 1",
+				});
+				return z.NEVER;
 			}
-			// Bedrock Mantle authenticates via SigV4 (its key config) or a Bearer key — only require
-			// a top-level API key when the user explicitly chose the api_key auth method.
-			if (data.bedrock_mantle_key_config) {
-				if (data.bedrock_mantle_key_config._auth_type === "api_key") {
-					return isSecretVarSet(data.value);
-				}
-				return true;
+			return num;
+		})
+		.pipe(z.number().min(0, "Weight must be equal to or greater than 0").max(1, "Weight must be equal to or less than 1")),
+	aliases: z.record(z.string(), aliasConfigSchema).optional(),
+	azure_key_config: azureKeyConfigSchema.optional(),
+	vertex_key_config: vertexKeyConfigSchema.optional(),
+	bedrock_key_config: bedrockKeyConfigSchema.optional(),
+	bedrock_mantle_key_config: bedrockMantleKeyConfigSchema.optional(),
+	vllm_key_config: vllmKeyConfigSchema.optional(),
+	replicate_key_config: replicateKeyConfigSchema.optional(),
+	ollama_key_config: ollamaKeyConfigSchema.optional(),
+	sgl_key_config: sglKeyConfigSchema.optional(),
+	use_for_batch_api: z.boolean().optional(),
+	use_anthropic_endpoints: z.boolean().optional(),
+	enabled: z.boolean().optional(),
+});
+
+export const modelProviderKeySchema = accountProviderKeySchema.refine(
+	(data) => {
+		// Providers with dedicated config that never need a top-level API key
+		if (data.vllm_key_config || data.ollama_key_config || data.sgl_key_config) {
+			return true;
+		}
+		// Bedrock Mantle authenticates via SigV4 (its key config) or a Bearer key — only require
+		// a top-level API key when the user explicitly chose the api_key auth method.
+		if (data.bedrock_mantle_key_config) {
+			if (data.bedrock_mantle_key_config._auth_type === "api_key") {
+				return isSecretVarSet(data.value);
 			}
-			// Azure requires API key only when using api_key auth
-			if (data.azure_key_config) {
-				if (data.azure_key_config._auth_type === "api_key") {
-					return isSecretVarSet(data.value);
-				}
-				return true;
+			return true;
+		}
+		// Azure requires API key only when using api_key auth
+		if (data.azure_key_config) {
+			if (data.azure_key_config._auth_type === "api_key") {
+				return isSecretVarSet(data.value);
 			}
-			// Bedrock only requires API key when using api_key auth
-			if (data.bedrock_key_config) {
-				if (data.bedrock_key_config._auth_type === "api_key") {
-					return isSecretVarSet(data.value);
-				}
-				return true;
+			return true;
+		}
+		// Bedrock only requires API key when using api_key auth
+		if (data.bedrock_key_config) {
+			if (data.bedrock_key_config._auth_type === "api_key") {
+				return isSecretVarSet(data.value);
 			}
-			// Vertex requires API key only when using api_key auth
-			if (data.vertex_key_config) {
-				if (data.vertex_key_config._auth_type === "api_key") {
-					return isSecretVarSet(data.value);
-				}
-				return true;
+			return true;
+		}
+		// Vertex requires API key only when using api_key auth
+		if (data.vertex_key_config) {
+			if (data.vertex_key_config._auth_type === "api_key") {
+				return isSecretVarSet(data.value);
 			}
-			// Otherwise, value is required
-			return isSecretVarSet(data.value);
-		},
-		{
-			message: "API Key is required",
-			path: ["value"],
-		},
-	);
+			return true;
+		}
+		// Otherwise, value is required
+		return isSecretVarSet(data.value);
+	},
+	{
+		message: "API Key is required",
+		path: ["value"],
+	},
+);
 
 // Network config schema
 export const networkConfigSchema = z

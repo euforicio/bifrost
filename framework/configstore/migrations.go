@@ -475,6 +475,75 @@ var configstoreMigrationSteps = []migrationStep{
 	{IDs: []string{"add_ultrafast_pricing_columns"}, run: migrationAddUltrafastPricingColumns},
 	{IDs: []string{"add_image_size_quality_pricing_columns"}, run: migrationAddImageSizeQualityPricingColumns},
 	{IDs: []string{"add_batch_jobs_attribution_columns"}, run: migrationAddBatchJobsAttributionColumns},
+	{IDs: []string{"add_provider_credentials_table"}, run: migrationAddProviderCredentialsTable},
+	{IDs: []string{"add_provider_credential_refresh_lease_columns"}, run: migrationAddProviderCredentialRefreshLeaseColumns},
+}
+
+// migrationAddProviderCredentialsTable creates the durable provider-issued
+// credential store. Token encryption is handled by TableProviderCredential's
+// GORM hooks; the indexes support key binding, provider/auth-mode filtering,
+// account lookup, and refresh scans.
+func migrationAddProviderCredentialsTable(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migrationName := "add_provider_credentials_table"
+	logger.Info("[configstore] starting migration %s", migrationName)
+	defer logger.Info("[configstore] finished migration %s", migrationName)
+
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: migrationName,
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if !tx.Migrator().HasTable(&tables.TableProviderCredential{}) {
+				if err := tx.Migrator().CreateTable(&tables.TableProviderCredential{}); err != nil {
+					return fmt.Errorf("failed to create provider_credentials table: %w", err)
+				}
+			}
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.WithContext(ctx).Migrator().DropTable(&tables.TableProviderCredential{})
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running %s migration: %w", migrationName, err)
+	}
+	return nil
+}
+
+// migrationAddProviderCredentialRefreshLeaseColumns adds the durable lease
+// used to serialize refresh-token rotation across Bifrost nodes.
+func migrationAddProviderCredentialRefreshLeaseColumns(ctx context.Context, db *gorm.DB, logger schemas.Logger) error {
+	migrationName := "add_provider_credential_refresh_lease_columns"
+	logger.Info("[configstore] starting migration %s", migrationName)
+	defer logger.Info("[configstore] finished migration %s", migrationName)
+
+	m := migrator.New(db, migrator.DefaultOptions, []*migrator.Migration{{
+		ID: migrationName,
+		Migrate: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			for _, column := range []string{"refresh_lease_owner", "refresh_lease_expires_at"} {
+				if err := addColumnIfNotExists(tx, logger, &tables.TableProviderCredential{}, column); err != nil {
+					return fmt.Errorf("failed to add provider credential %s column: %w", column, err)
+				}
+			}
+			return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_provider_credentials_refresh_lease_expires_at ON provider_credentials (refresh_lease_expires_at)`).Error
+		},
+		Rollback: func(tx *gorm.DB) error {
+			tx = tx.WithContext(ctx)
+			if err := tx.Exec("DROP INDEX IF EXISTS idx_provider_credentials_refresh_lease_expires_at").Error; err != nil {
+				return err
+			}
+			for _, column := range []string{"refresh_lease_expires_at", "refresh_lease_owner"} {
+				if err := dropColumnIfExists(tx, logger, &tables.TableProviderCredential{}, column); err != nil {
+					return fmt.Errorf("failed to drop provider credential %s column: %w", column, err)
+				}
+			}
+			return nil
+		},
+	}})
+	if err := m.Migrate(); err != nil {
+		return fmt.Errorf("error running %s migration: %w", migrationName, err)
+	}
+	return nil
 }
 
 // migrationAddBatchJobsAttributionColumns adds the requester-identity columns to
