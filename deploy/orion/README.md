@@ -8,8 +8,8 @@ Hostinger Orion server at `31.97.143.81`.
 - GitHub Actions builds the checked-out source with `transports/Dockerfile.local`
   and publishes an immutable commit tag to `ghcr.io/euforicio/bifrost`.
 - Production deploys an immutable `image@sha256:digest`, never a mutable tag.
-- Bifrost binds only to `127.0.0.1:8080`; Cloudflare Tunnel is the public TLS
-  boundary.
+- Bifrost binds only to `127.0.0.1:8080`; the existing Orion Caddy service is
+  the public TLS and reverse-proxy boundary.
 - `/opt/bifrost/data` persists the single-instance SQLite configuration, logs,
   provider accounts, and encrypted refresh tokens.
 - `/opt/bifrost/.env` is created once on the host with mode `0600`. Its stable
@@ -57,20 +57,19 @@ The forced command accepts only `deploy` with an immutable image from
 registry token from standard input into a temporary Docker configuration and
 cannot open an interactive root shell.
 
-## Cloudflare Tunnel
+## Caddy and Cloudflare DNS
 
-Use a dedicated tunnel named `bifrost-orion`. Its only ingress rule is:
+Install `Caddyfile.bifrost` as a site fragment in Orion's existing Caddy
+configuration. Validate the complete configuration before reloading Caddy:
 
-```yaml
-ingress:
-  - hostname: bifrost.riftlabs.app
-    service: http://127.0.0.1:8080
-  - service: http_status:404
+```bash
+caddy validate --config /etc/caddy/Caddyfile
+systemctl reload caddy
 ```
 
-Run `cloudflared` as a system service on Orion. The DNS record should be the
-proxied CNAME created by `cloudflared tunnel route dns bifrost-orion
-bifrost.riftlabs.app`; do not create a public port-forward for Bifrost.
+Create a Cloudflare DNS `A` record for `bifrost.riftlabs.app` pointing to
+`31.97.143.81`. Keep the record DNS-only so Caddy terminates public TLS
+directly. Ports 80 and 443 must reach Caddy; port 8080 remains loopback-only.
 
 ## Operations
 
