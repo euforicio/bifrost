@@ -158,7 +158,8 @@ jobs:
           IMAGE_TAG: ${{ steps.tag.outputs.value }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          echo "image=${IMAGE_TAG}@${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
+          image_repository=${IMAGE_TAG%:*}
+          echo "image=${image_repository}@${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
           {
             echo '### Orion image'
             echo
