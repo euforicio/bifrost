@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 15
     environment:
       name: orion-production
-      url: https://bifrost.riftlabs.cc
+      url: https://bifrost.riftlabs.app
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
@@ -40,7 +40,7 @@ jobs:
           allowed-endpoints: >
             31.97.143.81:22
             api.github.com:443
-            bifrost.riftlabs.cc:443
+            bifrost.riftlabs.app:443
             ghcr.io:443
             github.com:443
             pkg-containers.githubusercontent.com:443
@@ -94,14 +94,14 @@ jobs:
         run: |
           verify_public() {
             curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-              https://bifrost.riftlabs.cc/health >/dev/null \
+              https://bifrost.riftlabs.app/health >/dev/null \
               && curl --fail --silent --show-error --retry 3 --retry-delay 2 \
-                https://bifrost.riftlabs.cc/ >/dev/null \
+                https://bifrost.riftlabs.app/ >/dev/null \
               && [[ $(curl --silent --output /dev/null --write-out '%{http_code}' \
                 --request POST \
                 --header 'Content-Type: application/json' \
                 --data '{}' \
-                https://bifrost.riftlabs.cc/v1/chat/completions) == 401 ]]
+                https://bifrost.riftlabs.app/v1/chat/completions) == 401 ]]
           }
           if verify_public; then
             exit 0
@@ -121,7 +121,7 @@ jobs:
             "rollback ${GITHUB_ACTOR}")
           if [[ "$rollback_result" == "none stopped" ]]; then
             rollback_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-              https://bifrost.riftlabs.cc/health || true)
+              https://bifrost.riftlabs.app/health || true)
             if [[ "$rollback_status" =~ ^2 ]]; then
               echo "first-deploy rollback left a public service running" >&2
               exit 1

@@ -3,7 +3,7 @@
   "encryption_key": "env.BIFROST_ENCRYPTION_KEY",
   "setup_token": "env.BIFROST_SETUP_TOKEN",
   "client": {
-    "allowed_origins": ["https://bifrost.riftlabs.cc"],
+    "allowed_origins": ["https://bifrost.riftlabs.app"],
     "allow_direct_keys": false,
     "enforce_auth_on_inference": true
   },
