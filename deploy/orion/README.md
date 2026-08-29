@@ -53,7 +53,7 @@ restrict,command="/usr/local/sbin/bifrost-deploy" ssh-ed25519 <deployment-public
 ```
 
 The forced command accepts only `deploy` with an immutable image from
-`ghcr.io/euforicio/bifrost`, or `rollback`. It reads a short-lived GitHub
+`ghcr.io/euforicio/bifrost`, or `rollback` with the workflow actor. It reads a short-lived GitHub
 registry token from standard input into a temporary Docker configuration and
 cannot open an interactive root shell.
 

@@ -61,7 +61,7 @@ jobs:
             fi
             echo "command=deploy ghcr.io/euforicio/bifrost@${DIGEST} ${GITHUB_ACTOR}" >> "$GITHUB_OUTPUT"
           else
-            echo "command=rollback" >> "$GITHUB_OUTPUT"
+            echo "command=rollback ${GITHUB_ACTOR}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Configure restricted SSH access
@@ -88,17 +88,37 @@ jobs:
             "$DEPLOY_COMMAND"
 
       - name: Verify public health and authentication
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPERATION: ${{ inputs.operation }}
         run: |
-          curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-            https://bifrost.riftlabs.cc/health >/dev/null
-          curl --fail --silent --show-error --retry 3 --retry-delay 2 \
-            https://bifrost.riftlabs.cc/ >/dev/null
-          status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
-            --request POST \
-            --header 'Content-Type: application/json' \
-            --data '{}' \
-            https://bifrost.riftlabs.cc/v1/chat/completions)
-          if [[ "$status" != 401 ]]; then
-            echo "anonymous inference returned HTTP $status; expected 401" >&2
+          verify_public() {
+            curl --fail --silent --show-error --retry 12 --retry-delay 5 \
+              https://bifrost.riftlabs.cc/health >/dev/null \
+              && curl --fail --silent --show-error --retry 3 --retry-delay 2 \
+                https://bifrost.riftlabs.cc/ >/dev/null \
+              && [[ $(curl --silent --output /dev/null --write-out '%{http_code}' \
+                --request POST \
+                --header 'Content-Type: application/json' \
+                --data '{}' \
+                https://bifrost.riftlabs.cc/v1/chat/completions) == 401 ]]
+          }
+          if verify_public; then
+            exit 0
+          fi
+          if [[ "$OPERATION" != deploy ]]; then
+            echo "public verification failed after rollback" >&2
             exit 1
           fi
+          echo "public verification failed; rolling back production" >&2
+          printf '%s' "$GHCR_TOKEN" | ssh \
+            -i "$HOME/.ssh/orion" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            "${ORION_USER}@${ORION_HOST}" \
+            "rollback ${GITHUB_ACTOR}"
+          verify_public
+          echo "deployment was rolled back after public verification failed" >&2
+          exit 1
