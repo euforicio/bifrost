@@ -777,6 +777,8 @@ paths:
     $ref: "./paths/management/providers.yaml#/provider-credential-by-id"
   /api/providers/{provider}/credentials/{credential_id}/status:
     $ref: "./paths/management/providers.yaml#/provider-credential-status"
+  /api/providers/{provider}/credentials/{credential_id}/usage:
+    $ref: "./paths/management/providers.yaml#/provider-credential-usage"
   /api/providers/{provider}/credentials/{credential_id}/refresh:
     $ref: "./paths/management/providers.yaml#/provider-credential-refresh"
   /api/providers/{provider}/credentials/{credential_id}/login/device:
@@ -1639,6 +1641,16 @@ components:
       $ref: "./schemas/management/providers.yaml#/ListProviderKeysResponse"
     ProviderCredentialStatus:
       $ref: "./schemas/management/providers.yaml#/ProviderCredentialStatus"
+    ProviderCredentialUsage:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialUsage"
+    ProviderCredentialQuota:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialQuota"
+    ProviderCredentialCredits:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialCredits"
+    ProviderCredentialResetCredits:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialResetCredits"
+    ProviderCredentialResetCredit:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialResetCredit"
     ListProviderCredentialsResponse:
       $ref: "./schemas/management/providers.yaml#/ListProviderCredentialsResponse"
     ProviderCredentialLoginStatus:

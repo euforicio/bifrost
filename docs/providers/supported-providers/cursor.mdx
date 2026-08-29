@@ -39,6 +39,12 @@ The browser receives only a short-lived authorization URL and sanitized status. 
 
 Every Cursor provider key owns an independent encrypted account binding. Add one key per subscription, then use key weights, model allowlists, routing rules, budgets, and virtual-key policies to control selection. Login, refresh, reconnect, and disconnect actions affect only the selected account.
 
+## Account usage
+
+The provider account card reads the current billing period through `GET /api/providers/cursor/credentials/{credential_id}/usage`. Plan and spend-limit amounts are normalized as integer cents, with billing-cycle start and reset timestamps. Unknown protobuf fields are ignored so additive Cursor response changes do not break otherwise usable snapshots.
+
+Usage reads have a ten-second bound. A `401` or `403` causes exactly one forced credential refresh and one retry. A missing plan-usage block or any other upstream failure returns `availability: unavailable` without disconnecting the account or changing inference availability.
+
 ## Requests
 
 Use the normal Bifrost Responses endpoint with a `cursor/` model prefix:
@@ -56,4 +62,4 @@ Bifrost converts the normalized Responses request to Cursor's HTTP/2 Connect/pro
 
 ## Credential lifecycle
 
-Bifrost refreshes a connected account proactively before expiry. If Cursor returns `401`, Bifrost performs exactly one forced refresh and retries the same request once. It does not refresh for rate limits, forbidden requests, timeouts, or ordinary provider failures. Disconnecting removes the encrypted account credential without deleting the provider key.
+Bifrost refreshes a connected account proactively before expiry. Inference requests retry once after a `401`; the management-only usage read retries once after a `401` or `403`. It does not refresh for rate limits, timeouts, or ordinary provider failures. Disconnecting removes the encrypted account credential without deleting the provider key.

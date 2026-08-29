@@ -618,6 +618,38 @@ provider-credential-status:
       '404':
         $ref: '../../openapi.yaml#/components/responses/NotFound'
 
+provider-credential-usage:
+  get:
+    operationId: getProviderCredentialUsage
+    summary: Get provider account usage
+    description: >-
+      Returns a normalized quota snapshot for the account bound to an existing
+      provider key. Upstream usage failures are reported with `availability:
+      unavailable` and do not disable inference. xAI returns `availability:
+      unsupported` because it does not expose a programmatic account quota
+      endpoint. Credential tokens are never returned.
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    responses:
+      '200':
+        description: Normalized provider account usage or an explicit unsupported/unavailable state
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialUsage'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+      '503':
+        description: Provider credential storage is unavailable
+
 provider-credential-refresh:
   post:
     operationId: refreshProviderCredential

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
@@ -53,6 +54,34 @@ func TestProviderCredentialManagementAcceptsCursor(t *testing.T) {
 	if !ok || manager == nil || provider != schemas.CursorProvider {
 		t.Fatalf("Cursor credential request rejected: ok=%v provider=%q", ok, provider)
 	}
+}
+
+func TestProviderCredentialUsageValidatesProviderKeyBinding(t *testing.T) {
+	provider := providercredentials.ProviderXAI
+	handler := &ProviderHandler{inMemoryStore: &lib.Config{
+		Providers: map[schemas.ModelProvider]configstore.ProviderConfig{
+			provider: {Keys: []schemas.Key{{ID: "account-a", Name: "xai-account-a", Value: *schemas.NewSecretVar("")}}},
+		},
+		ProviderCredentialManager: providercredentials.NewManager(nil),
+	}}
+
+	missing := &fasthttp.RequestCtx{}
+	missing.SetUserValue("provider", string(provider))
+	missing.SetUserValue("credential_id", "account-b")
+	handler.getProviderCredentialUsage(missing)
+	require.Equal(t, fasthttp.StatusNotFound, missing.Response.StatusCode())
+
+	matching := &fasthttp.RequestCtx{}
+	matching.SetUserValue("provider", string(provider))
+	matching.SetUserValue("credential_id", "account-a")
+	handler.getProviderCredentialUsage(matching)
+	require.Equal(t, fasthttp.StatusOK, matching.Response.StatusCode())
+	var usage providercredentials.CredentialUsage
+	require.NoError(t, json.Unmarshal(matching.Response.Body(), &usage))
+	require.Equal(t, "account-a", usage.CredentialID)
+	require.Equal(t, string(provider), usage.Provider)
+	require.Equal(t, providercredentials.UsageUnsupported, usage.Availability)
+	require.NotNil(t, usage.Quotas)
 }
 
 func TestProviderCredentialLoginRoutesBindLoginToProviderAndCredential(t *testing.T) {

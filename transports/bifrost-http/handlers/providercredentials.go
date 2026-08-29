@@ -122,6 +122,18 @@ func (h *ProviderHandler) getProviderCredentialStatus(ctx *fasthttp.RequestCtx) 
 	SendJSON(ctx, status)
 }
 
+func (h *ProviderHandler) getProviderCredentialUsage(ctx *fasthttp.RequestCtx) {
+	manager, provider, ok := h.providerCredentialRequest(ctx)
+	if !ok {
+		return
+	}
+	credentialID, ok := h.providerCredentialID(ctx, provider)
+	if !ok {
+		return
+	}
+	SendJSON(ctx, manager.Usage(ctx, provider, credentialID))
+}
+
 func (h *ProviderHandler) refreshProviderCredential(ctx *fasthttp.RequestCtx) {
 	manager, provider, ok := h.providerCredentialRequest(ctx)
 	if !ok {

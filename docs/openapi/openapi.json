@@ -42879,6 +42879,74 @@
         }
       }
     },
+    "/api/providers/{provider}/credentials/{credential_id}/usage": {
+      "get": {
+        "operationId": "getProviderCredentialUsage",
+        "summary": "Get provider account usage",
+        "description": "Returns a normalized quota snapshot for the account bound to an existing provider key. Upstream usage failures are reported with `availability: unavailable` and do not disable inference. xAI returns `availability: unsupported` because it does not expose a programmatic account quota endpoint. Credential tokens are never returned.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Normalized provider account usage or an explicit unsupported/unavailable state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialUsage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider credential storage is unavailable"
+          }
+        }
+      }
+    },
     "/api/providers/{provider}/credentials/{credential_id}/refresh": {
       "post": {
         "operationId": "refreshProviderCredential",
@@ -95146,6 +95214,182 @@
           "version": {
             "type": "integer",
             "format": "uint64"
+          }
+        }
+      },
+      "ProviderCredentialUsage": {
+        "type": "object",
+        "required": [
+          "credential_id",
+          "provider",
+          "availability",
+          "quotas"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": "string",
+            "description": "Provider key ID that owns the account binding"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai-codex",
+              "xai",
+              "cursor"
+            ]
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "unsupported",
+              "unavailable"
+            ]
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time the provider snapshot was successfully fetched"
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Whether the returned provider snapshot is known to be stale"
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe provider-neutral explanation for unsupported or unavailable usage"
+          },
+          "quotas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCredentialQuota"
+            }
+          },
+          "credits": {
+            "$ref": "#/components/schemas/ProviderCredentialCredits"
+          },
+          "reset_credits": {
+            "$ref": "#/components/schemas/ProviderCredentialResetCredits"
+          }
+        }
+      },
+      "ProviderCredentialQuota": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable provider-scoped quota identifier"
+          },
+          "name": {
+            "type": "string"
+          },
+          "used_percent": {
+            "type": "number",
+            "format": "double"
+          },
+          "used": {
+            "type": "number",
+            "format": "double"
+          },
+          "limit": {
+            "type": "number",
+            "format": "double"
+          },
+          "remaining": {
+            "type": "number",
+            "format": "double"
+          },
+          "unit": {
+            "type": "string",
+            "description": "Unit for used, limit, and remaining values; Cursor monetary quotas use `cents`"
+          },
+          "window_duration_minutes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resets_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProviderCredentialCredits": {
+        "type": "object",
+        "required": [
+          "has_credits",
+          "unlimited"
+        ],
+        "properties": {
+          "has_credits": {
+            "type": "boolean"
+          },
+          "unlimited": {
+            "type": "boolean"
+          },
+          "balance": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "ProviderCredentialResetCredits": {
+        "type": "object",
+        "required": [
+          "available_count",
+          "credits"
+        ],
+        "properties": {
+          "available_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "credits": {
+            "type": "array",
+            "description": "Best-effort reset-credit detail rows. An empty array means no rows were returned or the bounded detail read was unavailable.",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCredentialResetCredit"
+            }
+          }
+        }
+      },
+      "ProviderCredentialResetCredit": {
+        "type": "object",
+        "required": [
+          "id",
+          "reset_type",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reset_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "granted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
           }
         }
       },

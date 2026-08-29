@@ -33,6 +33,12 @@ The dashboard never displays or returns access, refresh, or ID tokens. Bifrost e
 
 Every OpenAI Codex provider key has its own account binding. Create one key per account, then use the existing weights, model allowlists, routing rules, budgets, and virtual-key policies to control which account serves a request. Disconnecting or refreshing one account does not affect another.
 
+## Account usage
+
+The provider account card reads current subscription usage through `GET /api/providers/openai-codex/credentials/{credential_id}/usage`. Bifrost returns normalized primary, secondary, and additional quota windows, credit balance when supplied by OpenAI, and reset-credit availability. Reset-credit detail rows are fetched separately with a five-second bound; a detail failure does not discard the quota snapshot.
+
+If OpenAI rejects the stored bearer token with `401`, Bifrost forces one credential refresh and retries once. Other upstream failures return `availability: unavailable` without disconnecting the account or changing whether it can serve inference. The response never contains access, refresh, or ID tokens.
+
 ## Requests
 
 Use the normal Bifrost Responses endpoint with an `openai-codex/` model prefix:

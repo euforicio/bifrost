@@ -50,6 +50,7 @@ var (
 
 type endpoints struct {
 	openAIIssuer   string
+	openAIUsageAPI string
 	xAIDeviceURL   string
 	xAITokenURL    string
 	cursorLoginURL string
@@ -107,6 +108,28 @@ func WithCursorPollInterval(interval time.Duration) Option {
 	}
 }
 
+// WithUsageEndpoints replaces provider usage endpoints for local protocol
+// fixtures. Empty values preserve production defaults.
+func WithUsageEndpoints(openAIBaseURL, cursorAPIBaseURL string) Option {
+	return func(m *Manager) {
+		if strings.TrimSpace(openAIBaseURL) != "" {
+			m.endpoints.openAIUsageAPI = strings.TrimRight(openAIBaseURL, "/")
+		}
+		if strings.TrimSpace(cursorAPIBaseURL) != "" {
+			m.endpoints.cursorAPIBase = strings.TrimRight(cursorAPIBaseURL, "/")
+		}
+	}
+}
+
+// WithNow replaces the manager clock for deterministic local protocol tests.
+func WithNow(now func() time.Time) Option {
+	return func(m *Manager) {
+		if now != nil {
+			m.now = now
+		}
+	}
+}
+
 type Manager struct {
 	store               Store
 	httpClient          *http.Client
@@ -137,6 +160,7 @@ func NewManager(store Store, opts ...Option) *Manager {
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		endpoints: endpoints{
 			openAIIssuer:   "https://auth.openai.com",
+			openAIUsageAPI: "https://chatgpt.com/backend-api",
 			xAIDeviceURL:   "https://auth.x.ai/oauth2/device/code",
 			xAITokenURL:    "https://auth.x.ai/oauth2/token",
 			cursorLoginURL: "https://cursor.com/loginDeepControl",
@@ -336,6 +360,17 @@ func (m *Manager) lockCredential(provider schemas.ModelProvider, credentialID st
 }
 
 func (m *Manager) ResolveProviderCredential(ctx context.Context, provider schemas.ModelProvider, credentialID string, forceRefresh bool) (schemas.ResolvedProviderCredential, error) {
+	return m.resolveProviderCredential(ctx, provider, credentialID, forceRefresh, true)
+}
+
+// resolveProviderCredentialForUsage resolves and, when necessary, refreshes a
+// credential without allowing a telemetry failure to change inference status.
+// Successful token rotation is still persisted and shared across processes.
+func (m *Manager) resolveProviderCredentialForUsage(ctx context.Context, provider schemas.ModelProvider, credentialID string, forceRefresh bool) (schemas.ResolvedProviderCredential, error) {
+	return m.resolveProviderCredential(ctx, provider, credentialID, forceRefresh, false)
+}
+
+func (m *Manager) resolveProviderCredential(ctx context.Context, provider schemas.ModelProvider, credentialID string, forceRefresh, expireOnRefreshFailure bool) (schemas.ResolvedProviderCredential, error) {
 	observedVersion := uint64(0)
 	if forceRefresh {
 		observed, err := m.load(ctx, provider, credentialID)
@@ -366,7 +401,7 @@ func (m *Manager) ResolveProviderCredential(ctx context.Context, provider schema
 	}
 	needsRefresh := forceRefresh || row.ExpiresAt == nil || !row.ExpiresAt.After(m.now().Add(refreshWindow))
 	if needsRefresh {
-		refreshed, refreshErr := m.refreshLocked(ctx, row)
+		refreshed, refreshErr := m.refreshLockedWithPolicy(ctx, row, expireOnRefreshFailure)
 		if refreshed != nil {
 			row = refreshed
 		}
@@ -409,6 +444,10 @@ func (m *Manager) Refresh(ctx context.Context, provider schemas.ModelProvider, c
 }
 
 func (m *Manager) refreshLocked(ctx context.Context, row *tables.TableProviderCredential) (*tables.TableProviderCredential, error) {
+	return m.refreshLockedWithPolicy(ctx, row, true)
+}
+
+func (m *Manager) refreshLockedWithPolicy(ctx context.Context, row *tables.TableProviderCredential, expireOnFailure bool) (*tables.TableProviderCredential, error) {
 	if row.RefreshToken == "" {
 		return row, errors.New("provider credential has no refresh token")
 	}
@@ -419,7 +458,7 @@ func (m *Manager) refreshLocked(ctx context.Context, row *tables.TableProviderCr
 			return row, err
 		}
 		if acquired {
-			return m.refreshWithLease(ctx, row, leaseOwner, leaseExpiresAt)
+			return m.refreshWithLease(ctx, row, leaseOwner, leaseExpiresAt, expireOnFailure)
 		}
 
 		latest, loadErr := m.load(ctx, schemas.ModelProvider(row.Provider), row.CredentialID)
@@ -443,12 +482,18 @@ func (m *Manager) refreshLocked(ctx context.Context, row *tables.TableProviderCr
 	}
 }
 
-func (m *Manager) refreshWithLease(ctx context.Context, row *tables.TableProviderCredential, leaseOwner string, leaseExpiresAt time.Time) (*tables.TableProviderCredential, error) {
+func (m *Manager) refreshWithLease(ctx context.Context, row *tables.TableProviderCredential, leaseOwner string, leaseExpiresAt time.Time, expireOnFailure bool) (*tables.TableProviderCredential, error) {
 	refreshCtx, cancel := context.WithDeadline(ctx, leaseExpiresAt)
 	defer cancel()
 	tokens, err := m.refreshTokens(refreshCtx, schemas.ModelProvider(row.Provider), row.RefreshToken)
 	if err != nil {
-		if markErr := m.failRefreshLease(ctx, row, leaseOwner); markErr != nil && !errors.Is(markErr, errCredentialChanged) {
+		var markErr error
+		if expireOnFailure {
+			markErr = m.failRefreshLease(ctx, row, leaseOwner)
+		} else {
+			markErr = m.releaseRefreshLease(ctx, row, leaseOwner)
+		}
+		if markErr != nil && !errors.Is(markErr, errCredentialChanged) {
 			return row, markErr
 		}
 		return row, err
@@ -490,6 +535,24 @@ func (m *Manager) refreshWithLease(ctx context.Context, row *tables.TableProvide
 		return row, err
 	}
 	return m.load(ctx, schemas.ModelProvider(row.Provider), row.CredentialID)
+}
+
+func (m *Manager) releaseRefreshLease(ctx context.Context, row *tables.TableProviderCredential, leaseOwner string) error {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	result := m.store.DB().WithContext(cleanupCtx).Table(row.TableName()).
+		Where("credential_id = ? AND provider = ? AND version = ? AND refresh_lease_owner = ?", row.CredentialID, row.Provider, row.Version, leaseOwner).
+		Updates(map[string]any{
+			"refresh_lease_owner":      "",
+			"refresh_lease_expires_at": nil,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errCredentialChanged
+	}
+	return nil
 }
 
 func isUsableCredential(row *tables.TableProviderCredential, now time.Time) bool {
