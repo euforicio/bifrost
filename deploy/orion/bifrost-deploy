@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly deploy_dir=/opt/bifrost
+readonly image_pattern='^deploy (ghcr\.io/euforicio/bifrost:orion-[0-9a-f]{40}@sha256:[0-9a-f]{64})$'
+
+if [[ ${SSH_ORIGINAL_COMMAND:-} =~ $image_pattern ]]; then
+  image=${BASH_REMATCH[1]}
+else
+  echo "refusing unsupported deployment command" >&2
+  exit 64
+fi
+
+exec 9>/run/lock/bifrost-orion-deploy.lock
+if ! flock -n 9; then
+  echo "another Orion deployment is already running" >&2
+  exit 75
+fi
+
+cd "$deploy_dir"
+for required in compose.yaml config.json .env data backups; do
+  if [[ ! -e $required ]]; then
+    echo "missing deployment prerequisite: $deploy_dir/$required" >&2
+    exit 78
+  fi
+done
+
+registry_token=$(cat)
+if [[ -z $registry_token ]]; then
+  echo "missing ephemeral registry token" >&2
+  exit 77
+fi
+trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+printf '%s' "$registry_token" | docker login ghcr.io --username github-actions --password-stdin >/dev/null
+unset registry_token
+
+BIFROST_IMAGE="$image" docker compose -f compose.yaml config --quiet
+BIFROST_IMAGE="$image" docker compose -f compose.yaml pull bifrost
+
+timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+previous_image=$(docker inspect --format '{{.Config.Image}}' bifrost 2>/dev/null || true)
+backup="backups/bifrost-${timestamp}.tar.gz"
+
+# Stop before archiving SQLite so the configuration and logs form one
+# consistent rollback point.
+BIFROST_IMAGE="${previous_image:-$image}" docker compose -f compose.yaml stop bifrost >/dev/null 2>&1 || true
+tar -czf "$backup" data
+printf '%s\n' "$previous_image" > .previous-image
+
+rollback() {
+  echo "deployment failed; restoring the previous data snapshot and image" >&2
+  BIFROST_IMAGE="$image" docker compose -f compose.yaml stop bifrost >/dev/null 2>&1 || true
+  if [[ -d data ]]; then
+    mv data "data.failed-${timestamp}"
+  fi
+  tar -xzf "$backup"
+  if [[ -n $previous_image ]]; then
+    BIFROST_IMAGE="$previous_image" docker compose -f compose.yaml up -d --remove-orphans
+  fi
+}
+
+if ! BIFROST_IMAGE="$image" docker compose -f compose.yaml up -d --remove-orphans; then
+  rollback
+  exit 1
+fi
+
+healthy=false
+for _ in $(seq 1 24); do
+  if [[ $(docker inspect --format '{{.State.Health.Status}}' bifrost 2>/dev/null || true) == healthy ]]; then
+    healthy=true
+    break
+  fi
+  sleep 5
+done
+
+if [[ $healthy != true ]]; then
+  docker logs --tail 100 bifrost >&2 || true
+  rollback
+  exit 1
+fi
+
+find backups -maxdepth 1 -type f -name 'bifrost-*.tar.gz' -print0 \
+  | xargs -0 ls -1t 2>/dev/null \
+  | tail -n +6 \
+  | xargs -r rm -f
+
+printf '%s\t%s\t%s\t%s\n' "$timestamp" "$previous_image" "$image" "$backup" >> deployments.log
+docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' bifrost
