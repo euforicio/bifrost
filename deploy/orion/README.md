@@ -5,8 +5,11 @@ Hostinger Orion server at `31.97.143.81`.
 
 ## Runtime contract
 
-- GitHub Actions builds the checked-out source with `transports/Dockerfile.local`
-  and publishes an immutable commit tag to `ghcr.io/euforicio/bifrost`.
+- GitHub Actions follows the Rift control-plane deployment shape: validate and
+  build in a serialized production workflow, pack the host deployment surface,
+  copy it into a private Orion staging directory, and run an idempotent host
+  installer. Bifrost retains immutable GHCR promotion because its runtime is
+  containerized.
 - Production deploys an immutable `image@sha256:digest`, never a mutable tag.
 - Bifrost binds only to `127.0.0.1:8180`; the existing Orion Caddy service is
   the public TLS and reverse-proxy boundary.
@@ -20,19 +23,19 @@ Hostinger Orion server at `31.97.143.81`.
 
 Create the `orion-production` environment and add one environment secret:
 
-- `ORION_SSH_PRIVATE_KEY`: dedicated private deployment key whose public key is
-  authorized for `root` with the forced command shown below.
+- `ORION_SSH_KEY`: dedicated Orion SSH private key, matching the secret name and
+  staged-copy convention used by the Rift control-plane deployment.
 
-Pushes to `feature/codex-xai-account-auth` run `orion-image.yml`, which builds
-and smoke-tests without production access. After merging these workflows to
-the default branch, dispatch `orion-deploy.yml` with the validated digest to
-promote exactly that image. Dispatch `operation=rollback` to restore the image
-and data snapshot from the immediately preceding deployment.
+Pushes to `dev` run validation, immutable image build, boot smoke, private
+staging copy, host installation, managed Caddy update, and public verification.
+The feature branch is included during the initial rollout and should be removed
+from the trigger after merge. Dispatch `orion-rollback.yml` to restore the
+image and data snapshot from the immediately preceding deployment.
 
 Restrict the `orion-production` environment to the protected production branch,
 require an independent reviewer, and disable self-approval before adding its
-secret. The deployment workflow is intentionally unavailable until it exists
-on the default branch.
+secret. After the initial rollout, restrict it to the protected production
+branch.
 
 Provision the checked-in contract once as root:
 
@@ -45,22 +48,18 @@ install -m 0755 bifrost-deploy /usr/local/sbin/bifrost-deploy
 
 Create `/opt/bifrost/.env` with mode `0600` and stable values for
 `BIFROST_ENCRYPTION_KEY`, `BIFROST_ADMIN_USERNAME`,
-`BIFROST_ADMIN_PASSWORD`, and `BIFROST_SETUP_TOKEN`. The deployment key entry
-in `/root/.ssh/authorized_keys` must be restricted:
-
-```text
-restrict,command="/usr/local/sbin/bifrost-deploy" ssh-ed25519 <deployment-public-key>
-```
-
-The forced command accepts only `deploy` with an immutable image from
-`ghcr.io/euforicio/bifrost`, or `rollback` with the workflow actor. It reads a short-lived GitHub
-registry token from standard input into a temporary Docker configuration and
-cannot open an interactive root shell.
+`BIFROST_ADMIN_PASSWORD`, and `BIFROST_SETUP_TOKEN`. The dedicated deployment
+key must be installed for `root`, because the installer updates Docker, the
+shared Caddy configuration, and host deployment files. The deploy command still
+accepts only an immutable `ghcr.io/euforicio/bifrost@sha256:...` image or a
+rollback operation. Registry credentials remain ephemeral and are removed with
+the private staging directory.
 
 ## Caddy and Cloudflare DNS
 
-Install `Caddyfile.bifrost` as a site fragment in Orion's existing Caddy
-configuration. Validate the complete configuration before reloading Caddy:
+The installer renders the marked `Caddyfile.bifrost` block into Orion's shared
+Caddyfile, preserves unrelated sites, rejects ambiguous host blocks, validates
+the complete candidate, and only then reloads Caddy:
 
 ```bash
 caddy validate --config /etc/caddy/Caddyfile
