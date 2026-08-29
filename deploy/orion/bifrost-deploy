@@ -46,6 +46,15 @@ wait_healthy() {
   [[ $healthy == true ]]
 }
 
+stop_bifrost() {
+  local stop_image=$1
+  if ! docker inspect bifrost >/dev/null 2>&1; then
+    return 0
+  fi
+  BIFROST_IMAGE="$stop_image" docker compose -f compose.yaml stop bifrost >/dev/null
+  [[ $(docker inspect --format '{{.State.Running}}' bifrost 2>/dev/null) == false ]]
+}
+
 restore_snapshot() {
   local restore_image=$1
   local restore_backup=$2
@@ -66,7 +75,11 @@ restore_snapshot() {
   fi
   running_image=$(docker inspect --format '{{.Config.Image}}' bifrost 2>/dev/null || true)
   if [[ -n $running_image ]]; then
-    BIFROST_IMAGE="$running_image" docker compose -f compose.yaml stop bifrost >/dev/null 2>&1 || true
+    if ! stop_bifrost "$running_image"; then
+      rm -rf -- "$staging_dir"
+      echo "could not confirm Bifrost stopped before rollback" >&2
+      return 1
+    fi
   else
     docker stop bifrost >/dev/null 2>&1 || true
   fi
@@ -80,9 +93,9 @@ restore_snapshot() {
     return 1
   fi
   rmdir "$staging_dir" || true
-  if [[ -z $restore_image ]]; then
-    echo "no previous image exists; restored data but cannot restart" >&2
-    return 1
+  if [[ $restore_image == none ]]; then
+    echo "no previous service existed; restored pre-deploy data" >&2
+    return 0
   fi
   BIFROST_IMAGE="$restore_image" docker compose -f compose.yaml up -d --remove-orphans
   wait_healthy
@@ -109,18 +122,25 @@ if [[ $operation == rollback ]]; then
     exit 66
   fi
   IFS=$'\t' read -r previous_image previous_backup < .previous-deployment
-  if [[ ! $previous_image =~ ^ghcr\.io/euforicio/bifrost@sha256:[0-9a-f]{64}$ || ! -f $previous_backup ]]; then
+  if [[ $previous_image != none && ! $previous_image =~ ^ghcr\.io/euforicio/bifrost@sha256:[0-9a-f]{64}$ ]] \
+    || [[ ! -f $previous_backup ]]; then
     echo "recorded rollback state is invalid or missing" >&2
     exit 65
   fi
-  docker pull "$previous_image" >/dev/null
+  if [[ $previous_image != none ]]; then
+    docker pull "$previous_image" >/dev/null
+  fi
   timestamp=$(date -u +%Y%m%dT%H%M%SZ)
   if ! restore_snapshot "$previous_image" "$previous_backup" "$timestamp"; then
     echo "rollback did not return Bifrost to healthy" >&2
     exit 1
   fi
   mv .previous-deployment ".previous-deployment.used-${timestamp}"
-  docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' bifrost
+  if [[ $previous_image == none ]]; then
+    echo "none stopped"
+  else
+    docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' bifrost
+  fi
   exit 0
 fi
 
@@ -137,10 +157,16 @@ fi
 
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 previous_image=$(docker inspect --format '{{.Config.Image}}' bifrost 2>/dev/null || true)
+if [[ -n $previous_image && ! $previous_image =~ ^ghcr\.io/euforicio/bifrost@sha256:[0-9a-f]{64}$ ]]; then
+  echo "current Bifrost image is not rollback-capable: $previous_image" >&2
+  exit 65
+fi
+previous_record=${previous_image:-none}
 backup="backups/bifrost-${timestamp}.tar.gz"
 stopped=false
 new_started=false
 completed=false
+record_written=false
 
 recover() {
   local status=$?
@@ -149,7 +175,7 @@ recover() {
   if [[ $completed == false && $stopped == true ]]; then
     echo "deployment interrupted; recovering the previous service" >&2
     if [[ $new_started == true && -f $backup ]]; then
-      if restore_snapshot "$previous_image" "$backup" "$timestamp"; then
+      if restore_snapshot "$previous_record" "$backup" "$timestamp"; then
         recovered=true
       fi
     elif [[ -n $previous_image ]]; then
@@ -158,7 +184,7 @@ recover() {
         recovered=true
       fi
     fi
-    if [[ $recovered == true ]]; then
+    if [[ $recovered == true && $record_written == true ]]; then
       mv .previous-deployment ".previous-deployment.failed-${timestamp}" 2>/dev/null || true
     else
       echo "CRITICAL: automatic recovery did not return Bifrost to healthy" >&2
@@ -168,10 +194,14 @@ recover() {
 }
 trap recover ERR HUP INT TERM
 
-BIFROST_IMAGE="${previous_image:-$image}" docker compose -f compose.yaml stop bifrost >/dev/null 2>&1 || true
+if ! stop_bifrost "${previous_image:-$image}"; then
+  echo "could not confirm Bifrost stopped before snapshot" >&2
+  exit 1
+fi
 stopped=true
 tar -czf "$backup" data
-printf '%s\t%s\n' "$previous_image" "$backup" > .previous-deployment
+printf '%s\t%s\n' "$previous_record" "$backup" > .previous-deployment
+record_written=true
 
 new_started=true
 BIFROST_IMAGE="$image" docker compose -f compose.yaml up -d --remove-orphans

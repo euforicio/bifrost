@@ -111,14 +111,23 @@ jobs:
             exit 1
           fi
           echo "public verification failed; rolling back production" >&2
-          printf '%s' "$GHCR_TOKEN" | ssh \
+          rollback_result=$(printf '%s' "$GHCR_TOKEN" | ssh \
             -i "$HOME/.ssh/orion" \
             -o BatchMode=yes \
             -o ConnectTimeout=10 \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             "${ORION_USER}@${ORION_HOST}" \
-            "rollback ${GITHUB_ACTOR}"
-          verify_public
+            "rollback ${GITHUB_ACTOR}")
+          if [[ "$rollback_result" == "none stopped" ]]; then
+            rollback_status=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              https://bifrost.riftlabs.cc/health || true)
+            if [[ "$rollback_status" =~ ^2 ]]; then
+              echo "first-deploy rollback left a public service running" >&2
+              exit 1
+            fi
+          else
+            verify_public
+          fi
           echo "deployment was rolled back after public verification failed" >&2
           exit 1
