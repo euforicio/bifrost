@@ -1,6 +1,6 @@
 # Orion production deployment
 
-This deployment serves Bifrost from `https://bifrost.riftlabs.cc` on the
+This deployment serves Bifrost from `https://bifrost.riftlabs.app` on the
 Hostinger Orion server at `31.97.143.81`.
 
 ## Runtime contract
@@ -63,14 +63,14 @@ Use a dedicated tunnel named `bifrost-orion`. Its only ingress rule is:
 
 ```yaml
 ingress:
-  - hostname: bifrost.riftlabs.cc
+  - hostname: bifrost.riftlabs.app
     service: http://127.0.0.1:8080
   - service: http_status:404
 ```
 
 Run `cloudflared` as a system service on Orion. The DNS record should be the
 proxied CNAME created by `cloudflared tunnel route dns bifrost-orion
-bifrost.riftlabs.cc`; do not create a public port-forward for Bifrost.
+bifrost.riftlabs.app`; do not create a public port-forward for Bifrost.
 
 ## Operations
 
@@ -79,7 +79,7 @@ cd /opt/bifrost
 BIFROST_IMAGE="$(docker inspect --format '{{.Config.Image}}' bifrost)" \
   docker compose -f compose.yaml ps
 docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' bifrost
-curl --fail --silent --show-error https://bifrost.riftlabs.cc/health
+curl --fail --silent --show-error https://bifrost.riftlabs.app/health
 ```
 
 The last five consistent pre-deploy archives are retained under
