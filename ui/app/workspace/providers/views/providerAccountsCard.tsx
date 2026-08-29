@@ -36,6 +36,7 @@ import { ReactNode, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import AddNewKeySheet from "../dialogs/addNewKeySheet";
 import ProviderDeviceLoginDialog from "../dialogs/providerDeviceLoginDialog";
+import ProviderUsageSummary from "./providerUsageSummary";
 
 interface Props {
 	provider: ModelProvider;
@@ -320,10 +321,10 @@ export default function ProviderAccountsCard({ provider, headerActions }: Props)
 								return (
 									<div
 										key={key.id}
-										className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between"
+										className="flex flex-col gap-3 p-4 lg:flex-row lg:flex-wrap lg:items-start lg:justify-between"
 										data-testid={`provider-account-row-${key.id}`}
 									>
-										<div className="min-w-0 space-y-1">
+										<div className="min-w-0 flex-1 space-y-1">
 											<div className="flex flex-wrap items-center gap-2">
 												<span className="truncate font-medium">{credential.account_id || key.name}</span>
 												<Badge
@@ -425,6 +426,11 @@ export default function ProviderAccountsCard({ provider, headerActions }: Props)
 														<Trash2 className="h-4 w-4" />
 													</Button>
 												) : null}
+											</div>
+										) : null}
+										{credential.status === "connected" || hasApiKey ? (
+											<div className="basis-full">
+												<ProviderUsageSummary provider={provider.name} credentialId={credential.credential_id} />
 											</div>
 										) : null}
 									</div>

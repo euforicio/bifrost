@@ -52,6 +52,10 @@ Configure xAI as a provider.
 
 Each provider key can be connected to a different xAI account. Add another key and choose **Connect another account** to keep routing, budgets, and model allowlists independent. Account tokens are encrypted in Bifrost's config store and are never returned by the management API.
 
+<Note>
+xAI does not expose a programmatic account quota endpoint. `GET /api/providers/xai/credentials/{credential_id}/usage` therefore returns `availability: unsupported` with no network probe and does not fabricate quota or credit values. This does not affect xAI inference availability.
+</Note>
+
 </Tab>
 <Tab title="config.json">
 

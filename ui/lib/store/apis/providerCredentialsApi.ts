@@ -1,4 +1,9 @@
-import { ListProviderCredentialsResponse, ProviderCredentialLoginStatus, ProviderCredentialStatus } from "@/lib/types/config";
+import {
+	ListProviderCredentialsResponse,
+	ProviderCredentialLoginStatus,
+	ProviderCredentialStatus,
+	ProviderCredentialUsage,
+} from "@/lib/types/config";
 import { baseApi } from "./baseApi";
 
 interface ProviderCredentialRequest {
@@ -39,6 +44,13 @@ export const providerCredentialsApi = baseApi.injectEndpoints({
 			query: (request) => `${credentialPath(request)}/status`,
 			providesTags: (result, error, { provider }) => [{ type: "ProviderCredentials", id: provider }],
 		}),
+		getProviderCredentialUsage: builder.query<ProviderCredentialUsage, ProviderCredentialRequest>({
+			query: (request) => `${credentialPath(request)}/usage`,
+			providesTags: (result, error, { provider, keyId }) => [
+				{ type: "ProviderCredentials", id: provider },
+				{ type: "ProviderCredentials", id: `${provider}:${keyId}:usage` },
+			],
+		}),
 		refreshProviderCredential: builder.mutation<ProviderCredentialStatus, ProviderCredentialRequest>({
 			query: (request) => ({
 				url: `${credentialPath(request)}/refresh`,
@@ -62,6 +74,7 @@ export const {
 	useGetProviderCredentialLoginQuery,
 	useGetProviderCredentialsQuery,
 	useGetProviderCredentialStatusQuery,
+	useGetProviderCredentialUsageQuery,
 	useRefreshProviderCredentialMutation,
 	useStartProviderCredentialLoginMutation,
 } = providerCredentialsApi;
