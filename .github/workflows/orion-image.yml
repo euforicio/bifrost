@@ -1,11 +1,12 @@
-name: Build Orion image
+name: Deploy Orion
 
 on:
   push:
-    branches: ["feature/codex-xai-account-auth"]
+    branches: ["dev", "feature/codex-xai-account-auth"]
     paths:
       - ".dockerignore"
       - ".github/workflows/orion-image.yml"
+      - "deploy/orion/**"
       - "core/**"
       - "framework/**"
       - "plugins/**"
@@ -14,7 +15,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: bifrost-orion-image-${{ github.ref }}
+  group: bifrost-orion-production
   cancel-in-progress: false
 
 permissions:
@@ -73,6 +74,8 @@ jobs:
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      image: ${{ steps.reference.outputs.image }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
@@ -150,10 +153,12 @@ jobs:
           exit 1
 
       - name: Publish immutable deployment reference
+        id: reference
         env:
           IMAGE_TAG: ${{ steps.tag.outputs.value }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
+          echo "image=${IMAGE_TAG}@${IMAGE_DIGEST}" >> "$GITHUB_OUTPUT"
           {
             echo '### Orion image'
             echo
@@ -161,3 +166,80 @@ jobs:
             echo
             echo "Deploy digest: \`${IMAGE_DIGEST}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: build
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 20
+    environment:
+      name: orion-production
+      url: https://bifrost.riftlabs.app
+    env:
+      ORION_HOST: ${{ secrets.ORION_HOST || '31.97.143.81' }}
+      ORION_USER: ${{ secrets.ORION_USER || 'root' }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            31.97.143.81:22
+            api.github.com:443
+            bifrost.riftlabs.app:443
+            ghcr.io:443
+            github.com:443
+            pkg-containers.githubusercontent.com:443
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Pack Orion deployment payload
+        run: |
+          install -d -m 0700 .orion-payload
+          install -m 0644 deploy/orion/compose.yaml deploy/orion/config.json \
+            deploy/orion/Caddyfile.bifrost .orion-payload/
+          install -m 0755 deploy/orion/bifrost-deploy deploy/orion/install.sh \
+            deploy/orion/render-caddyfile.sh .orion-payload/
+          tar -C .orion-payload -czf bifrost-orion-deploy.tar.gz .
+
+      - name: Copy and install on Orion
+        id: install
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORION_SSH_KEY: ${{ secrets.ORION_SSH_KEY }}
+          IMAGE: ${{ needs.build.outputs.image }}
+        run: |
+          deploy/orion/orion-push.sh bifrost-orion-deploy.tar.gz \
+            "$IMAGE" "$GITHUB_ACTOR" deploy/orion/known_hosts
+
+      - name: Verify public health and authentication
+        run: |
+          curl --fail --silent --show-error --retry 12 --retry-delay 5 \
+            https://bifrost.riftlabs.app/health >/dev/null
+          curl --fail --silent --show-error --retry 3 --retry-delay 2 \
+            https://bifrost.riftlabs.app/ >/dev/null
+          [[ $(curl --silent --output /dev/null --write-out '%{http_code}' \
+            https://bifrost.riftlabs.app/api/config) == 401 ]]
+          curl --fail --silent --show-error \
+            https://bifrost.riftlabs.app/api/session/is-auth-enabled \
+            | grep -q '"is_auth_enabled":true'
+
+      - name: Roll back after failed public verification
+        if: failure() && steps.install.outcome == 'success'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORION_SSH_KEY: ${{ secrets.ORION_SSH_KEY }}
+        run: |
+          key=$(mktemp)
+          trap 'rm -f -- "$key"' EXIT
+          printf '%s\n' "$ORION_SSH_KEY" > "$key"
+          chmod 0600 "$key"
+          printf '%s' "$GHCR_TOKEN" | ssh \
+            -i "$key" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=10 \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile=deploy/orion/known_hosts \
+            "$ORION_USER@$ORION_HOST" \
+            "SSH_ORIGINAL_COMMAND='rollback ${GITHUB_ACTOR}' /usr/local/sbin/bifrost-deploy"
