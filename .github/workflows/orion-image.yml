@@ -1,0 +1,163 @@
+name: Build Orion image
+
+on:
+  push:
+    branches: ["feature/codex-xai-account-auth"]
+    paths:
+      - ".dockerignore"
+      - ".github/workflows/orion-image.yml"
+      - "core/**"
+      - "framework/**"
+      - "plugins/**"
+      - "transports/**"
+      - "ui/**"
+  workflow_dispatch:
+
+concurrency:
+  group: bifrost-orion-image-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            fonts.googleapis.com:443
+            fonts.gstatic.com:443
+            github.com:443
+            nodejs.org:443
+            objects.githubusercontent.com:443
+            proxy.golang.org:443
+            registry.npmjs.org:443
+            release-assets.githubusercontent.com:443
+            storage.googleapis.com:443
+            sum.golang.org:443
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.0"
+          cache: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "25"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Validate provider account implementation
+        run: |
+          source ./.github/workflows/scripts/setup-go-workspace.sh
+          (cd core && go test ./providers/openaicodex ./providers/xai ./providers/cursor)
+          (cd framework && go test ./providercredentials ./configstore ./configstore/tables)
+          (cd transports && go test ./bifrost-http/handlers ./bifrost-http/lib -run 'ProviderCredential|ProviderAccount|Account|RemoveProvider')
+          (cd ui && npm ci && npm run build-enterprise)
+
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            127.0.0.1:18080
+            auth.docker.io:443
+            dl-cdn.alpinelinux.org:443
+            fonts.googleapis.com:443
+            fonts.gstatic.com:443
+            ghcr.io:443
+            github.com:443
+            pkg-containers.githubusercontent.com:443
+            production.cloudflare.docker.com:443
+            production.cloudfront.docker.com:443
+            proxy.golang.org:443
+            registry-1.docker.io:443
+            registry.npmjs.org:443
+            storage.googleapis.com:443
+            sum.golang.org:443
+
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: step-security/setup-buildx-action@f931205d68723ad9589fd2a7e2ece238bf9de341 # v4.0.0
+
+      - name: Log in to GitHub Container Registry
+        uses: step-security/docker-login-action@870af644803bf9f204aed474adbad2958fec048b # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve immutable image tag
+        id: tag
+        run: |
+          repository=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
+          echo "value=ghcr.io/${repository}:orion-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push checked-out sources
+        id: build
+        uses: step-security/docker-build-push-action@846549baaf047e867d038826129a64d81df0f704 # v7.1.0
+        with:
+          context: .
+          file: ./transports/Dockerfile.local
+          platforms: linux/amd64
+          build-args: VERSION=0.0.0-${{ github.sha }}
+          tags: ${{ steps.tag.outputs.value }}
+          push: true
+          provenance: mode=max
+          sbom: true
+
+      - name: Boot-smoke immutable image
+        env:
+          IMAGE: ${{ steps.tag.outputs.value }}@${{ steps.build.outputs.digest }}
+        run: |
+          cleanup() {
+            docker logs bifrost-orion-smoke || true
+            docker rm -f bifrost-orion-smoke || true
+          }
+          trap cleanup EXIT
+          docker run --detach --name bifrost-orion-smoke \
+            --publish 127.0.0.1:18080:8080 \
+            --env BIFROST_ENCRYPTION_KEY=test-only-orion-encryption-key \
+            --env BIFROST_SETUP_TOKEN=test-only-orion-setup-token \
+            "$IMAGE"
+          for _ in $(seq 1 24); do
+            if curl --fail --silent --show-error http://127.0.0.1:18080/health >/dev/null; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+
+      - name: Publish immutable deployment reference
+        env:
+          IMAGE_TAG: ${{ steps.tag.outputs.value }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            echo '### Orion image'
+            echo
+            echo "\`${IMAGE_TAG}@${IMAGE_DIGEST}\`"
+            echo
+            echo "Deploy digest: \`${IMAGE_DIGEST}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

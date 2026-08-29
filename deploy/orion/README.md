@@ -6,7 +6,7 @@ Hostinger Orion server at `31.97.143.81`.
 ## Runtime contract
 
 - GitHub Actions builds the checked-out source with `transports/Dockerfile.local`
-  and publishes it to `ghcr.io/<repository-owner>/bifrost`.
+  and publishes an immutable commit tag to `ghcr.io/euforicio/bifrost`.
 - Production deploys an immutable `image@sha256:digest`, never a mutable tag.
 - Bifrost binds only to `127.0.0.1:8080`; Cloudflare Tunnel is the public TLS
   boundary.
@@ -23,11 +23,16 @@ Create the `orion-production` environment and add one environment secret:
 - `ORION_SSH_PRIVATE_KEY`: dedicated private deployment key whose public key is
   authorized for `root` with the forced command shown below.
 
-Pushes to `feature/codex-xai-account-auth` build and smoke-test the image without
-production access. A manual dispatch with `deploy=true` additionally backs up,
-deploys, rolls back on failed health, and verifies the public endpoint.
-After the feature is merged, change the workflow push branch to the production
-branch.
+Pushes to `feature/codex-xai-account-auth` run `orion-image.yml`, which builds
+and smoke-tests without production access. After merging these workflows to
+the default branch, dispatch `orion-deploy.yml` with the validated digest to
+promote exactly that image. Dispatch `operation=rollback` to restore the image
+and data snapshot from the immediately preceding deployment.
+
+Restrict the `orion-production` environment to the protected production branch,
+require an independent reviewer, and disable self-approval before adding its
+secret. The deployment workflow is intentionally unavailable until it exists
+on the default branch.
 
 Provision the checked-in contract once as root:
 
@@ -47,9 +52,10 @@ in `/root/.ssh/authorized_keys` must be restricted:
 restrict,command="/usr/local/sbin/bifrost-deploy" ssh-ed25519 <deployment-public-key>
 ```
 
-The forced command accepts only an immutable image from
-`ghcr.io/euforicio/bifrost` and reads a short-lived GitHub registry token from
-standard input. It cannot open an interactive root shell.
+The forced command accepts only `deploy` with an immutable image from
+`ghcr.io/euforicio/bifrost`, or `rollback`. It reads a short-lived GitHub
+registry token from standard input into a temporary Docker configuration and
+cannot open an interactive root shell.
 
 ## Cloudflare Tunnel
 
@@ -78,6 +84,6 @@ curl --fail --silent --show-error https://bifrost.riftlabs.cc/health
 
 The last five consistent pre-deploy archives are retained under
 `/opt/bifrost/backups`.
-The previous image reference is stored in `/opt/bifrost/.previous-image`.
-Restore requires both the matching data backup and the unchanged
-`BIFROST_ENCRYPTION_KEY`.
+The previous image and matching backup are stored together in
+`/opt/bifrost/.previous-deployment`. Restore requires that local image, the
+matching data backup, and the unchanged `BIFROST_ENCRYPTION_KEY`.
