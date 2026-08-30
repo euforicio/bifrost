@@ -71,28 +71,9 @@ func (provider *FireworksProvider) anthropicHeaders(key schemas.Key) map[string]
 	return openai.BearerAuthHeader(key)
 }
 
-// ListModels lists models for Fireworks AI from each key's configured models and aliases.
-// Fireworks serverless has no usable OpenAI-style /v1/models endpoint (it returns
-// "Error listing deployed models"), so models are sourced from config rather than a live
-// API call, mirroring the Replicate non-deployment path.
+// ListModels lists the live Fireworks serverless catalog for each configured key.
 func (provider *FireworksProvider) ListModels(ctx *schemas.BifrostContext, keys []schemas.Key, request *schemas.BifrostListModelsRequest) (*schemas.BifrostListModelsResponse, *schemas.BifrostError) {
 	return providerUtils.HandleMultipleListModelsRequests(ctx, keys, request, provider.listModelsByKey)
-}
-
-// listModelsByKey builds the model list for a single key from its configured models and
-// aliases, without calling the upstream API. The configured set is the full catalog we
-// can produce (Fireworks has no enumerable live endpoint), so the filtered pipeline path
-// is forced regardless of request.Unfiltered — the pipeline skips config backfill when
-// unfiltered (it assumes a live response supplies the catalog), which would otherwise
-// yield an empty list and drop configured models/aliases from the unfiltered catalog view.
-func (provider *FireworksProvider) listModelsByKey(_ *schemas.BifrostContext, key schemas.Key, _ *schemas.BifrostListModelsRequest) (*schemas.BifrostListModelsResponse, *schemas.BifrostError) {
-	return (&openai.OpenAIListModelsResponse{}).ToBifrostListModelsResponse(
-		schemas.Fireworks,
-		key.Models,
-		key.BlacklistedModels,
-		key.Aliases,
-		false,
-	), nil
 }
 
 // TextCompletion performs a text completion request to the Fireworks AI API.
