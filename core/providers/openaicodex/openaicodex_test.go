@@ -322,6 +322,29 @@ func TestResponsesReturnsIncompleteTerminalPayload(t *testing.T) {
 	}
 }
 
+func TestResponsesAssemblesOutputItemsWhenTerminalPayloadIsEmpty(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.output_item.done\n" +
+			`data: {"type":"response.output_item.done","sequence_number":1,"output_index":0,"item":{"id":"msg_fixture","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"assembled output"}]}}` + "\n\n" +
+			"event: response.completed\n" +
+			`data: {"type":"response.completed","sequence_number":2,"response":{"id":"resp_fixture","object":"response","status":"completed","model":"gpt-5.6-sol","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}` + "\n\n"))
+	}))
+	defer server.Close()
+	resolver := &fixtureCredentialResolver{credentials: map[string]schemas.ResolvedProviderCredential{
+		"key-a": {AccessToken: "token-a", AccountID: "account-a"},
+	}}
+	provider := newProviderForServer(t, server.URL+"/responses")
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	response, bifrostErr := provider.Responses(ctx, schemas.Key{ID: "key-a", CredentialResolver: resolver}, responsesRequest())
+	if bifrostErr != nil {
+		t.Fatalf("Responses() error = %v", bifrostErr)
+	}
+	if len(response.Output) != 1 || response.Output[0].Content == nil || len(response.Output[0].Content.ContentBlocks) != 1 || response.Output[0].Content.ContentBlocks[0].Text == nil || *response.Output[0].Content.ContentBlocks[0].Text != "assembled output" {
+		t.Fatalf("Responses() output = %#v", response.Output)
+	}
+}
+
 func TestResponsesRefreshesExactlyOnceOnUnauthorized(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
