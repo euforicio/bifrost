@@ -1767,9 +1767,10 @@ type BifrostResponseExtraFields struct {
 
 type RoutingInfo struct {
 	// What actually handled this attempt
-	Provider ModelProvider `json:"provider,omitempty"`
-	Model    string        `json:"model,omitempty"` // model name passed to this attempt's key
-	Key      string        `json:"key,omitempty"`   // KeyName of the key used
+	Provider     ModelProvider `json:"provider,omitempty"`
+	BaseProvider ModelProvider `json:"base_provider,omitempty"` // built-in provider backing a custom provider
+	Model        string        `json:"model,omitempty"`         // model name passed to this attempt's key
+	Key          string        `json:"key,omitempty"`           // KeyName of the key used
 
 	// Populated only when Model matched an entry in this key's Aliases map
 	ResolvedKeyAlias *ResolvedKeyAlias `json:"resolved_key_alias,omitempty"`

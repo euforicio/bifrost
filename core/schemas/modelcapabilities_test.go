@@ -3,6 +3,7 @@ package schemas
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -321,4 +322,16 @@ func TestResolveModelCaps_NormalizesRepeatedProviderPrefix(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveRequestModelCaps_UsesConfiguredBaseProvider(t *testing.T) {
+	ctx := NewBifrostContext(nil, time.Time{})
+	ctx.SetValue(BifrostContextKeyBaseProviderType, Anthropic)
+
+	caps := ResolveRequestModelCaps(ctx, ModelProvider("company-anthropic"), "claude-sonnet-4-6")
+	assert.Equal(t, Anthropic, caps.Provider())
+	assert.Equal(t, "claude-sonnet-4-6", caps.Model())
+
+	withoutContext := ResolveRequestModelCaps(nil, ModelProvider("company-anthropic"), "claude-sonnet-4-6")
+	assert.Equal(t, ModelProvider("company-anthropic"), withoutContext.Provider())
 }

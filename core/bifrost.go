@@ -6858,7 +6858,7 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 		if cfg := config.CustomProviderConfig; cfg != nil && cfg.BaseProviderType != "" {
 			baseProvider = cfg.BaseProviderType
 		}
-		req.Context.SetValue(schemas.BifrostContextKeyIsCustomProvider, !IsStandardProvider(baseProvider))
+		req.Context.SetValue(schemas.BifrostContextKeyIsCustomProvider, isCustomProviderConfig(config))
 		// Lets downstream converters resolve a custom provider key back to the built-in provider it wraps.
 		req.Context.SetValue(schemas.BifrostContextKeyBaseProviderType, baseProvider)
 
@@ -7063,10 +7063,7 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 		// selection error) still produce a populated RoutingInfo on the error —
 		// otherwise the post-retry populate at line ~6221 would clobber RoutingInfo
 		// to a zero value, leaving new consumers without provider/model context.
-		attemptRoutingInfo := schemas.RoutingInfo{
-			Provider: provider.GetProviderKey(),
-			Model:    originalModelRequested,
-		}
+		attemptRoutingInfo := schemas.BuildRoutingInfo(req.Context, provider.GetProviderKey(), originalModelRequested, schemas.Key{})
 		// lastAttemptFinalizer captures the LAST attempt's postHookSpanFinalizer for the
 		// worker-level error fallback below. Single-threaded write (assigned by the retry
 		// loop's per-attempt closure) and single-threaded read (after retries finish), so

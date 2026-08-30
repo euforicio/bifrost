@@ -4093,7 +4093,7 @@ func ToAnthropicResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schema
 	// capModel is the canonical model string used only for capability/version
 	// lookups; the wire Model below stays exactly as the caller sent it.
 	capModel := schemas.ResolveCanonicalModel(ctx, bifrostReq.Model)
-	caps := schemas.ResolveModelCaps(bifrostReq.Provider, capModel)
+	caps := schemas.ResolveRequestModelCaps(ctx, bifrostReq.Provider, capModel)
 
 	anthropicReq := &AnthropicMessageRequest{
 		Model:     bifrostReq.Model,
@@ -4418,7 +4418,7 @@ func ToAnthropicResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schema
 		extraContextManagement := bifrostReq.Params.ExtraParams["context_management"]
 		delete(anthropicReq.ExtraParams, "context_management")
 
-		if features, ok := ProviderFeatures[bifrostReq.Provider]; !ok || features.ContextManagementField {
+		if features, ok := ProviderFeatures[caps.Provider()]; !ok || features.ContextManagementField {
 			if len(bifrostReq.Params.ContextManagement) > 0 {
 				var cm ContextManagement
 				if err := sonic.Unmarshal(bifrostReq.Params.ContextManagement, &cm); err == nil {
@@ -4441,7 +4441,7 @@ func ToAnthropicResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schema
 
 		// Convert tools
 		if bifrostReq.Params.Tools != nil {
-			anthropicTools, mcpServers := convertBifrostToolsToAnthropic(caps, bifrostReq.Params.Tools, bifrostReq.Provider)
+			anthropicTools, mcpServers := convertBifrostToolsToAnthropic(caps, bifrostReq.Params.Tools, caps.Provider())
 			if len(anthropicTools) > 0 {
 				if anthropicReq.Tools == nil {
 					anthropicReq.Tools = anthropicTools

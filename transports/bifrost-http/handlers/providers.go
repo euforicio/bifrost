@@ -831,7 +831,7 @@ func (h *ProviderHandler) listModelDetails(ctx *fasthttp.RequestCtx) {
 		if len(model.AccessibleByKeys) > 0 {
 			details.AccessibleByKeys = model.AccessibleByKeys
 		}
-		capabilities := modelCatalog.GetModelCapabilityEntryForModel(model.Name, model.Provider)
+		capabilities := modelCatalog.GetModelCapabilityEntryForModel(model.Name, h.capabilityProvider(model.Provider))
 		if capabilities != nil {
 			details.ContextLength = capabilities.ContextLength
 			details.MaxInputTokens = capabilities.MaxInputTokens
@@ -943,8 +943,22 @@ func (h *ProviderHandler) isModelDeprecated(model string, provider schemas.Model
 	if modelCatalog == nil {
 		return false
 	}
-	capabilities := modelCatalog.GetModelCapabilityEntryForModel(model, provider)
+	capabilities := modelCatalog.GetModelCapabilityEntryForModel(model, h.capabilityProvider(provider))
 	return capabilities != nil && capabilities.IsDeprecated
+}
+
+// capabilityProvider returns the built-in provider implementation backing a custom
+// provider. Catalog capabilities belong to that implementation, while routing,
+// access control, and pricing overrides remain scoped to the custom provider name.
+func (h *ProviderHandler) capabilityProvider(provider schemas.ModelProvider) schemas.ModelProvider {
+	if h == nil || h.inMemoryStore == nil {
+		return provider
+	}
+	config, err := h.inMemoryStore.GetProviderConfigRaw(provider)
+	if err != nil || config == nil || config.CustomProviderConfig == nil || config.CustomProviderConfig.BaseProviderType == "" {
+		return provider
+	}
+	return config.CustomProviderConfig.BaseProviderType
 }
 
 // parseModelListQuery normalizes the management model-list query string and resolves

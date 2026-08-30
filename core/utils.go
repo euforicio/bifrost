@@ -452,6 +452,13 @@ func IsSupportedBaseProvider(providerKey schemas.ModelProvider) bool {
 	return ok
 }
 
+// isCustomProviderConfig reports whether this configured provider is a custom
+// provider. The base provider itself is always a standard provider, so deriving
+// this flag from BaseProviderType loses the custom identity downstream.
+func isCustomProviderConfig(config *schemas.ProviderConfig) bool {
+	return config != nil && config.CustomProviderConfig != nil
+}
+
 var standardProvidersSet = func() map[schemas.ModelProvider]struct{} {
 	m := make(map[schemas.ModelProvider]struct{}, len(schemas.StandardProviders))
 	for _, p := range schemas.StandardProviders {
