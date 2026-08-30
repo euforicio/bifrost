@@ -21,6 +21,9 @@ import (
 )
 
 func buildRunRequest(request *schemas.BifrostResponsesRequest, modelID string) (*cursorpb.AgentRunRequest, map[string][]byte, error) {
+	if err := validateCursorRequest(request); err != nil {
+		return nil, nil, err
+	}
 	blobs := make(map[string][]byte)
 	store := func(data []byte) []byte {
 		digest := sha256.Sum256(data)
@@ -77,6 +80,32 @@ func buildRunRequest(request *schemas.BifrostResponsesRequest, modelID string) (
 		Action:            action, ModelDetails: details, McpTools: buildMCPTools(request),
 		ConversationId: &conversationID, RequestedModel: &cursorpb.RequestedModel{ModelId: wireModel},
 	}, blobs, nil
+}
+
+// validateCursorRequest prevents the bridge from silently dropping content or
+// hosted tools that Cursor's AgentService wire format cannot represent.
+func validateCursorRequest(request *schemas.BifrostResponsesRequest) error {
+	for _, item := range request.Input {
+		if item.Content == nil {
+			continue
+		}
+		for _, block := range item.Content.ContentBlocks {
+			switch block.Type {
+			case schemas.ResponsesInputMessageContentBlockTypeText, schemas.ResponsesOutputMessageContentTypeText:
+				continue
+			default:
+				return fmt.Errorf("cursor does not support Responses content block type %q", block.Type)
+			}
+		}
+	}
+	if request.Params != nil {
+		for _, tool := range request.Params.Tools {
+			if tool.Type != schemas.ResponsesToolTypeFunction {
+				return fmt.Errorf("cursor does not support Responses tool type %q", tool.Type)
+			}
+		}
+	}
+	return nil
 }
 
 func cursorInstructions(request *schemas.BifrostResponsesRequest) string {
