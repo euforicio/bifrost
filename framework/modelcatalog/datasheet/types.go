@@ -274,6 +274,9 @@ type LookupScopes struct {
 	// start-time rate. The zero value means "unknown" and falls back to the
 	// wall clock at evaluation time.
 	BilledAt time.Time
+	// CatalogProvider is the built-in provider used only for base pricing
+	// lookup. Provider retains the custom provider identity for scoped overrides.
+	CatalogProvider string
 }
 
 // LookupScopesFromContext builds a LookupScopes from a BifrostContext. Reads
@@ -294,12 +297,14 @@ func LookupScopesFromContext(ctx *schemas.BifrostContext, provider string) *Look
 	virtualKeyID, _ := ctx.Value(schemas.BifrostContextKeyGovernanceVirtualKeyID).(string)
 	selectedKeyID, _ := ctx.Value(schemas.BifrostContextKeySelectedKeyID).(string)
 	billedAt, _ := ctx.Value(schemas.BifrostContextKeyRequestStartTime).(time.Time)
+	baseProvider, _ := ctx.Value(schemas.BifrostContextKeyBaseProviderType).(schemas.ModelProvider)
 	return &LookupScopes{
-		UserID:        userID,
-		VirtualKeyID:  virtualKeyID,
-		SelectedKeyID: selectedKeyID,
-		Provider:      provider,
-		BilledAt:      billedAt,
+		UserID:          userID,
+		VirtualKeyID:    virtualKeyID,
+		SelectedKeyID:   selectedKeyID,
+		Provider:        provider,
+		BilledAt:        billedAt,
+		CatalogProvider: string(baseProvider),
 	}
 }
 

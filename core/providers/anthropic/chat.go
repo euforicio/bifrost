@@ -357,7 +357,7 @@ func ToAnthropicChatRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.Bif
 
 	// capModel is the canonical model string used only for capability/version
 	capModel := schemas.ResolveCanonicalModel(ctx, bifrostReq.Model)
-	caps := schemas.ResolveModelCaps(bifrostReq.Provider, capModel)
+	caps := schemas.ResolveRequestModelCaps(ctx, bifrostReq.Provider, capModel)
 	// Fable 5.1+ rejects tool_choice "any"/"tool" outright, so every forced
 	// choice below — the caller's and the synthetic structured-output pin — is
 	// dropped and the model answers under the default "auto".
@@ -644,7 +644,7 @@ func ToAnthropicChatRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.Bif
 					continue
 				}
 				// Non-function tool: attempt server-tool reconstruction.
-				if converted, ok := convertServerToolToAnthropic(tool, caps, bifrostReq.Provider); ok {
+				if converted, ok := convertServerToolToAnthropic(tool, caps, caps.Provider()); ok {
 					tools = append(tools, converted)
 				}
 			}

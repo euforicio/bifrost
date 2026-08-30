@@ -108,6 +108,20 @@ function listModelsAssertLines(sid, { subset = [], superset = [], absent = [], a
   ];
 }
 
+function modelDetailsAssertLines(sid, step) {
+  return [
+    ...listModelsAssertLines(sid, step),
+    `var capabilityModel = ${JSON.stringify(step.capabilityModel)};`,
+    `var inputModality = ${JSON.stringify(step.inputModality)};`,
+    "var detail = (body.models || []).find(function (m) { return m.provider === providerName && m.name === capabilityModel; });",
+    "if (!detail) { throw new Error('missing model details for ' + providerName + '/' + capabilityModel); }",
+    "var modalities = detail.architecture && detail.architecture.input_modalities;",
+    "if (!Array.isArray(modalities) || modalities.indexOf(inputModality) < 0) {",
+    "  throw new Error('expected inherited ' + inputModality + ' capability for ' + providerName + '/' + capabilityModel + ' but got ' + JSON.stringify(detail.architecture));",
+    "}",
+  ];
+}
+
 // Capture the first live model whose name starts with `prefix` into a
 // collection variable, so later steps can mutate and assert against whatever
 // the upstream actually reported (some upstreams only list dated ids, e.g.
@@ -239,7 +253,7 @@ function expandScenario(sc) {
         const name = uniq(step.label);
         const query = [{ key: "provider", value: seg }, { key: "limit", value: "1000" }];
         items.push(item(nextId("assert-model-details"), name, request("GET", url(["api", "models", "details"], query), null),
-          events(pollPrerequest(step.waitSeconds), pollTest(name, listModelsAssertLines(sid, step), cleanupName))));
+          events(pollPrerequest(step.waitSeconds), pollTest(name, modelDetailsAssertLines(sid, step), cleanupName))));
         break;
       }
       case "assertProviders": {
@@ -406,7 +420,15 @@ function scenariosFor(provider) {
       description: "/api/models/details lists only the models the provider's keys allow, like the plain list endpoint.",
       steps: [
         { type: "addProvider", keys: [key({ id: "k1", models: [MODEL_A] })] },
-        { type: "assertModelDetails", subset: [MODEL_A], absent: [MODEL_B], waitSeconds: 2, label: "details list gated to key models" },
+        {
+          type: "assertModelDetails",
+          subset: [MODEL_A],
+          absent: [MODEL_B],
+          capabilityModel: MODEL_A,
+          inputModality: "image",
+          waitSeconds: 2,
+          label: "details list is gated and inherits base-provider capabilities",
+        },
         { type: "cleanup" },
       ],
     },

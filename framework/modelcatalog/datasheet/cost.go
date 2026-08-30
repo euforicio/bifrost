@@ -583,8 +583,9 @@ func (s *Store) calculateAzureModelRouterCost(result *schemas.BifrostResponse, i
 
 	if servedModel := result.ServedModel(); servedModel != "" && servedModel != routingInfo.Model {
 		underlyingRoutingInfo := schemas.RoutingInfo{
-			Provider: routingInfo.Provider,
-			Model:    servedModel,
+			Provider:     routingInfo.Provider,
+			BaseProvider: routingInfo.BaseProvider,
+			Model:        servedModel,
 		}
 		cost = cost.Add(s.computeCostFromInput(input, underlyingRoutingInfo, pricingRequestType, scopes))
 	}
@@ -605,8 +606,9 @@ func (s *Store) computeCostFromInput(input costInput, routingInfo schemas.Routin
 	// stay addressable.
 	if input.containerIdentifierString != "" {
 		routingInfo = schemas.RoutingInfo{
-			Provider: routingInfo.Provider,
-			Model:    input.containerIdentifierString,
+			Provider:     routingInfo.Provider,
+			BaseProvider: routingInfo.BaseProvider,
+			Model:        input.containerIdentifierString,
 		}
 	}
 
@@ -2104,6 +2106,13 @@ func populateOutputImageCount(imageUsage *schemas.ImageUsage, dataLen int) {
 // applies.
 func (s *Store) resolvePricing(routingInfo schemas.RoutingInfo, requestType schemas.RequestType, scopes LookupScopes) *configstoreTables.TableModelPricing {
 	provider := string(routingInfo.Provider)
+	catalogProvider := string(routingInfo.BaseProvider)
+	if catalogProvider == "" {
+		catalogProvider = scopes.CatalogProvider
+	}
+	if catalogProvider == "" {
+		catalogProvider = provider
+	}
 	var aliasModelID, aliasModelName string
 	if rka := routingInfo.ResolvedKeyAlias; rka != nil {
 		aliasModelID = rka.ModelID
@@ -2132,9 +2141,9 @@ func (s *Store) resolvePricing(routingInfo schemas.RoutingInfo, requestType sche
 		if candidate == "" {
 			continue
 		}
-		catalogProvider := pricingCatalogProvider(provider, candidate)
-		catalogModel := subscriptionPricingModel(provider, candidate)
-		base, exists := s.getBasePricing(catalogModel, catalogProvider, requestType)
+		resolvedCatalogProvider := pricingCatalogProvider(catalogProvider, candidate)
+		catalogModel := subscriptionPricingModel(catalogProvider, candidate)
+		base, exists := s.getBasePricing(catalogModel, resolvedCatalogProvider, requestType)
 		if exists && base != nil {
 			result, _ := s.applyPricingOverrides(overrideKey, requestType, *base, scopes)
 			return &result

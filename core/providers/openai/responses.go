@@ -361,7 +361,7 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 
 	// Canonical model for capability gating only; wire model is untouched.
 	capModel := schemas.ResolveCanonicalModel(ctx, bifrostReq.Model)
-	caps := schemas.ResolveModelCaps(bifrostReq.Provider, capModel)
+	caps := schemas.ResolveRequestModelCaps(ctx, bifrostReq.Provider, capModel)
 
 	var messages []schemas.ResponsesMessage
 	// OpenAI models (except for gpt-oss) do not support reasoning content blocks, so we need to convert them to summaries, if there are any
@@ -696,7 +696,7 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 			// Handle OpenAI-specific parameter filtering
 			// Only o1/o3 series models support reasoning.effort
 			// Regular models like gpt-4o, gpt-4, gpt-3.5-turbo don't support it
-			if (bifrostReq.Provider == schemas.OpenAI || bifrostReq.Provider == schemas.Azure) && !caps.SupportsReasoning(IsOpenAIReasoningModel(capModel)) {
+			if (caps.Provider() == schemas.OpenAI || caps.Provider() == schemas.Azure || bifrostReq.Provider == schemas.OpenAI || bifrostReq.Provider == schemas.Azure) && !caps.SupportsReasoning(IsOpenAIReasoningModel(capModel)) {
 				// Clear reasoning for non-reasoning OpenAI models to avoid API errors
 				req.ResponsesParameters.Reasoning = nil
 			}
@@ -773,7 +773,7 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 		req.ExtraParams = bifrostReq.Params.ExtraParams
 	}
 
-	if features, ok := ProviderFeatures[bifrostReq.Provider]; ok && !features.ContextManagement {
+	if features, ok := ProviderFeatures[caps.Provider()]; ok && !features.ContextManagement {
 		req.ContextManagement = nil
 		delete(req.ExtraParams, "context_management")
 	}
