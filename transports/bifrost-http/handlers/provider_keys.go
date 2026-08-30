@@ -771,6 +771,9 @@ func validateProviderKeyURL(provider schemas.ModelProvider, key schemas.Key) err
 		if key.OllamaKeyConfig == nil || !key.OllamaKeyConfig.URL.IsSet() {
 			return fmt.Errorf("ollama_key_config.url is required for Ollama keys")
 		}
+		if strings.TrimRight(key.OllamaKeyConfig.URL.GetValue(), "/") == "https://ollama.com" && !key.Value.IsSet() {
+			return fmt.Errorf("API key is required for Ollama Cloud")
+		}
 	case schemas.SGL:
 		if key.SGLKeyConfig == nil || !key.SGLKeyConfig.URL.IsSet() {
 			return fmt.Errorf("sgl_key_config.url is required for SGL keys")

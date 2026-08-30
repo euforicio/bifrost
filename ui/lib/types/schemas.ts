@@ -476,7 +476,11 @@ export const modelProviderKeySchema = z
 	})
 	.refine(
 		(data) => {
-			if (data.vllm_key_config || data.ollama_key_config || data.sgl_key_config) {
+			if (data.ollama_key_config) {
+				const url = data.ollama_key_config.url?.value?.trim().replace(/\/$/, "");
+				return url !== "https://ollama.com" || isSecretVarSet(data.value);
+			}
+			if (data.vllm_key_config || data.sgl_key_config) {
 				return true;
 			}
 			// Databricks authenticates with a personal access token (the key value) or with an

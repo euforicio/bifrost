@@ -99,6 +99,20 @@ func mergeHeaders(base, additional map[string]string) map[string]string {
 	return merged
 }
 
+func normalizeXAIChatStreamResponse(response *schemas.BifrostChatResponse) *schemas.BifrostChatResponse {
+	if response != nil {
+		response.Usage.NormalizeProviderCost()
+	}
+	return response
+}
+
+func normalizeXAIResponsesStreamResponse(response *schemas.BifrostResponsesStreamResponse) *schemas.BifrostResponsesStreamResponse {
+	if response != nil && response.Response != nil {
+		response.Response.Usage.NormalizeProviderCost()
+	}
+	return response
+}
+
 // ListModels performs a list models request to xAI's API.
 func (provider *XAIProvider) ListModels(ctx *schemas.BifrostContext, keys []schemas.Key, request *schemas.BifrostListModelsRequest) (*schemas.BifrostListModelsResponse, *schemas.BifrostError) {
 	if provider.networkConfig.BaseURL == "" {
@@ -250,7 +264,7 @@ func (provider *XAIProvider) ChatCompletionStream(ctx *schemas.BifrostContext, p
 			nil,
 			ParseXAIError,
 			nil,
-			normalizeXAIChatResponse,
+			normalizeXAIChatStreamResponse,
 			nil,
 			provider.logger,
 			postHookSpanFinalizer,
@@ -349,7 +363,7 @@ func (provider *XAIProvider) ResponsesStream(ctx *schemas.BifrostContext, postHo
 			nil,
 			ParseXAIError,
 			nil,
-			normalizeXAIResponsesProviderCost,
+			normalizeXAIResponsesStreamResponse,
 			nil,
 			provider.logger,
 			postHookSpanFinalizer,

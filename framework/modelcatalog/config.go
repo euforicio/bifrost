@@ -107,6 +107,7 @@ func PricingLookupScopesFromContext(ctx *schemas.BifrostContext, provider string
 // historical constants.
 const (
 	DefaultPricingURL             = datasheet.DefaultURL
+	DefaultModelsDevURL           = datasheet.DefaultModelsDevURL
 	DefaultModelParametersURL     = datasheet.DefaultModelParametersURL
 	DefaultPricingTimeout         = datasheet.DefaultPricingTimeout
 	DefaultModelParametersTimeout = datasheet.DefaultModelParametersTimeout

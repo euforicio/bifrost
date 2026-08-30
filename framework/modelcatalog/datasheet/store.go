@@ -87,6 +87,12 @@ type Store struct {
 	modelParametersURL string
 	syncInterval       time.Duration
 	lastSyncedAt       time.Time
+
+	// models.dev is a supplemental source. Keep its last successfully parsed
+	// rows separate so an in-memory deployment can reapply them when a later
+	// refresh of the external feed fails after the primary catalog reload.
+	modelsDevMu   sync.RWMutex
+	modelsDevRows []configstoreTables.TableModelPricing
 }
 
 // New constructs a Store with the given config. The store is empty; callers
@@ -161,7 +167,8 @@ func (s *Store) MarkSynced(t time.Time) {
 // Get returns the raw pricing row for (model, provider, requestType) or nil.
 // Useful for callers that need exact pricing without override resolution.
 func (s *Store) Get(model string, provider schemas.ModelProvider, requestType schemas.RequestType) *configstoreTables.TableModelPricing {
-	key := makeKey(model, normalizeProvider(string(provider)), normalizeRequestType(requestType))
+	catalogProvider := pricingCatalogProvider(string(provider), model)
+	key := makeKey(subscriptionPricingModel(string(provider), model), catalogProvider, normalizeRequestType(requestType))
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	row, ok := s.pricingData[key]
@@ -177,7 +184,8 @@ func (s *Store) Get(model string, provider schemas.ModelProvider, requestType sc
 func (s *Store) GetPricingEntryForModel(model string, provider schemas.ModelProvider) *Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	catalogProvider := normalizeProvider(string(provider))
+	catalogProvider := pricingCatalogProvider(string(provider), model)
+	catalogModel := subscriptionPricingModel(string(provider), model)
 	for _, mode := range []schemas.RequestType{
 		schemas.TextCompletionRequest,
 		schemas.ChatCompletionRequest,
@@ -192,7 +200,7 @@ func (s *Store) GetPricingEntryForModel(model string, provider schemas.ModelProv
 		schemas.VideoGenerationRequest,
 		schemas.OCRRequest,
 	} {
-		key := makeKey(model, catalogProvider, normalizeRequestType(mode))
+		key := makeKey(catalogModel, catalogProvider, normalizeRequestType(mode))
 		if pricing, ok := s.pricingData[key]; ok {
 			return convertTablePricingToEntry(&pricing)
 		}
@@ -208,7 +216,9 @@ func (s *Store) GetPricingEntryForModel(model string, provider schemas.ModelProv
 func (s *Store) GetCapabilityEntry(model string, provider schemas.ModelProvider) *Entry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	provider = schemas.ModelProvider(normalizeProvider(string(provider)))
+	originalProvider := string(provider)
+	provider = schemas.ModelProvider(pricingCatalogProvider(originalProvider, model))
+	model = subscriptionPricingModel(originalProvider, model)
 
 	if entry := s.capabilityEntryForExactUnsafe(model, provider); entry != nil {
 		return entry
