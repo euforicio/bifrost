@@ -231,6 +231,7 @@ jobs:
         env:
           BIFROST_XAI_VIRTUAL_KEY: ${{ secrets.BIFROST_XAI_VIRTUAL_KEY }}
           BIFROST_CODEX_VIRTUAL_KEY: ${{ secrets.BIFROST_CODEX_VIRTUAL_KEY }}
+          BIFROST_CURSOR_VIRTUAL_KEY: ${{ secrets.BIFROST_CURSOR_VIRTUAL_KEY }}
         run: deploy/orion/provider-smoke.sh
 
       - name: Roll back after failed public verification

@@ -4,6 +4,7 @@ set -euo pipefail
 base_url=${BIFROST_BASE_URL:-https://bifrost.riftlabs.app}
 : "${BIFROST_XAI_VIRTUAL_KEY:?BIFROST_XAI_VIRTUAL_KEY is required}"
 : "${BIFROST_CODEX_VIRTUAL_KEY:?BIFROST_CODEX_VIRTUAL_KEY is required}"
+: "${BIFROST_CURSOR_VIRTUAL_KEY:?BIFROST_CURSOR_VIRTUAL_KEY is required}"
 
 smoke_dir=$(mktemp -d)
 trap 'rm -rf -- "$smoke_dir"' EXIT
@@ -116,10 +117,29 @@ else:
 PY
 }
 
+assert_model_exists() {
+  local path=$1
+  local model=$2
+  python3 - "$path" "$model" <<'PY'
+import json
+import sys
+
+path, model = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+models = [item.get("id") for item in payload.get("data", []) if isinstance(item, dict)]
+if model not in models:
+    raise SystemExit(f"expected model {model!r} in provider catalog")
+PY
+}
+
 xai_auth="$smoke_dir/xai.curl"
 codex_auth="$smoke_dir/codex.curl"
+cursor_auth="$smoke_dir/cursor.curl"
 write_auth_config "$xai_auth" "$BIFROST_XAI_VIRTUAL_KEY"
 write_auth_config "$codex_auth" "$BIFROST_CODEX_VIRTUAL_KEY"
+write_auth_config "$cursor_auth" "$BIFROST_CURSOR_VIRTUAL_KEY"
 
 curl --fail --silent --show-error --max-time 90 --config "$xai_auth" \
   -H 'Content-Type: application/json' \
@@ -150,5 +170,21 @@ curl --fail --silent --show-error --no-buffer --max-time 120 --config "$codex_au
   --data '{"model":"openai-codex/gpt-5.6-sol","stream":true,"input":"Reply with exactly: BIFROST_CODEX_STREAM_OK","reasoning":{"effort":"low","summary":"auto"}}' \
   "$base_url/v1/responses" > "$smoke_dir/codex-stream.sse"
 assert_sse_contains "$smoke_dir/codex-stream.sse" BIFROST_CODEX_STREAM_OK response.completed
+
+curl --fail --silent --show-error --max-time 60 --config "$cursor_auth" \
+  "$base_url/v1/models?provider=cursor" > "$smoke_dir/cursor-models.json"
+assert_model_exists "$smoke_dir/cursor-models.json" cursor/default
+
+curl --fail --silent --show-error --max-time 180 --config "$cursor_auth" \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"cursor/default","input":"Reply with exactly: BIFROST_CURSOR_UNARY_OK"}' \
+  "$base_url/v1/responses" > "$smoke_dir/cursor-unary.json"
+assert_json_contains "$smoke_dir/cursor-unary.json" BIFROST_CURSOR_UNARY_OK
+
+curl --fail --silent --show-error --no-buffer --max-time 180 --config "$cursor_auth" \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"cursor/default","stream":true,"input":"Reply with exactly: BIFROST_CURSOR_STREAM_OK"}' \
+  "$base_url/v1/responses" > "$smoke_dir/cursor-stream.sse"
+assert_sse_contains "$smoke_dir/cursor-stream.sse" BIFROST_CURSOR_STREAM_OK response.completed
 
 echo "Provider inference smoke checks passed."
