@@ -52,10 +52,12 @@ func TestSubscriptionPricingUsesOfficialModelVendor(t *testing.T) {
 		}
 	}
 	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
-		makeKey("gpt-5.6-sol", "openai", "chat"):    pricing("gpt-5.6-sol", "openai", 1),
-		makeKey("grok-4", "xai", "chat"):            pricing("grok-4", "xai", 2),
-		makeKey("claude-opus", "anthropic", "chat"): pricing("claude-opus", "anthropic", 3),
-		makeKey("gemini-pro", "gemini", "chat"):     pricing("gemini-pro", "gemini", 4),
+		makeKey("gpt-5.6-sol", "openai", "chat"):          pricing("gpt-5.6-sol", "openai", 1),
+		makeKey("grok-4", "xai", "chat"):                  pricing("grok-4", "xai", 2),
+		makeKey("claude-opus", "anthropic", "chat"):       pricing("claude-opus", "anthropic", 3),
+		makeKey("gemini-pro", "gemini", "chat"):           pricing("gemini-pro", "gemini", 4),
+		makeKey("grok-4.6", "xai", "chat"):                pricing("grok-4.6", "xai", 5),
+		makeKey("claude-sonnet-4-6", "anthropic", "chat"): pricing("claude-sonnet-4-6", "anthropic", 6),
 	})
 
 	tests := []struct {
@@ -70,6 +72,9 @@ func TestSubscriptionPricingUsesOfficialModelVendor(t *testing.T) {
 		{name: "Cursor Anthropic", provider: schemas.CursorProvider, model: "claude-opus", want: 3},
 		{name: "Cursor Google", provider: schemas.CursorProvider, model: "gemini-pro", want: 4},
 		{name: "xAI direct", provider: schemas.XAI, model: "grok-4", want: 2},
+		{name: "Cursor prefixed OpenAI effort", provider: schemas.CursorProvider, model: "cursor/gpt-5.6-sol-high-fast", want: 1},
+		{name: "Cursor xAI routing prefix and effort", provider: schemas.CursorProvider, model: "cursor/cursor-grok-4.6-xhigh-fast", want: 5},
+		{name: "Cursor reordered Anthropic effort", provider: schemas.CursorProvider, model: "cursor/claude-4.6-sonnet-medium-thinking", want: 6},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -104,6 +109,26 @@ func TestSubscriptionPricingDoesNotGuessUnknownModels(t *testing.T) {
 	assert.Nil(t, s.resolvePricing(routingInfoFor(schemas.OpenAICodex, "unknown-model"), schemas.ChatCompletionRequest, LookupScopes{}))
 }
 
+func TestCursorPricingModelNormalization(t *testing.T) {
+	tests := map[string]string{
+		"cursor/default":                            "default",
+		"cursor/gpt-5.6-sol-low":                    "gpt-5.6-sol",
+		"cursor/gpt-5.6-sol-xhigh-fast":             "gpt-5.6-sol",
+		"cursor/cursor-grok-4.6-medium-fast":        "grok-4.6",
+		"cursor/claude-4.6-sonnet-medium":           "claude-sonnet-4-6",
+		"cursor/claude-4-sonnet-thinking":           "claude-sonnet-4",
+		"cursor/claude-opus-4-8-thinking-xhigh":     "claude-opus-4-8",
+		"cursor/claude-fable-5-thinking-extra-high": "claude-fable-5",
+		"cursor/gemini-3.6-flash-minimal":           "gemini-3.6-flash",
+		"cursor/gpt-5-mini":                         "gpt-5-mini",
+	}
+	for input, want := range tests {
+		t.Run(input, func(t *testing.T) {
+			assert.Equal(t, want, subscriptionPricingModel(string(schemas.CursorProvider), input))
+		})
+	}
+}
+
 func TestHasTokenPricingUsesOfficialVendorMapping(t *testing.T) {
 	input := 1.0
 	s := testStoreWithPricing(map[string]configstoreTables.TableModelPricing{
@@ -111,6 +136,7 @@ func TestHasTokenPricingUsesOfficialVendorMapping(t *testing.T) {
 	})
 	assert.True(t, s.HasTokenPricing(schemas.CursorProvider, "grok-4", schemas.ChatCompletionRequest, nil))
 	assert.True(t, s.HasTokenPricing(schemas.CursorProvider, "cursor/grok-4", schemas.ChatCompletionRequest, nil))
+	assert.True(t, s.HasTokenPricing(schemas.CursorProvider, "cursor/cursor-grok-4-high-fast", schemas.ChatCompletionRequest, nil))
 	assert.False(t, s.HasTokenPricing(schemas.CursorProvider, "auto", schemas.ChatCompletionRequest, nil))
 }
 

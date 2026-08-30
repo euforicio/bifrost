@@ -1983,7 +1983,43 @@ func (s *Store) resolvePricing(routingInfo schemas.RoutingInfo, requestType sche
 func subscriptionPricingModel(provider, model string) string {
 	prefix := provider + "/"
 	if (schemas.ModelProvider(provider) == schemas.OpenAICodex || schemas.ModelProvider(provider) == schemas.CursorProvider) && strings.HasPrefix(model, prefix) {
-		return strings.TrimPrefix(model, prefix)
+		model = strings.TrimPrefix(model, prefix)
+	}
+	if schemas.ModelProvider(provider) == schemas.CursorProvider {
+		return cursorPricingModel(model)
+	}
+	return model
+}
+
+// cursorPricingModel maps Cursor's transport-specific model IDs onto the
+// official provider model IDs used by the pricing catalog. Cursor publishes a
+// separate ID for each reasoning effort and fast-mode combination even though
+// those IDs bill as the same underlying provider model.
+//
+// cursor/default is deliberately left unresolved: Cursor's Auto route does not
+// disclose the model that served the request, so assigning an official model's
+// rate would produce misleading spend. Operators can still configure an
+// explicit pricing override for that route.
+func cursorPricingModel(model string) string {
+	model = strings.TrimPrefix(model, "cursor-")
+	for {
+		before := model
+		model = strings.TrimSuffix(model, "-fast")
+		for _, suffix := range []string{"-extra-high", "-minimal", "-medium", "-xhigh", "-high", "-none", "-low", "-max"} {
+			model = strings.TrimSuffix(model, suffix)
+		}
+		model = strings.TrimSuffix(model, "-thinking")
+		if model == before {
+			break
+		}
+	}
+
+	// Cursor names the older Claude generation before the variant
+	// (claude-4.6-sonnet), while Anthropic's catalog uses
+	// claude-sonnet-4-6. Newer Cursor IDs already use the catalog order.
+	parts := strings.Split(model, "-")
+	if len(parts) == 3 && parts[0] == "claude" && parts[2] != "" && parts[1] != "" && parts[1][0] >= '0' && parts[1][0] <= '9' {
+		return "claude-" + parts[2] + "-" + strings.ReplaceAll(parts[1], ".", "-")
 	}
 	return model
 }

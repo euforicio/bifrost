@@ -140,68 +140,15 @@ func (provider *XAIProvider) ListModels(ctx *schemas.BifrostContext, keys []sche
 	return providerUtils.HandleMultipleListModelsRequests(ctx, keys, request, listByKey)
 }
 
-// TextCompletion performs a text completion request to the xAI API.
+// TextCompletion is not supported by xAI. Current xAI models use chat
+// completions or Responses; the legacy /v1/completions endpoint was retired.
 func (provider *XAIProvider) TextCompletion(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostTextCompletionRequest) (*schemas.BifrostTextCompletionResponse, *schemas.BifrostError) {
-	for attempt := 0; attempt < 2; attempt++ {
-		_, headers, dynamic, resolveErr := provider.resolveAuth(ctx, key, attempt == 1)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		response, bifrostErr := openai.HandleOpenAITextCompletionRequest(
-			ctx,
-			provider.client,
-			provider.networkConfig.BaseURL+providerUtils.GetPathFromContext(ctx, "/v1/completions"),
-			request,
-			headers,
-			provider.networkConfig.ExtraHeaders,
-			provider.GetProviderKey(),
-			providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest),
-			providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse),
-			nil,
-			ParseXAIError,
-			provider.logger,
-		)
-		if attempt == 0 && dynamic && xaiUnauthorized(bifrostErr) {
-			continue
-		}
-		return response, bifrostErr
-	}
-	panic("unreachable")
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.TextCompletionRequest, provider.GetProviderKey())
 }
 
-// TextCompletionStream performs a streaming text completion request to xAI's API.
-// It formats the request, sends it to xAI, and processes the response.
-// Returns a channel of BifrostStreamChunk objects or an error if the request fails.
+// TextCompletionStream is not supported by xAI.
 func (provider *XAIProvider) TextCompletionStream(ctx *schemas.BifrostContext, postHookRunner schemas.PostHookRunner, postHookSpanFinalizer func(context.Context), key schemas.Key, request *schemas.BifrostTextCompletionRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
-	for attempt := 0; attempt < 2; attempt++ {
-		_, headers, dynamic, resolveErr := provider.resolveAuth(ctx, key, attempt == 1)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		response, bifrostErr := openai.HandleOpenAITextCompletionStreaming(
-			ctx,
-			provider.streamingClient,
-			provider.networkConfig.BaseURL+"/v1/completions",
-			request,
-			headers,
-			provider.networkConfig.ExtraHeaders,
-			provider.networkConfig.StreamIdleTimeoutInSeconds,
-			providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest),
-			providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse),
-			provider.GetProviderKey(),
-			ParseXAIError,
-			postHookRunner,
-			nil,
-			nil,
-			provider.logger,
-			postHookSpanFinalizer,
-		)
-		if attempt == 0 && dynamic && xaiUnauthorized(bifrostErr) {
-			continue
-		}
-		return response, bifrostErr
-	}
-	panic("unreachable")
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.TextCompletionStreamRequest, provider.GetProviderKey())
 }
 
 // ChatCompletion performs a chat completion request to the xAI API.

@@ -65,9 +65,10 @@ jobs:
       - name: Validate provider account implementation
         run: |
           source ./.github/workflows/scripts/setup-go-workspace.sh
-          (cd core && go test ./providers/openaicodex ./providers/xai ./providers/cursor)
-          (cd framework && go test ./providercredentials ./configstore ./configstore/tables)
+          (cd core && go test ./providers/openaicodex ./providers/xai ./providers/cursor ./providers/fireworks ./providers/ollama)
+          (cd framework && go test ./providercredentials ./configstore ./configstore/tables ./modelcatalog/datasheet)
           (cd transports && go test ./bifrost-http/handlers ./bifrost-http/lib -run 'ProviderCredential|ProviderAccount|Account|RemoveProvider')
+          node --test tests/e2e/api/runners/lib/provider-capabilities.test.mjs
           (cd ui && npm ci && npm run build-enterprise)
 
   build:
@@ -232,6 +233,8 @@ jobs:
           BIFROST_XAI_VIRTUAL_KEY: ${{ secrets.BIFROST_XAI_VIRTUAL_KEY }}
           BIFROST_CODEX_VIRTUAL_KEY: ${{ secrets.BIFROST_CODEX_VIRTUAL_KEY }}
           BIFROST_CURSOR_VIRTUAL_KEY: ${{ secrets.BIFROST_CURSOR_VIRTUAL_KEY }}
+          BIFROST_OLLAMA_VIRTUAL_KEY: ${{ secrets.BIFROST_OLLAMA_VIRTUAL_KEY }}
+          BIFROST_FIREWORKS_VIRTUAL_KEY: ${{ secrets.BIFROST_FIREWORKS_VIRTUAL_KEY }}
         run: deploy/orion/provider-smoke.sh
 
       - name: Roll back after failed public verification
