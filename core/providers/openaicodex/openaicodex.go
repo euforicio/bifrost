@@ -359,6 +359,8 @@ func (provider *OpenAICodexProvider) Responses(ctx *schemas.BifrostContext, key 
 	}
 	var terminal *schemas.BifrostResponsesResponse
 	var terminalErr *schemas.BifrostError
+	var streamedOutput []schemas.ResponsesMessage
+	var streamedOutputSet []bool
 	for chunk := range stream {
 		if chunk.BifrostError != nil {
 			terminalErr = chunk.BifrostError
@@ -366,6 +368,19 @@ func (provider *OpenAICodexProvider) Responses(ctx *schemas.BifrostContext, key 
 		}
 		response := chunk.BifrostResponsesStreamResponse
 		if response == nil || response.Response == nil {
+			if response != nil && response.Type == schemas.ResponsesStreamResponseTypeOutputItemDone && response.Item != nil {
+				if response.OutputIndex == nil {
+					streamedOutput = append(streamedOutput, *response.Item)
+					streamedOutputSet = append(streamedOutputSet, true)
+				} else {
+					for len(streamedOutput) <= *response.OutputIndex {
+						streamedOutput = append(streamedOutput, schemas.ResponsesMessage{})
+						streamedOutputSet = append(streamedOutputSet, false)
+					}
+					streamedOutput[*response.OutputIndex] = *response.Item
+					streamedOutputSet[*response.OutputIndex] = true
+				}
+			}
 			continue
 		}
 		if response.Type == schemas.ResponsesStreamResponseTypeCompleted || response.Type == schemas.ResponsesStreamResponseTypeIncomplete {
@@ -374,6 +389,14 @@ func (provider *OpenAICodexProvider) Responses(ctx *schemas.BifrostContext, key 
 		}
 	}
 	if terminal != nil {
+		if len(terminal.Output) == 0 && len(streamedOutput) > 0 {
+			terminal.Output = make([]schemas.ResponsesMessage, 0, len(streamedOutput))
+			for i := range streamedOutput {
+				if streamedOutputSet[i] {
+					terminal.Output = append(terminal.Output, streamedOutput[i])
+				}
+			}
+		}
 		return terminal, nil
 	}
 	if terminalErr != nil {
