@@ -64,6 +64,13 @@ func (mc *ModelCatalog) GetPricingEntryForModel(model string, provider schemas.M
 	return mc.datasheet.GetPricingEntryForModel(model, provider)
 }
 
+// HasTokenPricing reports whether token usage for this request can be priced
+// before dispatch. Subscription transports use it to prevent dollar-budgeted
+// requests from silently recording zero spend for ambiguous model aliases.
+func (mc *ModelCatalog) HasTokenPricing(provider schemas.ModelProvider, model string, requestType schemas.RequestType, scopes *PricingLookupScopes) bool {
+	return mc.datasheet.HasTokenPricing(provider, model, requestType, (*datasheet.LookupScopes)(scopes))
+}
+
 // CalculateCost computes the dollar cost for a Bifrost response.
 func (mc *ModelCatalog) CalculateCost(result *schemas.BifrostResponse, scopes *PricingLookupScopes) float64 {
 	return mc.datasheet.CalculateCost(result, (*datasheet.LookupScopes)(scopes))

@@ -38,6 +38,8 @@ type cursorBridge struct {
 	continuationID string
 	outputTokens   int64
 	totalTokens    int64
+	emittedOutput  int64
+	emittedInput   int64
 	lastUsed       time.Time
 }
 
@@ -146,9 +148,14 @@ func (bridge *cursorBridge) process(ctx context.Context, model string, emit curs
 }
 
 func (bridge *cursorBridge) completedEvent(model string) *schemas.BifrostResponsesStreamResponse {
-	total := max(bridge.totalTokens, bridge.outputTokens)
-	output := max(int64(0), bridge.outputTokens)
-	input := max(int64(0), total-output)
+	cumulativeTotal := max(bridge.totalTokens, bridge.outputTokens)
+	cumulativeOutput := max(int64(0), bridge.outputTokens)
+	cumulativeInput := max(int64(0), cumulativeTotal-cumulativeOutput)
+	input := max(int64(0), cumulativeInput-bridge.emittedInput)
+	output := max(int64(0), cumulativeOutput-bridge.emittedOutput)
+	total := input + output
+	bridge.emittedInput = cumulativeInput
+	bridge.emittedOutput = cumulativeOutput
 	status := schemas.ResponsesResponseStatusCompleted
 	responseID := bridge.continuationID
 	return &schemas.BifrostResponsesStreamResponse{

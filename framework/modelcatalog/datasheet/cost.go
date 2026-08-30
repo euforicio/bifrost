@@ -1922,7 +1922,6 @@ func populateOutputImageCount(imageUsage *schemas.ImageUsage, dataLen int) {
 // applies.
 func (s *Store) resolvePricing(routingInfo schemas.RoutingInfo, requestType schemas.RequestType, scopes LookupScopes) *configstoreTables.TableModelPricing {
 	provider := string(routingInfo.Provider)
-	catalogProvider := normalizeProvider(provider)
 	var aliasModelID, aliasModelName string
 	if rka := routingInfo.ResolvedKeyAlias; rka != nil {
 		aliasModelID = rka.ModelID
@@ -1951,7 +1950,9 @@ func (s *Store) resolvePricing(routingInfo schemas.RoutingInfo, requestType sche
 		if candidate == "" {
 			continue
 		}
-		base, exists := s.getBasePricing(candidate, catalogProvider, requestType)
+		catalogProvider := pricingCatalogProvider(provider, candidate)
+		catalogModel := subscriptionPricingModel(provider, candidate)
+		base, exists := s.getBasePricing(catalogModel, catalogProvider, requestType)
 		if exists && base != nil {
 			result, _ := s.applyPricingOverrides(overrideKey, requestType, *base, scopes)
 			return &result
@@ -1968,6 +1969,53 @@ func (s *Store) resolvePricing(routingInfo schemas.RoutingInfo, requestType sche
 	}
 	s.logger.Debug("no pricing found for wire model %s and provider %s, skipping cost calculation", overrideKey, provider)
 	return nil
+}
+
+func subscriptionPricingModel(provider, model string) string {
+	prefix := provider + "/"
+	if (schemas.ModelProvider(provider) == schemas.OpenAICodex || schemas.ModelProvider(provider) == schemas.CursorProvider) && strings.HasPrefix(model, prefix) {
+		return strings.TrimPrefix(model, prefix)
+	}
+	return model
+}
+
+// HasTokenPricing reports whether a request can be metered from token usage.
+// It follows the same alias, official-provider, mode-fallback, and override
+// precedence as CalculateCost without requiring a response to exist first.
+func (s *Store) HasTokenPricing(provider schemas.ModelProvider, model string, requestType schemas.RequestType, scopes *LookupScopes) bool {
+	lookupScopes := LookupScopes{}
+	if scopes != nil {
+		lookupScopes = *scopes
+	}
+	pricing := s.resolvePricing(schemas.RoutingInfo{Provider: provider, Model: model}, requestType, lookupScopes)
+	if pricing == nil {
+		return false
+	}
+	return pricing.InputCostPerToken != nil || pricing.OutputCostPerToken != nil ||
+		pricing.CacheReadInputTokenCost != nil || pricing.CacheCreationInputTokenCost != nil
+}
+
+// pricingCatalogProvider changes only pricing lookup. Routing, provider-key
+// selection, usage attribution, and override scopes retain the transport that
+// actually served the request.
+func pricingCatalogProvider(provider, model string) string {
+	normalized := normalizeProvider(provider)
+	switch schemas.ModelProvider(provider) {
+	case schemas.OpenAICodex:
+		return string(schemas.OpenAI)
+	case schemas.CursorProvider:
+		switch {
+		case schemas.IsGrokModel(model):
+			return string(schemas.XAI)
+		case schemas.IsAnthropicModel(model):
+			return string(schemas.Anthropic)
+		case schemas.IsGeminiModel(model), schemas.IsGemmaModel(model):
+			return string(schemas.Gemini)
+		case schemas.IsOpenAIModel(model):
+			return string(schemas.OpenAI)
+		}
+	}
+	return normalized
 }
 
 // getBasePricing looks up catalog pricing for the given model, provider, and request type.

@@ -1065,6 +1065,9 @@ func (p *GovernancePlugin) PreLLMHook(ctx *schemas.BifrostContext, req *schemas.
 					Error: bifrostError,
 				}, nil
 			}
+			if pricingError := p.validateSubscriptionPricing(ctx, &batchEvaluationRequest, req.RequestType); pricingError != nil {
+				return req, &schemas.LLMPluginShortCircuit{Error: pricingError}, nil
+			}
 		}
 	}
 	// Evaluate governance using common function
@@ -1075,8 +1078,39 @@ func (p *GovernancePlugin) PreLLMHook(ctx *schemas.BifrostContext, req *schemas.
 			Error: bifrostError,
 		}, nil
 	}
+	if pricingError := p.validateSubscriptionPricing(ctx, evaluationRequest, req.RequestType); pricingError != nil {
+		return req, &schemas.LLMPluginShortCircuit{Error: pricingError}, nil
+	}
 
 	return req, nil, nil
+}
+
+func (p *GovernancePlugin) validateSubscriptionPricing(ctx *schemas.BifrostContext, request *EvaluationRequest, requestType schemas.RequestType) *schemas.BifrostError {
+	if request == nil || request.Model == "" || bifrost.GetBoolFromContext(ctx, schemas.BifrostContextKeySkipBudgetAndRateLimits) {
+		return nil
+	}
+	if request.Provider != schemas.OpenAICodex && request.Provider != schemas.CursorProvider {
+		return nil
+	}
+	effectiveVK := request.VirtualKey
+	if bifrost.GetBoolFromContext(ctx, schemas.BifrostContextKeySkipVirtualKeyUsageTracking) {
+		effectiveVK = ""
+	}
+	budgetIDs, _ := p.store.CollectApplicableGovernanceIDs(ctx, effectiveVK, request.UserID, request.Provider, request.Model)
+	if len(budgetIDs) == 0 {
+		return nil
+	}
+	scopes := modelcatalog.PricingLookupScopesFromContext(ctx, string(request.Provider))
+	if p.modelCatalog != nil && p.modelCatalog.HasTokenPricing(request.Provider, request.Model, requestType, scopes) {
+		return nil
+	}
+	return &schemas.BifrostError{
+		Type:       new("pricing_unavailable"),
+		StatusCode: new(402),
+		Error: &schemas.ErrorField{
+			Message: fmt.Sprintf("official token pricing is unavailable for %s/%s; choose an explicitly priced model or configure a pricing override before using a dollar budget", request.Provider, request.Model),
+		},
+	}
 }
 
 // BatchCreateModels returns every distinct model an inline batch create will run,

@@ -679,3 +679,18 @@ func TestBuildRunRequestConvertsToolsAndConversation(t *testing.T) {
 		t.Fatal("conversation state was not built")
 	}
 }
+
+func TestCursorContinuationUsageReportsPerCallDelta(t *testing.T) {
+	bridge := &cursorBridge{continuationID: "response-1", totalTokens: 100, outputTokens: 20}
+	first := bridge.completedEvent("gpt-5.6-sol").Response.Usage
+	if first.InputTokens != 80 || first.OutputTokens != 20 || first.TotalTokens != 100 {
+		t.Fatalf("first usage = %#v", first)
+	}
+
+	bridge.totalTokens = 150
+	bridge.outputTokens = 30
+	second := bridge.completedEvent("gpt-5.6-sol").Response.Usage
+	if second.InputTokens != 40 || second.OutputTokens != 10 || second.TotalTokens != 50 {
+		t.Fatalf("continuation usage = %#v", second)
+	}
+}

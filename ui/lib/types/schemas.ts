@@ -367,7 +367,11 @@ export const accountProviderKeySchema = z.object({
 export const modelProviderKeySchema = accountProviderKeySchema.refine(
 	(data) => {
 		// Providers with dedicated config that never need a top-level API key
-		if (data.vllm_key_config || data.ollama_key_config || data.sgl_key_config) {
+		if (data.ollama_key_config) {
+			const url = data.ollama_key_config.url?.value?.trim().replace(/\/$/, "");
+			return url !== "https://ollama.com" || isSecretVarSet(data.value);
+		}
+		if (data.vllm_key_config || data.sgl_key_config) {
 			return true;
 		}
 		// Bedrock Mantle authenticates via SigV4 (its key config) or a Bearer key — only require
