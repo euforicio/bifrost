@@ -171,6 +171,83 @@ func TestCursorListModelsUsesHTTP2AndRefreshesOnce(t *testing.T) {
 	}
 }
 
+func TestCursorListModelsKeepsHealthyAccountsWhenAnotherFails(t *testing.T) {
+	provider, server := newProtocolProvider(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") == "Bearer broken" {
+			writer.WriteHeader(http.StatusBadGateway)
+			_, _ = writer.Write([]byte("account unavailable"))
+			return
+		}
+		payload, _ := proto.Marshal(&cursorpb.GetUsableModelsResponse{Models: []*cursorpb.ModelDetails{{ModelId: "composer-1", DisplayName: "Composer 1"}}})
+		_, _ = writer.Write(payload)
+	}))
+	defer server.Close()
+
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	response, bifrostErr := provider.ListModels(ctx, []schemas.Key{
+		{ID: "broken-account", Value: *schemas.NewSecretVar("broken"), Models: schemas.WhiteList{"*"}},
+		{ID: "healthy-account", Value: *schemas.NewSecretVar("healthy"), Models: schemas.WhiteList{"*"}},
+	}, &schemas.BifrostListModelsRequest{Provider: schemas.CursorProvider})
+	if bifrostErr != nil {
+		t.Fatalf("ListModels() error = %v", bifrostErr)
+	}
+	if len(response.Data) != 1 || response.Data[0].ID != "cursor/composer-1" {
+		t.Fatalf("models = %#v", response.Data)
+	}
+	if len(response.KeyStatuses) != 2 {
+		t.Fatalf("key statuses = %#v", response.KeyStatuses)
+	}
+	statuses := map[string]schemas.KeyStatusType{}
+	for _, status := range response.KeyStatuses {
+		statuses[status.KeyID] = status.Status
+	}
+	if statuses["healthy-account"] != schemas.KeyStatusSuccess || statuses["broken-account"] != schemas.KeyStatusListModelsFailed {
+		t.Fatalf("key statuses = %#v", statuses)
+	}
+}
+
+func TestCursorListModelsMergesFiltersDeduplicatesAndPaginatesAccounts(t *testing.T) {
+	provider, server := newProtocolProvider(t, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		models := []*cursorpb.ModelDetails{
+			{ModelId: "composer-1", DisplayName: "Composer 1"},
+		}
+		if request.Header.Get("Authorization") == "Bearer account-a" {
+			models = append(models, &cursorpb.ModelDetails{ModelId: "alpha", DisplayName: "Alpha"})
+		} else {
+			models = append(models, &cursorpb.ModelDetails{ModelId: "blocked-beta", DisplayName: "Blocked Beta"})
+		}
+		payload, _ := proto.Marshal(&cursorpb.GetUsableModelsResponse{Models: models})
+		_, _ = writer.Write(payload)
+	}))
+	defer server.Close()
+
+	keys := []schemas.Key{
+		{ID: "account-a", Value: *schemas.NewSecretVar("account-a"), Models: schemas.WhiteList{"*"}},
+		{ID: "account-b", Value: *schemas.NewSecretVar("account-b"), Models: schemas.WhiteList{"*"}, BlacklistedModels: schemas.BlackList{"blocked-beta"}},
+	}
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+	first, bifrostErr := provider.ListModels(ctx, keys, &schemas.BifrostListModelsRequest{Provider: schemas.CursorProvider, PageSize: 1})
+	if bifrostErr != nil {
+		t.Fatalf("first ListModels() error = %v", bifrostErr)
+	}
+	if len(first.Data) != 1 || first.Data[0].ID != "cursor/alpha" || first.NextPageToken == "" {
+		t.Fatalf("first page = %#v", first)
+	}
+	if len(first.KeyStatuses) != 2 {
+		t.Fatalf("first key statuses = %#v", first.KeyStatuses)
+	}
+
+	second, bifrostErr := provider.ListModels(ctx, keys, &schemas.BifrostListModelsRequest{
+		Provider: schemas.CursorProvider, PageSize: 1, PageToken: first.NextPageToken,
+	})
+	if bifrostErr != nil {
+		t.Fatalf("second ListModels() error = %v", bifrostErr)
+	}
+	if len(second.Data) != 1 || second.Data[0].ID != "cursor/composer-1" || second.NextPageToken != "" {
+		t.Fatalf("second page = %#v", second)
+	}
+}
+
 func TestCursorResponsesMapsReasoningTextAndHeartbeat(t *testing.T) {
 	originalInterval := cursorHeartbeatInterval
 	cursorHeartbeatInterval = 5 * time.Millisecond

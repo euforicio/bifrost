@@ -227,6 +227,12 @@ jobs:
             https://bifrost.riftlabs.app/api/session/is-auth-enabled \
             | grep -q '"is_auth_enabled":true'
 
+      - name: Verify account-backed provider inference
+        env:
+          BIFROST_XAI_VIRTUAL_KEY: ${{ secrets.BIFROST_XAI_VIRTUAL_KEY }}
+          BIFROST_CODEX_VIRTUAL_KEY: ${{ secrets.BIFROST_CODEX_VIRTUAL_KEY }}
+        run: deploy/orion/provider-smoke.sh
+
       - name: Roll back after failed public verification
         if: failure() && steps.install.outcome == 'success'
         env:

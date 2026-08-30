@@ -131,27 +131,27 @@ func statusError(status int, body []byte) *schemas.BifrostError {
 }
 
 func (provider *CursorProvider) ListModels(ctx *schemas.BifrostContext, keys []schemas.Key, request *schemas.BifrostListModelsRequest) (*schemas.BifrostListModelsResponse, *schemas.BifrostError) {
+	return providerUtils.HandleMultipleListModelsRequests(ctx, keys, request, provider.listModelsResponseByKey)
+}
+
+func (provider *CursorProvider) listModelsResponseByKey(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostListModelsRequest) (*schemas.BifrostListModelsResponse, *schemas.BifrostError) {
 	response := &schemas.BifrostListModelsResponse{Data: []schemas.Model{}}
-	seen := map[string]bool{}
-	for _, key := range keys {
-		models, err := provider.listModelsByKey(ctx, key)
-		if err != nil {
-			return nil, err
-		}
-		for _, model := range models {
-			if !request.Unfiltered && (!key.Models.IsUnrestricted() && !key.Models.IsAllowed(model.GetModelId()) || key.BlacklistedModels.IsBlocked(model.GetModelId())) {
-				continue
-			}
-			id := string(schemas.CursorProvider) + "/" + model.GetModelId()
-			if id == "cursor/" || seen[id] {
-				continue
-			}
-			seen[id] = true
-			name := model.GetDisplayName()
-			response.Data = append(response.Data, schemas.Model{ID: id, Name: &name, SupportedMethods: []string{string(schemas.ResponsesRequest), string(schemas.ResponsesStreamRequest)}})
-		}
+	models, err := provider.listModelsByKey(ctx, key)
+	if err != nil {
+		return nil, err
 	}
-	return response.ApplyPagination(request.PageSize, request.PageToken), nil
+	for _, model := range models {
+		if !request.Unfiltered && (!key.Models.IsUnrestricted() && !key.Models.IsAllowed(model.GetModelId()) || key.BlacklistedModels.IsBlocked(model.GetModelId())) {
+			continue
+		}
+		id := string(schemas.CursorProvider) + "/" + model.GetModelId()
+		if id == "cursor/" {
+			continue
+		}
+		name := model.GetDisplayName()
+		response.Data = append(response.Data, schemas.Model{ID: id, Name: &name, SupportedMethods: []string{string(schemas.ResponsesRequest), string(schemas.ResponsesStreamRequest)}})
+	}
+	return response, nil
 }
 
 func (provider *CursorProvider) listModelsByKey(ctx context.Context, key schemas.Key) ([]*cursorpb.ModelDetails, *schemas.BifrostError) {
@@ -455,7 +455,8 @@ func (provider *CursorProvider) ResponsesStream(ctx *schemas.BifrostContext, pos
 	}
 	responseChan := make(chan *schemas.BifrostStreamChunk, schemas.DefaultStreamBufferSize)
 	go func() {
-		defer close(responseChan)
+		defer providerUtils.EnsureStreamFinalizerCalled(ctx, postHookSpanFinalizer)
+		defer providerUtils.CloseStream(ctx, responseChan)
 		paused, processErr := bridge.process(ctx, request.Model, func(event *schemas.BifrostResponsesStreamResponse) error {
 			if event.Type == schemas.ResponsesStreamResponseTypeCompleted {
 				ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
