@@ -12,6 +12,7 @@ message AgentClientMessage {
     ExecClientMessage exec_client_message = 2;
     KvClientMessage kv_client_message = 3;
     ExecClientControlMessage exec_client_control_message = 5;
+    InteractionResponse interaction_response = 6;
     ClientHeartbeat client_heartbeat = 7;
   }
 }
@@ -22,6 +23,7 @@ message AgentServerMessage {
     ExecServerMessage exec_server_message = 2;
     ConversationStateStructure conversation_checkpoint_update = 3;
     KvServerMessage kv_server_message = 4;
+    InteractionQuery interaction_query = 7;
   }
 }
 
@@ -163,7 +165,12 @@ message DiagnosticsResult {}
 message RequestContextArgs {}
 message RequestContextResult { oneof result { RequestContextSuccess success = 1; } }
 message RequestContextSuccess { RequestContext request_context = 1; }
-message RequestContext { repeated McpToolDefinition tools = 7; optional string cloud_rule = 16; }
+message RequestContext {
+  repeated McpToolDefinition tools = 7;
+  optional string cloud_rule = 16;
+  bool web_search_enabled = 17;
+  bool web_fetch_enabled = 24;
+}
 
 message McpArgs {
   string name = 1;
@@ -194,3 +201,26 @@ message ClientHeartbeat {}
 
 message GetUsableModelsRequest { repeated string custom_model_ids = 1; }
 message GetUsableModelsResponse { repeated ModelDetails models = 1; }
+
+message InteractionQuery {
+  uint32 id = 1;
+  oneof query {
+    WebSearchRequestQuery web_search_request_query = 2;
+    WebFetchRequestQuery web_fetch_request_query = 9;
+  }
+}
+message WebSearchRequestQuery { WebSearchArgs args = 1; }
+message WebSearchArgs { string search_term = 1; string tool_call_id = 2; }
+message WebFetchRequestQuery { WebFetchArgs args = 1; }
+message WebFetchArgs { string url = 1; string tool_call_id = 2; }
+
+message InteractionResponse {
+  uint32 id = 1;
+  oneof response {
+    WebSearchRequestResponse web_search_request_response = 2;
+    WebFetchRequestResponse web_fetch_request_response = 9;
+  }
+}
+message WebSearchRequestResponse { oneof response { InteractionApproved approved = 1; } }
+message WebFetchRequestResponse { oneof response { InteractionApproved approved = 1; } }
+message InteractionApproved {}

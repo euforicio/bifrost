@@ -1,6 +1,7 @@
 package cursor
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -680,7 +681,7 @@ func TestBuildRunRequestConvertsToolsAndConversation(t *testing.T) {
 	}
 }
 
-func TestBuildRunRequestRejectsUnsupportedContentAndHostedTools(t *testing.T) {
+func TestBuildRunRequestValidatesContentAndHostedTools(t *testing.T) {
 	t.Run("image", func(t *testing.T) {
 		request := textRequest("cursor/default", "stable-key", "describe this")
 		imageURL := "data:image/png;base64,iVBORw0KGgo="
@@ -696,10 +697,81 @@ func TestBuildRunRequestRejectsUnsupportedContentAndHostedTools(t *testing.T) {
 	t.Run("web search", func(t *testing.T) {
 		request := textRequest("cursor/default", "stable-key", "search")
 		request.Params.Tools = []schemas.ResponsesTool{{Type: schemas.ResponsesToolTypeWebSearch}}
-		if _, _, err := buildRunRequest(request, "default"); err == nil || !strings.Contains(err.Error(), "web_search") {
-			t.Fatalf("expected explicit hosted-tool rejection, got %v", err)
+		run, _, err := buildRunRequest(request, "default")
+		if err != nil {
+			t.Fatalf("expected Cursor-native web search to be accepted, got %v", err)
+		}
+		if got := len(run.GetMcpTools().GetMcpTools()); got != 0 {
+			t.Fatalf("native web search must not be projected as an MCP tool, got %d tools", got)
 		}
 	})
+
+	t.Run("unsupported hosted tool", func(t *testing.T) {
+		request := textRequest("cursor/default", "stable-key", "search files")
+		request.Params.Tools = []schemas.ResponsesTool{{Type: schemas.ResponsesToolTypeFileSearch}}
+		if _, _, err := buildRunRequest(request, "default"); err == nil || !strings.Contains(err.Error(), "file_search") {
+			t.Fatalf("expected explicit file_search rejection, got %v", err)
+		}
+	})
+}
+
+func TestCursorNativeWebEnablesContextAndApprovesSearch(t *testing.T) {
+	var frames bytes.Buffer
+	bridge := &cursorBridge{
+		frames:           &cursorFrameWriter{writer: &frames},
+		tools:            &cursorpb.McpTools{},
+		nativeWebEnabled: true,
+	}
+	query := &cursorpb.InteractionQuery{
+		Id: 42,
+		Query: &cursorpb.InteractionQuery_WebSearchRequestQuery{WebSearchRequestQuery: &cursorpb.WebSearchRequestQuery{
+			Args: &cursorpb.WebSearchArgs{SearchTerm: "latest Bifrost release", ToolCallId: "ws_cursor_1"},
+		}},
+	}
+	events, err := bridge.approveNativeWeb(query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 3 || events[0].Item == nil || events[0].Item.Type == nil || *events[0].Item.Type != schemas.ResponsesMessageTypeWebSearchCall {
+		t.Fatalf("web search start events = %#v", events)
+	}
+	action := events[0].Item.ResponsesToolMessage.Action.ResponsesWebSearchToolCallAction
+	if action == nil || action.Query == nil || *action.Query != "latest Bifrost release" {
+		t.Fatalf("web search action = %#v", action)
+	}
+	_, payload, err := readCursorFrame(io.NopCloser(bytes.NewReader(frames.Bytes())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var client cursorpb.AgentClientMessage
+	if err := proto.Unmarshal(payload, &client); err != nil {
+		t.Fatal(err)
+	}
+	response := client.GetInteractionResponse()
+	if response == nil || response.Id != 42 || response.GetWebSearchRequestResponse().GetApproved() == nil {
+		t.Fatalf("interaction response = %#v", response)
+	}
+
+	frames.Reset()
+	if err := bridge.sendRequestContext(&cursorpb.ExecServerMessage{Id: 7, ExecId: "context-1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err = readCursorFrame(io.NopCloser(bytes.NewReader(frames.Bytes())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Reset()
+	if err := proto.Unmarshal(payload, &client); err != nil {
+		t.Fatal(err)
+	}
+	contextMessage := client.GetExecClientMessage().GetRequestContextResult().GetSuccess().GetRequestContext()
+	if !contextMessage.GetWebSearchEnabled() || !contextMessage.GetWebFetchEnabled() {
+		t.Fatalf("native web flags = %#v", contextMessage)
+	}
+	done := bridge.completeNativeWebEvents()
+	if len(done) != 2 || done[1].Item == nil || done[1].Item.Status == nil || *done[1].Item.Status != schemas.ResponsesResponseStatusCompleted {
+		t.Fatalf("web search completion events = %#v", done)
+	}
 }
 
 func TestCursorContinuationUsageReportsPerCallDelta(t *testing.T) {

@@ -31,6 +31,7 @@ type AgentClientMessage struct {
 	//	*AgentClientMessage_ExecClientMessage
 	//	*AgentClientMessage_KvClientMessage
 	//	*AgentClientMessage_ExecClientControlMessage
+	//	*AgentClientMessage_InteractionResponse
 	//	*AgentClientMessage_ClientHeartbeat
 	Message       isAgentClientMessage_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
@@ -110,6 +111,15 @@ func (x *AgentClientMessage) GetExecClientControlMessage() *ExecClientControlMes
 	return nil
 }
 
+func (x *AgentClientMessage) GetInteractionResponse() *InteractionResponse {
+	if x != nil {
+		if x, ok := x.Message.(*AgentClientMessage_InteractionResponse); ok {
+			return x.InteractionResponse
+		}
+	}
+	return nil
+}
+
 func (x *AgentClientMessage) GetClientHeartbeat() *ClientHeartbeat {
 	if x != nil {
 		if x, ok := x.Message.(*AgentClientMessage_ClientHeartbeat); ok {
@@ -139,6 +149,10 @@ type AgentClientMessage_ExecClientControlMessage struct {
 	ExecClientControlMessage *ExecClientControlMessage `protobuf:"bytes,5,opt,name=exec_client_control_message,json=execClientControlMessage,proto3,oneof"`
 }
 
+type AgentClientMessage_InteractionResponse struct {
+	InteractionResponse *InteractionResponse `protobuf:"bytes,6,opt,name=interaction_response,json=interactionResponse,proto3,oneof"`
+}
+
 type AgentClientMessage_ClientHeartbeat struct {
 	ClientHeartbeat *ClientHeartbeat `protobuf:"bytes,7,opt,name=client_heartbeat,json=clientHeartbeat,proto3,oneof"`
 }
@@ -151,6 +165,8 @@ func (*AgentClientMessage_KvClientMessage) isAgentClientMessage_Message() {}
 
 func (*AgentClientMessage_ExecClientControlMessage) isAgentClientMessage_Message() {}
 
+func (*AgentClientMessage_InteractionResponse) isAgentClientMessage_Message() {}
+
 func (*AgentClientMessage_ClientHeartbeat) isAgentClientMessage_Message() {}
 
 type AgentServerMessage struct {
@@ -161,6 +177,7 @@ type AgentServerMessage struct {
 	//	*AgentServerMessage_ExecServerMessage
 	//	*AgentServerMessage_ConversationCheckpointUpdate
 	//	*AgentServerMessage_KvServerMessage
+	//	*AgentServerMessage_InteractionQuery
 	Message       isAgentServerMessage_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -239,6 +256,15 @@ func (x *AgentServerMessage) GetKvServerMessage() *KvServerMessage {
 	return nil
 }
 
+func (x *AgentServerMessage) GetInteractionQuery() *InteractionQuery {
+	if x != nil {
+		if x, ok := x.Message.(*AgentServerMessage_InteractionQuery); ok {
+			return x.InteractionQuery
+		}
+	}
+	return nil
+}
+
 type isAgentServerMessage_Message interface {
 	isAgentServerMessage_Message()
 }
@@ -259,6 +285,10 @@ type AgentServerMessage_KvServerMessage struct {
 	KvServerMessage *KvServerMessage `protobuf:"bytes,4,opt,name=kv_server_message,json=kvServerMessage,proto3,oneof"`
 }
 
+type AgentServerMessage_InteractionQuery struct {
+	InteractionQuery *InteractionQuery `protobuf:"bytes,7,opt,name=interaction_query,json=interactionQuery,proto3,oneof"`
+}
+
 func (*AgentServerMessage_InteractionUpdate) isAgentServerMessage_Message() {}
 
 func (*AgentServerMessage_ExecServerMessage) isAgentServerMessage_Message() {}
@@ -266,6 +296,8 @@ func (*AgentServerMessage_ExecServerMessage) isAgentServerMessage_Message() {}
 func (*AgentServerMessage_ConversationCheckpointUpdate) isAgentServerMessage_Message() {}
 
 func (*AgentServerMessage_KvServerMessage) isAgentServerMessage_Message() {}
+
+func (*AgentServerMessage_InteractionQuery) isAgentServerMessage_Message() {}
 
 type AgentRunRequest struct {
 	state             protoimpl.MessageState      `protogen:"open.v1"`
@@ -3688,11 +3720,13 @@ func (x *RequestContextSuccess) GetRequestContext() *RequestContext {
 }
 
 type RequestContext struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tools         []*McpToolDefinition   `protobuf:"bytes,7,rep,name=tools,proto3" json:"tools,omitempty"`
-	CloudRule     *string                `protobuf:"bytes,16,opt,name=cloud_rule,json=cloudRule,proto3,oneof" json:"cloud_rule,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Tools            []*McpToolDefinition   `protobuf:"bytes,7,rep,name=tools,proto3" json:"tools,omitempty"`
+	CloudRule        *string                `protobuf:"bytes,16,opt,name=cloud_rule,json=cloudRule,proto3,oneof" json:"cloud_rule,omitempty"`
+	WebSearchEnabled bool                   `protobuf:"varint,17,opt,name=web_search_enabled,json=webSearchEnabled,proto3" json:"web_search_enabled,omitempty"`
+	WebFetchEnabled  bool                   `protobuf:"varint,24,opt,name=web_fetch_enabled,json=webFetchEnabled,proto3" json:"web_fetch_enabled,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RequestContext) Reset() {
@@ -3737,6 +3771,20 @@ func (x *RequestContext) GetCloudRule() string {
 		return *x.CloudRule
 	}
 	return ""
+}
+
+func (x *RequestContext) GetWebSearchEnabled() bool {
+	if x != nil {
+		return x.WebSearchEnabled
+	}
+	return false
+}
+
+func (x *RequestContext) GetWebFetchEnabled() bool {
+	if x != nil {
+		return x.WebFetchEnabled
+	}
+	return false
 }
 
 type McpArgs struct {
@@ -4575,24 +4623,566 @@ func (x *GetUsableModelsResponse) GetModels() []*ModelDetails {
 	return nil
 }
 
+type InteractionQuery struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    uint32                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Types that are valid to be assigned to Query:
+	//
+	//	*InteractionQuery_WebSearchRequestQuery
+	//	*InteractionQuery_WebFetchRequestQuery
+	Query         isInteractionQuery_Query `protobuf_oneof:"query"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InteractionQuery) Reset() {
+	*x = InteractionQuery{}
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[70]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InteractionQuery) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InteractionQuery) ProtoMessage() {}
+
+func (x *InteractionQuery) ProtoReflect() protoreflect.Message {
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[70]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InteractionQuery.ProtoReflect.Descriptor instead.
+func (*InteractionQuery) Descriptor() ([]byte, []int) {
+	return file_providers_cursor_cursorpb_agent_proto_rawDescGZIP(), []int{70}
+}
+
+func (x *InteractionQuery) GetId() uint32 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *InteractionQuery) GetQuery() isInteractionQuery_Query {
+	if x != nil {
+		return x.Query
+	}
+	return nil
+}
+
+func (x *InteractionQuery) GetWebSearchRequestQuery() *WebSearchRequestQuery {
+	if x != nil {
+		if x, ok := x.Query.(*InteractionQuery_WebSearchRequestQuery); ok {
+			return x.WebSearchRequestQuery
+		}
+	}
+	return nil
+}
+
+func (x *InteractionQuery) GetWebFetchRequestQuery() *WebFetchRequestQuery {
+	if x != nil {
+		if x, ok := x.Query.(*InteractionQuery_WebFetchRequestQuery); ok {
+			return x.WebFetchRequestQuery
+		}
+	}
+	return nil
+}
+
+type isInteractionQuery_Query interface {
+	isInteractionQuery_Query()
+}
+
+type InteractionQuery_WebSearchRequestQuery struct {
+	WebSearchRequestQuery *WebSearchRequestQuery `protobuf:"bytes,2,opt,name=web_search_request_query,json=webSearchRequestQuery,proto3,oneof"`
+}
+
+type InteractionQuery_WebFetchRequestQuery struct {
+	WebFetchRequestQuery *WebFetchRequestQuery `protobuf:"bytes,9,opt,name=web_fetch_request_query,json=webFetchRequestQuery,proto3,oneof"`
+}
+
+func (*InteractionQuery_WebSearchRequestQuery) isInteractionQuery_Query() {}
+
+func (*InteractionQuery_WebFetchRequestQuery) isInteractionQuery_Query() {}
+
+type WebSearchRequestQuery struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Args          *WebSearchArgs         `protobuf:"bytes,1,opt,name=args,proto3" json:"args,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WebSearchRequestQuery) Reset() {
+	*x = WebSearchRequestQuery{}
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[71]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WebSearchRequestQuery) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WebSearchRequestQuery) ProtoMessage() {}
+
+func (x *WebSearchRequestQuery) ProtoReflect() protoreflect.Message {
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[71]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WebSearchRequestQuery.ProtoReflect.Descriptor instead.
+func (*WebSearchRequestQuery) Descriptor() ([]byte, []int) {
+	return file_providers_cursor_cursorpb_agent_proto_rawDescGZIP(), []int{71}
+}
+
+func (x *WebSearchRequestQuery) GetArgs() *WebSearchArgs {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
+type WebSearchArgs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SearchTerm    string                 `protobuf:"bytes,1,opt,name=search_term,json=searchTerm,proto3" json:"search_term,omitempty"`
+	ToolCallId    string                 `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WebSearchArgs) Reset() {
+	*x = WebSearchArgs{}
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[72]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WebSearchArgs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WebSearchArgs) ProtoMessage() {}
+
+func (x *WebSearchArgs) ProtoReflect() protoreflect.Message {
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[72]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WebSearchArgs.ProtoReflect.Descriptor instead.
+func (*WebSearchArgs) Descriptor() ([]byte, []int) {
+	return file_providers_cursor_cursorpb_agent_proto_rawDescGZIP(), []int{72}
+}
+
+func (x *WebSearchArgs) GetSearchTerm() string {
+	if x != nil {
+		return x.SearchTerm
+	}
+	return ""
+}
+
+func (x *WebSearchArgs) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+type WebFetchRequestQuery struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Args          *WebFetchArgs          `protobuf:"bytes,1,opt,name=args,proto3" json:"args,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WebFetchRequestQuery) Reset() {
+	*x = WebFetchRequestQuery{}
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[73]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WebFetchRequestQuery) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WebFetchRequestQuery) ProtoMessage() {}
+
+func (x *WebFetchRequestQuery) ProtoReflect() protoreflect.Message {
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[73]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WebFetchRequestQuery.ProtoReflect.Descriptor instead.
+func (*WebFetchRequestQuery) Descriptor() ([]byte, []int) {
+	return file_providers_cursor_cursorpb_agent_proto_rawDescGZIP(), []int{73}
+}
+
+func (x *WebFetchRequestQuery) GetArgs() *WebFetchArgs {
+	if x != nil {
+		return x.Args
+	}
+	return nil
+}
+
+type WebFetchArgs struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Url           string                 `protobuf:"bytes,1,opt,name=url,proto3" json:"url,omitempty"`
+	ToolCallId    string                 `protobuf:"bytes,2,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WebFetchArgs) Reset() {
+	*x = WebFetchArgs{}
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[74]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WebFetchArgs) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WebFetchArgs) ProtoMessage() {}
+
+func (x *WebFetchArgs) ProtoReflect() protoreflect.Message {
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[74]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WebFetchArgs.ProtoReflect.Descriptor instead.
+func (*WebFetchArgs) Descriptor() ([]byte, []int) {
+	return file_providers_cursor_cursorpb_agent_proto_rawDescGZIP(), []int{74}
+}
+
+func (x *WebFetchArgs) GetUrl() string {
+	if x != nil {
+		return x.Url
+	}
+	return ""
+}
+
+func (x *WebFetchArgs) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+type InteractionResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    uint32                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Types that are valid to be assigned to Response:
+	//
+	//	*InteractionResponse_WebSearchRequestResponse
+	//	*InteractionResponse_WebFetchRequestResponse
+	Response      isInteractionResponse_Response `protobuf_oneof:"response"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InteractionResponse) Reset() {
+	*x = InteractionResponse{}
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[75]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InteractionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InteractionResponse) ProtoMessage() {}
+
+func (x *InteractionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[75]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InteractionResponse.ProtoReflect.Descriptor instead.
+func (*InteractionResponse) Descriptor() ([]byte, []int) {
+	return file_providers_cursor_cursorpb_agent_proto_rawDescGZIP(), []int{75}
+}
+
+func (x *InteractionResponse) GetId() uint32 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *InteractionResponse) GetResponse() isInteractionResponse_Response {
+	if x != nil {
+		return x.Response
+	}
+	return nil
+}
+
+func (x *InteractionResponse) GetWebSearchRequestResponse() *WebSearchRequestResponse {
+	if x != nil {
+		if x, ok := x.Response.(*InteractionResponse_WebSearchRequestResponse); ok {
+			return x.WebSearchRequestResponse
+		}
+	}
+	return nil
+}
+
+func (x *InteractionResponse) GetWebFetchRequestResponse() *WebFetchRequestResponse {
+	if x != nil {
+		if x, ok := x.Response.(*InteractionResponse_WebFetchRequestResponse); ok {
+			return x.WebFetchRequestResponse
+		}
+	}
+	return nil
+}
+
+type isInteractionResponse_Response interface {
+	isInteractionResponse_Response()
+}
+
+type InteractionResponse_WebSearchRequestResponse struct {
+	WebSearchRequestResponse *WebSearchRequestResponse `protobuf:"bytes,2,opt,name=web_search_request_response,json=webSearchRequestResponse,proto3,oneof"`
+}
+
+type InteractionResponse_WebFetchRequestResponse struct {
+	WebFetchRequestResponse *WebFetchRequestResponse `protobuf:"bytes,9,opt,name=web_fetch_request_response,json=webFetchRequestResponse,proto3,oneof"`
+}
+
+func (*InteractionResponse_WebSearchRequestResponse) isInteractionResponse_Response() {}
+
+func (*InteractionResponse_WebFetchRequestResponse) isInteractionResponse_Response() {}
+
+type WebSearchRequestResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Response:
+	//
+	//	*WebSearchRequestResponse_Approved
+	Response      isWebSearchRequestResponse_Response `protobuf_oneof:"response"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WebSearchRequestResponse) Reset() {
+	*x = WebSearchRequestResponse{}
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[76]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WebSearchRequestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WebSearchRequestResponse) ProtoMessage() {}
+
+func (x *WebSearchRequestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[76]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WebSearchRequestResponse.ProtoReflect.Descriptor instead.
+func (*WebSearchRequestResponse) Descriptor() ([]byte, []int) {
+	return file_providers_cursor_cursorpb_agent_proto_rawDescGZIP(), []int{76}
+}
+
+func (x *WebSearchRequestResponse) GetResponse() isWebSearchRequestResponse_Response {
+	if x != nil {
+		return x.Response
+	}
+	return nil
+}
+
+func (x *WebSearchRequestResponse) GetApproved() *InteractionApproved {
+	if x != nil {
+		if x, ok := x.Response.(*WebSearchRequestResponse_Approved); ok {
+			return x.Approved
+		}
+	}
+	return nil
+}
+
+type isWebSearchRequestResponse_Response interface {
+	isWebSearchRequestResponse_Response()
+}
+
+type WebSearchRequestResponse_Approved struct {
+	Approved *InteractionApproved `protobuf:"bytes,1,opt,name=approved,proto3,oneof"`
+}
+
+func (*WebSearchRequestResponse_Approved) isWebSearchRequestResponse_Response() {}
+
+type WebFetchRequestResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Types that are valid to be assigned to Response:
+	//
+	//	*WebFetchRequestResponse_Approved
+	Response      isWebFetchRequestResponse_Response `protobuf_oneof:"response"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WebFetchRequestResponse) Reset() {
+	*x = WebFetchRequestResponse{}
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[77]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WebFetchRequestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WebFetchRequestResponse) ProtoMessage() {}
+
+func (x *WebFetchRequestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[77]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WebFetchRequestResponse.ProtoReflect.Descriptor instead.
+func (*WebFetchRequestResponse) Descriptor() ([]byte, []int) {
+	return file_providers_cursor_cursorpb_agent_proto_rawDescGZIP(), []int{77}
+}
+
+func (x *WebFetchRequestResponse) GetResponse() isWebFetchRequestResponse_Response {
+	if x != nil {
+		return x.Response
+	}
+	return nil
+}
+
+func (x *WebFetchRequestResponse) GetApproved() *InteractionApproved {
+	if x != nil {
+		if x, ok := x.Response.(*WebFetchRequestResponse_Approved); ok {
+			return x.Approved
+		}
+	}
+	return nil
+}
+
+type isWebFetchRequestResponse_Response interface {
+	isWebFetchRequestResponse_Response()
+}
+
+type WebFetchRequestResponse_Approved struct {
+	Approved *InteractionApproved `protobuf:"bytes,1,opt,name=approved,proto3,oneof"`
+}
+
+func (*WebFetchRequestResponse_Approved) isWebFetchRequestResponse_Response() {}
+
+type InteractionApproved struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InteractionApproved) Reset() {
+	*x = InteractionApproved{}
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[78]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InteractionApproved) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InteractionApproved) ProtoMessage() {}
+
+func (x *InteractionApproved) ProtoReflect() protoreflect.Message {
+	mi := &file_providers_cursor_cursorpb_agent_proto_msgTypes[78]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InteractionApproved.ProtoReflect.Descriptor instead.
+func (*InteractionApproved) Descriptor() ([]byte, []int) {
+	return file_providers_cursor_cursorpb_agent_proto_rawDescGZIP(), []int{78}
+}
+
 var File_providers_cursor_cursorpb_agent_proto protoreflect.FileDescriptor
 
 const file_providers_cursor_cursorpb_agent_proto_rawDesc = "" +
 	"\n" +
-	"%providers/cursor/cursorpb/agent.proto\x12\bagent.v1\"\xa2\x03\n" +
+	"%providers/cursor/cursorpb/agent.proto\x12\bagent.v1\"\xf6\x03\n" +
 	"\x12AgentClientMessage\x12<\n" +
 	"\vrun_request\x18\x01 \x01(\v2\x19.agent.v1.AgentRunRequestH\x00R\n" +
 	"runRequest\x12M\n" +
 	"\x13exec_client_message\x18\x02 \x01(\v2\x1b.agent.v1.ExecClientMessageH\x00R\x11execClientMessage\x12G\n" +
 	"\x11kv_client_message\x18\x03 \x01(\v2\x19.agent.v1.KvClientMessageH\x00R\x0fkvClientMessage\x12c\n" +
-	"\x1bexec_client_control_message\x18\x05 \x01(\v2\".agent.v1.ExecClientControlMessageH\x00R\x18execClientControlMessage\x12F\n" +
+	"\x1bexec_client_control_message\x18\x05 \x01(\v2\".agent.v1.ExecClientControlMessageH\x00R\x18execClientControlMessage\x12R\n" +
+	"\x14interaction_response\x18\x06 \x01(\v2\x1d.agent.v1.InteractionResponseH\x00R\x13interactionResponse\x12F\n" +
 	"\x10client_heartbeat\x18\a \x01(\v2\x19.agent.v1.ClientHeartbeatH\x00R\x0fclientHeartbeatB\t\n" +
-	"\amessage\"\xf3\x02\n" +
+	"\amessage\"\xbe\x03\n" +
 	"\x12AgentServerMessage\x12L\n" +
 	"\x12interaction_update\x18\x01 \x01(\v2\x1b.agent.v1.InteractionUpdateH\x00R\x11interactionUpdate\x12M\n" +
 	"\x13exec_server_message\x18\x02 \x01(\v2\x1b.agent.v1.ExecServerMessageH\x00R\x11execServerMessage\x12l\n" +
 	"\x1econversation_checkpoint_update\x18\x03 \x01(\v2$.agent.v1.ConversationStateStructureH\x00R\x1cconversationCheckpointUpdate\x12G\n" +
-	"\x11kv_server_message\x18\x04 \x01(\v2\x19.agent.v1.KvServerMessageH\x00R\x0fkvServerMessageB\t\n" +
+	"\x11kv_server_message\x18\x04 \x01(\v2\x19.agent.v1.KvServerMessageH\x00R\x0fkvServerMessage\x12I\n" +
+	"\x11interaction_query\x18\a \x01(\v2\x1a.agent.v1.InteractionQueryH\x00R\x10interactionQueryB\t\n" +
 	"\amessage\"\xa8\x03\n" +
 	"\x0fAgentRunRequest\x12S\n" +
 	"\x12conversation_state\x18\x01 \x01(\v2$.agent.v1.ConversationStateStructureR\x11conversationState\x124\n" +
@@ -4821,11 +5411,13 @@ const file_providers_cursor_cursorpb_agent_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\v2\x1f.agent.v1.RequestContextSuccessH\x00R\asuccessB\b\n" +
 	"\x06result\"Z\n" +
 	"\x15RequestContextSuccess\x12A\n" +
-	"\x0frequest_context\x18\x01 \x01(\v2\x18.agent.v1.RequestContextR\x0erequestContext\"v\n" +
+	"\x0frequest_context\x18\x01 \x01(\v2\x18.agent.v1.RequestContextR\x0erequestContext\"\xd0\x01\n" +
 	"\x0eRequestContext\x121\n" +
 	"\x05tools\x18\a \x03(\v2\x1b.agent.v1.McpToolDefinitionR\x05tools\x12\"\n" +
 	"\n" +
-	"cloud_rule\x18\x10 \x01(\tH\x00R\tcloudRule\x88\x01\x01B\r\n" +
+	"cloud_rule\x18\x10 \x01(\tH\x00R\tcloudRule\x88\x01\x01\x12,\n" +
+	"\x12web_search_enabled\x18\x11 \x01(\bR\x10webSearchEnabled\x12*\n" +
+	"\x11web_fetch_enabled\x18\x18 \x01(\bR\x0fwebFetchEnabledB\r\n" +
 	"\v_cloud_rule\"\xf7\x01\n" +
 	"\aMcpArgs\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12/\n" +
@@ -4873,7 +5465,40 @@ const file_providers_cursor_cursorpb_agent_proto_rawDesc = "" +
 	"\x16GetUsableModelsRequest\x12(\n" +
 	"\x10custom_model_ids\x18\x01 \x03(\tR\x0ecustomModelIds\"I\n" +
 	"\x17GetUsableModelsResponse\x12.\n" +
-	"\x06models\x18\x01 \x03(\v2\x16.agent.v1.ModelDetailsR\x06modelsB;Z9github.com/maximhq/bifrost/core/providers/cursor/cursorpbb\x06proto3"
+	"\x06models\x18\x01 \x03(\v2\x16.agent.v1.ModelDetailsR\x06models\"\xe0\x01\n" +
+	"\x10InteractionQuery\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\rR\x02id\x12Z\n" +
+	"\x18web_search_request_query\x18\x02 \x01(\v2\x1f.agent.v1.WebSearchRequestQueryH\x00R\x15webSearchRequestQuery\x12W\n" +
+	"\x17web_fetch_request_query\x18\t \x01(\v2\x1e.agent.v1.WebFetchRequestQueryH\x00R\x14webFetchRequestQueryB\a\n" +
+	"\x05query\"D\n" +
+	"\x15WebSearchRequestQuery\x12+\n" +
+	"\x04args\x18\x01 \x01(\v2\x17.agent.v1.WebSearchArgsR\x04args\"R\n" +
+	"\rWebSearchArgs\x12\x1f\n" +
+	"\vsearch_term\x18\x01 \x01(\tR\n" +
+	"searchTerm\x12 \n" +
+	"\ftool_call_id\x18\x02 \x01(\tR\n" +
+	"toolCallId\"B\n" +
+	"\x14WebFetchRequestQuery\x12*\n" +
+	"\x04args\x18\x01 \x01(\v2\x16.agent.v1.WebFetchArgsR\x04args\"B\n" +
+	"\fWebFetchArgs\x12\x10\n" +
+	"\x03url\x18\x01 \x01(\tR\x03url\x12 \n" +
+	"\ftool_call_id\x18\x02 \x01(\tR\n" +
+	"toolCallId\"\xf8\x01\n" +
+	"\x13InteractionResponse\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\rR\x02id\x12c\n" +
+	"\x1bweb_search_request_response\x18\x02 \x01(\v2\".agent.v1.WebSearchRequestResponseH\x00R\x18webSearchRequestResponse\x12`\n" +
+	"\x1aweb_fetch_request_response\x18\t \x01(\v2!.agent.v1.WebFetchRequestResponseH\x00R\x17webFetchRequestResponseB\n" +
+	"\n" +
+	"\bresponse\"c\n" +
+	"\x18WebSearchRequestResponse\x12;\n" +
+	"\bapproved\x18\x01 \x01(\v2\x1d.agent.v1.InteractionApprovedH\x00R\bapprovedB\n" +
+	"\n" +
+	"\bresponse\"b\n" +
+	"\x17WebFetchRequestResponse\x12;\n" +
+	"\bapproved\x18\x01 \x01(\v2\x1d.agent.v1.InteractionApprovedH\x00R\bapprovedB\n" +
+	"\n" +
+	"\bresponse\"\x15\n" +
+	"\x13InteractionApprovedB;Z9github.com/maximhq/bifrost/core/providers/cursor/cursorpbb\x06proto3"
 
 var (
 	file_providers_cursor_cursorpb_agent_proto_rawDescOnce sync.Once
@@ -4887,7 +5512,7 @@ func file_providers_cursor_cursorpb_agent_proto_rawDescGZIP() []byte {
 	return file_providers_cursor_cursorpb_agent_proto_rawDescData
 }
 
-var file_providers_cursor_cursorpb_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 71)
+var file_providers_cursor_cursorpb_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
 var file_providers_cursor_cursorpb_agent_proto_goTypes = []any{
 	(*AgentClientMessage)(nil),         // 0: agent.v1.AgentClientMessage
 	(*AgentServerMessage)(nil),         // 1: agent.v1.AgentServerMessage
@@ -4959,86 +5584,105 @@ var file_providers_cursor_cursorpb_agent_proto_goTypes = []any{
 	(*ClientHeartbeat)(nil),            // 67: agent.v1.ClientHeartbeat
 	(*GetUsableModelsRequest)(nil),     // 68: agent.v1.GetUsableModelsRequest
 	(*GetUsableModelsResponse)(nil),    // 69: agent.v1.GetUsableModelsResponse
-	nil,                                // 70: agent.v1.McpArgs.ArgsEntry
+	(*InteractionQuery)(nil),           // 70: agent.v1.InteractionQuery
+	(*WebSearchRequestQuery)(nil),      // 71: agent.v1.WebSearchRequestQuery
+	(*WebSearchArgs)(nil),              // 72: agent.v1.WebSearchArgs
+	(*WebFetchRequestQuery)(nil),       // 73: agent.v1.WebFetchRequestQuery
+	(*WebFetchArgs)(nil),               // 74: agent.v1.WebFetchArgs
+	(*InteractionResponse)(nil),        // 75: agent.v1.InteractionResponse
+	(*WebSearchRequestResponse)(nil),   // 76: agent.v1.WebSearchRequestResponse
+	(*WebFetchRequestResponse)(nil),    // 77: agent.v1.WebFetchRequestResponse
+	(*InteractionApproved)(nil),        // 78: agent.v1.InteractionApproved
+	nil,                                // 79: agent.v1.McpArgs.ArgsEntry
 }
 var file_providers_cursor_cursorpb_agent_proto_depIdxs = []int32{
 	2,  // 0: agent.v1.AgentClientMessage.run_request:type_name -> agent.v1.AgentRunRequest
 	20, // 1: agent.v1.AgentClientMessage.exec_client_message:type_name -> agent.v1.ExecClientMessage
 	62, // 2: agent.v1.AgentClientMessage.kv_client_message:type_name -> agent.v1.KvClientMessage
 	21, // 3: agent.v1.AgentClientMessage.exec_client_control_message:type_name -> agent.v1.ExecClientControlMessage
-	67, // 4: agent.v1.AgentClientMessage.client_heartbeat:type_name -> agent.v1.ClientHeartbeat
-	14, // 5: agent.v1.AgentServerMessage.interaction_update:type_name -> agent.v1.InteractionUpdate
-	19, // 6: agent.v1.AgentServerMessage.exec_server_message:type_name -> agent.v1.ExecServerMessage
-	3,  // 7: agent.v1.AgentServerMessage.conversation_checkpoint_update:type_name -> agent.v1.ConversationStateStructure
-	61, // 8: agent.v1.AgentServerMessage.kv_server_message:type_name -> agent.v1.KvServerMessage
-	3,  // 9: agent.v1.AgentRunRequest.conversation_state:type_name -> agent.v1.ConversationStateStructure
-	5,  // 10: agent.v1.AgentRunRequest.action:type_name -> agent.v1.ConversationAction
-	9,  // 11: agent.v1.AgentRunRequest.model_details:type_name -> agent.v1.ModelDetails
-	12, // 12: agent.v1.AgentRunRequest.mcp_tools:type_name -> agent.v1.McpTools
-	11, // 13: agent.v1.AgentRunRequest.requested_model:type_name -> agent.v1.RequestedModel
-	4,  // 14: agent.v1.ConversationStateStructure.token_details:type_name -> agent.v1.ConversationTokenDetails
-	6,  // 15: agent.v1.ConversationAction.user_message_action:type_name -> agent.v1.UserMessageAction
-	8,  // 16: agent.v1.ConversationAction.resume_action:type_name -> agent.v1.ResumeAction
-	7,  // 17: agent.v1.UserMessageAction.user_message:type_name -> agent.v1.UserMessage
-	10, // 18: agent.v1.ModelDetails.thinking_details:type_name -> agent.v1.ThinkingDetails
-	13, // 19: agent.v1.McpTools.mcp_tools:type_name -> agent.v1.McpToolDefinition
-	15, // 20: agent.v1.InteractionUpdate.text_delta:type_name -> agent.v1.TextDeltaUpdate
-	16, // 21: agent.v1.InteractionUpdate.thinking_delta:type_name -> agent.v1.ThinkingDeltaUpdate
-	17, // 22: agent.v1.InteractionUpdate.token_delta:type_name -> agent.v1.TokenDeltaUpdate
-	18, // 23: agent.v1.InteractionUpdate.turn_ended:type_name -> agent.v1.TurnEndedUpdate
-	23, // 24: agent.v1.ExecServerMessage.shell_args:type_name -> agent.v1.ShellArgs
-	34, // 25: agent.v1.ExecServerMessage.write_args:type_name -> agent.v1.WriteArgs
-	37, // 26: agent.v1.ExecServerMessage.delete_args:type_name -> agent.v1.DeleteArgs
-	40, // 27: agent.v1.ExecServerMessage.grep_args:type_name -> agent.v1.GrepArgs
-	31, // 28: agent.v1.ExecServerMessage.read_args:type_name -> agent.v1.ReadArgs
-	43, // 29: agent.v1.ExecServerMessage.ls_args:type_name -> agent.v1.LsArgs
-	49, // 30: agent.v1.ExecServerMessage.diagnostics_args:type_name -> agent.v1.DiagnosticsArgs
-	51, // 31: agent.v1.ExecServerMessage.request_context_args:type_name -> agent.v1.RequestContextArgs
-	55, // 32: agent.v1.ExecServerMessage.mcp_args:type_name -> agent.v1.McpArgs
-	23, // 33: agent.v1.ExecServerMessage.shell_stream_args:type_name -> agent.v1.ShellArgs
-	46, // 34: agent.v1.ExecServerMessage.fetch_args:type_name -> agent.v1.FetchArgs
-	24, // 35: agent.v1.ExecClientMessage.shell_result:type_name -> agent.v1.ShellResult
-	35, // 36: agent.v1.ExecClientMessage.write_result:type_name -> agent.v1.WriteResult
-	38, // 37: agent.v1.ExecClientMessage.delete_result:type_name -> agent.v1.DeleteResult
-	41, // 38: agent.v1.ExecClientMessage.grep_result:type_name -> agent.v1.GrepResult
-	32, // 39: agent.v1.ExecClientMessage.read_result:type_name -> agent.v1.ReadResult
-	44, // 40: agent.v1.ExecClientMessage.ls_result:type_name -> agent.v1.LsResult
-	50, // 41: agent.v1.ExecClientMessage.diagnostics_result:type_name -> agent.v1.DiagnosticsResult
-	52, // 42: agent.v1.ExecClientMessage.request_context_result:type_name -> agent.v1.RequestContextResult
-	56, // 43: agent.v1.ExecClientMessage.mcp_result:type_name -> agent.v1.McpResult
-	27, // 44: agent.v1.ExecClientMessage.shell_stream:type_name -> agent.v1.ShellStream
-	47, // 45: agent.v1.ExecClientMessage.fetch_result:type_name -> agent.v1.FetchResult
-	22, // 46: agent.v1.ExecClientControlMessage.stream_close:type_name -> agent.v1.ExecClientStreamClose
-	25, // 47: agent.v1.ShellResult.success:type_name -> agent.v1.ShellSuccess
-	26, // 48: agent.v1.ShellResult.rejected:type_name -> agent.v1.ShellRejected
-	28, // 49: agent.v1.ShellStream.stdout:type_name -> agent.v1.ShellStreamStdout
-	29, // 50: agent.v1.ShellStream.exit:type_name -> agent.v1.ShellStreamExit
-	30, // 51: agent.v1.ShellStream.start:type_name -> agent.v1.ShellStreamStart
-	26, // 52: agent.v1.ShellStream.rejected:type_name -> agent.v1.ShellRejected
-	33, // 53: agent.v1.ReadResult.rejected:type_name -> agent.v1.ReadRejected
-	36, // 54: agent.v1.WriteResult.rejected:type_name -> agent.v1.WriteRejected
-	39, // 55: agent.v1.DeleteResult.rejected:type_name -> agent.v1.DeleteRejected
-	42, // 56: agent.v1.GrepResult.error:type_name -> agent.v1.GrepError
-	45, // 57: agent.v1.LsResult.rejected:type_name -> agent.v1.LsRejected
-	48, // 58: agent.v1.FetchResult.error:type_name -> agent.v1.FetchError
-	53, // 59: agent.v1.RequestContextResult.success:type_name -> agent.v1.RequestContextSuccess
-	54, // 60: agent.v1.RequestContextSuccess.request_context:type_name -> agent.v1.RequestContext
-	13, // 61: agent.v1.RequestContext.tools:type_name -> agent.v1.McpToolDefinition
-	70, // 62: agent.v1.McpArgs.args:type_name -> agent.v1.McpArgs.ArgsEntry
-	57, // 63: agent.v1.McpResult.success:type_name -> agent.v1.McpSuccess
-	58, // 64: agent.v1.McpResult.error:type_name -> agent.v1.McpError
-	59, // 65: agent.v1.McpSuccess.content:type_name -> agent.v1.McpToolResultContentItem
-	60, // 66: agent.v1.McpToolResultContentItem.text:type_name -> agent.v1.McpTextContent
-	63, // 67: agent.v1.KvServerMessage.get_blob_args:type_name -> agent.v1.GetBlobArgs
-	65, // 68: agent.v1.KvServerMessage.set_blob_args:type_name -> agent.v1.SetBlobArgs
-	64, // 69: agent.v1.KvClientMessage.get_blob_result:type_name -> agent.v1.GetBlobResult
-	66, // 70: agent.v1.KvClientMessage.set_blob_result:type_name -> agent.v1.SetBlobResult
-	9,  // 71: agent.v1.GetUsableModelsResponse.models:type_name -> agent.v1.ModelDetails
-	72, // [72:72] is the sub-list for method output_type
-	72, // [72:72] is the sub-list for method input_type
-	72, // [72:72] is the sub-list for extension type_name
-	72, // [72:72] is the sub-list for extension extendee
-	0,  // [0:72] is the sub-list for field type_name
+	75, // 4: agent.v1.AgentClientMessage.interaction_response:type_name -> agent.v1.InteractionResponse
+	67, // 5: agent.v1.AgentClientMessage.client_heartbeat:type_name -> agent.v1.ClientHeartbeat
+	14, // 6: agent.v1.AgentServerMessage.interaction_update:type_name -> agent.v1.InteractionUpdate
+	19, // 7: agent.v1.AgentServerMessage.exec_server_message:type_name -> agent.v1.ExecServerMessage
+	3,  // 8: agent.v1.AgentServerMessage.conversation_checkpoint_update:type_name -> agent.v1.ConversationStateStructure
+	61, // 9: agent.v1.AgentServerMessage.kv_server_message:type_name -> agent.v1.KvServerMessage
+	70, // 10: agent.v1.AgentServerMessage.interaction_query:type_name -> agent.v1.InteractionQuery
+	3,  // 11: agent.v1.AgentRunRequest.conversation_state:type_name -> agent.v1.ConversationStateStructure
+	5,  // 12: agent.v1.AgentRunRequest.action:type_name -> agent.v1.ConversationAction
+	9,  // 13: agent.v1.AgentRunRequest.model_details:type_name -> agent.v1.ModelDetails
+	12, // 14: agent.v1.AgentRunRequest.mcp_tools:type_name -> agent.v1.McpTools
+	11, // 15: agent.v1.AgentRunRequest.requested_model:type_name -> agent.v1.RequestedModel
+	4,  // 16: agent.v1.ConversationStateStructure.token_details:type_name -> agent.v1.ConversationTokenDetails
+	6,  // 17: agent.v1.ConversationAction.user_message_action:type_name -> agent.v1.UserMessageAction
+	8,  // 18: agent.v1.ConversationAction.resume_action:type_name -> agent.v1.ResumeAction
+	7,  // 19: agent.v1.UserMessageAction.user_message:type_name -> agent.v1.UserMessage
+	10, // 20: agent.v1.ModelDetails.thinking_details:type_name -> agent.v1.ThinkingDetails
+	13, // 21: agent.v1.McpTools.mcp_tools:type_name -> agent.v1.McpToolDefinition
+	15, // 22: agent.v1.InteractionUpdate.text_delta:type_name -> agent.v1.TextDeltaUpdate
+	16, // 23: agent.v1.InteractionUpdate.thinking_delta:type_name -> agent.v1.ThinkingDeltaUpdate
+	17, // 24: agent.v1.InteractionUpdate.token_delta:type_name -> agent.v1.TokenDeltaUpdate
+	18, // 25: agent.v1.InteractionUpdate.turn_ended:type_name -> agent.v1.TurnEndedUpdate
+	23, // 26: agent.v1.ExecServerMessage.shell_args:type_name -> agent.v1.ShellArgs
+	34, // 27: agent.v1.ExecServerMessage.write_args:type_name -> agent.v1.WriteArgs
+	37, // 28: agent.v1.ExecServerMessage.delete_args:type_name -> agent.v1.DeleteArgs
+	40, // 29: agent.v1.ExecServerMessage.grep_args:type_name -> agent.v1.GrepArgs
+	31, // 30: agent.v1.ExecServerMessage.read_args:type_name -> agent.v1.ReadArgs
+	43, // 31: agent.v1.ExecServerMessage.ls_args:type_name -> agent.v1.LsArgs
+	49, // 32: agent.v1.ExecServerMessage.diagnostics_args:type_name -> agent.v1.DiagnosticsArgs
+	51, // 33: agent.v1.ExecServerMessage.request_context_args:type_name -> agent.v1.RequestContextArgs
+	55, // 34: agent.v1.ExecServerMessage.mcp_args:type_name -> agent.v1.McpArgs
+	23, // 35: agent.v1.ExecServerMessage.shell_stream_args:type_name -> agent.v1.ShellArgs
+	46, // 36: agent.v1.ExecServerMessage.fetch_args:type_name -> agent.v1.FetchArgs
+	24, // 37: agent.v1.ExecClientMessage.shell_result:type_name -> agent.v1.ShellResult
+	35, // 38: agent.v1.ExecClientMessage.write_result:type_name -> agent.v1.WriteResult
+	38, // 39: agent.v1.ExecClientMessage.delete_result:type_name -> agent.v1.DeleteResult
+	41, // 40: agent.v1.ExecClientMessage.grep_result:type_name -> agent.v1.GrepResult
+	32, // 41: agent.v1.ExecClientMessage.read_result:type_name -> agent.v1.ReadResult
+	44, // 42: agent.v1.ExecClientMessage.ls_result:type_name -> agent.v1.LsResult
+	50, // 43: agent.v1.ExecClientMessage.diagnostics_result:type_name -> agent.v1.DiagnosticsResult
+	52, // 44: agent.v1.ExecClientMessage.request_context_result:type_name -> agent.v1.RequestContextResult
+	56, // 45: agent.v1.ExecClientMessage.mcp_result:type_name -> agent.v1.McpResult
+	27, // 46: agent.v1.ExecClientMessage.shell_stream:type_name -> agent.v1.ShellStream
+	47, // 47: agent.v1.ExecClientMessage.fetch_result:type_name -> agent.v1.FetchResult
+	22, // 48: agent.v1.ExecClientControlMessage.stream_close:type_name -> agent.v1.ExecClientStreamClose
+	25, // 49: agent.v1.ShellResult.success:type_name -> agent.v1.ShellSuccess
+	26, // 50: agent.v1.ShellResult.rejected:type_name -> agent.v1.ShellRejected
+	28, // 51: agent.v1.ShellStream.stdout:type_name -> agent.v1.ShellStreamStdout
+	29, // 52: agent.v1.ShellStream.exit:type_name -> agent.v1.ShellStreamExit
+	30, // 53: agent.v1.ShellStream.start:type_name -> agent.v1.ShellStreamStart
+	26, // 54: agent.v1.ShellStream.rejected:type_name -> agent.v1.ShellRejected
+	33, // 55: agent.v1.ReadResult.rejected:type_name -> agent.v1.ReadRejected
+	36, // 56: agent.v1.WriteResult.rejected:type_name -> agent.v1.WriteRejected
+	39, // 57: agent.v1.DeleteResult.rejected:type_name -> agent.v1.DeleteRejected
+	42, // 58: agent.v1.GrepResult.error:type_name -> agent.v1.GrepError
+	45, // 59: agent.v1.LsResult.rejected:type_name -> agent.v1.LsRejected
+	48, // 60: agent.v1.FetchResult.error:type_name -> agent.v1.FetchError
+	53, // 61: agent.v1.RequestContextResult.success:type_name -> agent.v1.RequestContextSuccess
+	54, // 62: agent.v1.RequestContextSuccess.request_context:type_name -> agent.v1.RequestContext
+	13, // 63: agent.v1.RequestContext.tools:type_name -> agent.v1.McpToolDefinition
+	79, // 64: agent.v1.McpArgs.args:type_name -> agent.v1.McpArgs.ArgsEntry
+	57, // 65: agent.v1.McpResult.success:type_name -> agent.v1.McpSuccess
+	58, // 66: agent.v1.McpResult.error:type_name -> agent.v1.McpError
+	59, // 67: agent.v1.McpSuccess.content:type_name -> agent.v1.McpToolResultContentItem
+	60, // 68: agent.v1.McpToolResultContentItem.text:type_name -> agent.v1.McpTextContent
+	63, // 69: agent.v1.KvServerMessage.get_blob_args:type_name -> agent.v1.GetBlobArgs
+	65, // 70: agent.v1.KvServerMessage.set_blob_args:type_name -> agent.v1.SetBlobArgs
+	64, // 71: agent.v1.KvClientMessage.get_blob_result:type_name -> agent.v1.GetBlobResult
+	66, // 72: agent.v1.KvClientMessage.set_blob_result:type_name -> agent.v1.SetBlobResult
+	9,  // 73: agent.v1.GetUsableModelsResponse.models:type_name -> agent.v1.ModelDetails
+	71, // 74: agent.v1.InteractionQuery.web_search_request_query:type_name -> agent.v1.WebSearchRequestQuery
+	73, // 75: agent.v1.InteractionQuery.web_fetch_request_query:type_name -> agent.v1.WebFetchRequestQuery
+	72, // 76: agent.v1.WebSearchRequestQuery.args:type_name -> agent.v1.WebSearchArgs
+	74, // 77: agent.v1.WebFetchRequestQuery.args:type_name -> agent.v1.WebFetchArgs
+	76, // 78: agent.v1.InteractionResponse.web_search_request_response:type_name -> agent.v1.WebSearchRequestResponse
+	77, // 79: agent.v1.InteractionResponse.web_fetch_request_response:type_name -> agent.v1.WebFetchRequestResponse
+	78, // 80: agent.v1.WebSearchRequestResponse.approved:type_name -> agent.v1.InteractionApproved
+	78, // 81: agent.v1.WebFetchRequestResponse.approved:type_name -> agent.v1.InteractionApproved
+	82, // [82:82] is the sub-list for method output_type
+	82, // [82:82] is the sub-list for method input_type
+	82, // [82:82] is the sub-list for extension type_name
+	82, // [82:82] is the sub-list for extension extendee
+	0,  // [0:82] is the sub-list for field type_name
 }
 
 func init() { file_providers_cursor_cursorpb_agent_proto_init() }
@@ -5051,6 +5695,7 @@ func file_providers_cursor_cursorpb_agent_proto_init() {
 		(*AgentClientMessage_ExecClientMessage)(nil),
 		(*AgentClientMessage_KvClientMessage)(nil),
 		(*AgentClientMessage_ExecClientControlMessage)(nil),
+		(*AgentClientMessage_InteractionResponse)(nil),
 		(*AgentClientMessage_ClientHeartbeat)(nil),
 	}
 	file_providers_cursor_cursorpb_agent_proto_msgTypes[1].OneofWrappers = []any{
@@ -5058,6 +5703,7 @@ func file_providers_cursor_cursorpb_agent_proto_init() {
 		(*AgentServerMessage_ExecServerMessage)(nil),
 		(*AgentServerMessage_ConversationCheckpointUpdate)(nil),
 		(*AgentServerMessage_KvServerMessage)(nil),
+		(*AgentServerMessage_InteractionQuery)(nil),
 	}
 	file_providers_cursor_cursorpb_agent_proto_msgTypes[2].OneofWrappers = []any{}
 	file_providers_cursor_cursorpb_agent_proto_msgTypes[5].OneofWrappers = []any{
@@ -5148,13 +5794,27 @@ func file_providers_cursor_cursorpb_agent_proto_init() {
 		(*KvClientMessage_GetBlobResult)(nil),
 		(*KvClientMessage_SetBlobResult)(nil),
 	}
+	file_providers_cursor_cursorpb_agent_proto_msgTypes[70].OneofWrappers = []any{
+		(*InteractionQuery_WebSearchRequestQuery)(nil),
+		(*InteractionQuery_WebFetchRequestQuery)(nil),
+	}
+	file_providers_cursor_cursorpb_agent_proto_msgTypes[75].OneofWrappers = []any{
+		(*InteractionResponse_WebSearchRequestResponse)(nil),
+		(*InteractionResponse_WebFetchRequestResponse)(nil),
+	}
+	file_providers_cursor_cursorpb_agent_proto_msgTypes[76].OneofWrappers = []any{
+		(*WebSearchRequestResponse_Approved)(nil),
+	}
+	file_providers_cursor_cursorpb_agent_proto_msgTypes[77].OneofWrappers = []any{
+		(*WebFetchRequestResponse_Approved)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_providers_cursor_cursorpb_agent_proto_rawDesc), len(file_providers_cursor_cursorpb_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   71,
+			NumMessages:   80,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
