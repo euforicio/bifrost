@@ -680,6 +680,28 @@ func TestBuildRunRequestConvertsToolsAndConversation(t *testing.T) {
 	}
 }
 
+func TestBuildRunRequestRejectsUnsupportedContentAndHostedTools(t *testing.T) {
+	t.Run("image", func(t *testing.T) {
+		request := textRequest("cursor/default", "stable-key", "describe this")
+		imageURL := "data:image/png;base64,iVBORw0KGgo="
+		request.Input[0].Content = &schemas.ResponsesMessageContent{ContentBlocks: []schemas.ResponsesMessageContentBlock{{
+			Type:                                   schemas.ResponsesInputMessageContentBlockTypeImage,
+			ResponsesInputMessageContentBlockImage: &schemas.ResponsesInputMessageContentBlockImage{ImageURL: &imageURL},
+		}}}
+		if _, _, err := buildRunRequest(request, "default"); err == nil || !strings.Contains(err.Error(), "input_image") {
+			t.Fatalf("expected explicit image rejection, got %v", err)
+		}
+	})
+
+	t.Run("web search", func(t *testing.T) {
+		request := textRequest("cursor/default", "stable-key", "search")
+		request.Params.Tools = []schemas.ResponsesTool{{Type: schemas.ResponsesToolTypeWebSearch}}
+		if _, _, err := buildRunRequest(request, "default"); err == nil || !strings.Contains(err.Error(), "web_search") {
+			t.Fatalf("expected explicit hosted-tool rejection, got %v", err)
+		}
+	})
+}
+
 func TestCursorContinuationUsageReportsPerCallDelta(t *testing.T) {
 	bridge := &cursorBridge{continuationID: "response-1", totalTokens: 100, outputTokens: 20}
 	first := bridge.completedEvent("gpt-5.6-sol").Response.Usage
