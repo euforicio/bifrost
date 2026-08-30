@@ -83,7 +83,9 @@ func buildRunRequest(request *schemas.BifrostResponsesRequest, modelID string) (
 }
 
 // validateCursorRequest prevents the bridge from silently dropping content or
-// hosted tools that Cursor's AgentService wire format cannot represent.
+// tools that Cursor's AgentService wire format cannot represent. Web search is
+// native to Cursor's agent runtime, so its declaration is accepted without
+// projecting it into the MCP tool list.
 func validateCursorRequest(request *schemas.BifrostResponsesRequest) error {
 	for _, item := range request.Input {
 		if item.Content == nil {
@@ -100,12 +102,33 @@ func validateCursorRequest(request *schemas.BifrostResponsesRequest) error {
 	}
 	if request.Params != nil {
 		for _, tool := range request.Params.Tools {
-			if tool.Type != schemas.ResponsesToolTypeFunction {
+			switch tool.Type {
+			case schemas.ResponsesToolTypeFunction,
+				schemas.ResponsesToolTypeWebSearch,
+				schemas.ResponsesToolTypeWebSearchPreview,
+				schemas.ResponsesToolTypeWebFetch:
+				continue
+			default:
 				return fmt.Errorf("cursor does not support Responses tool type %q", tool.Type)
 			}
 		}
 	}
 	return nil
+}
+
+func cursorNativeWebEnabled(request *schemas.BifrostResponsesRequest) bool {
+	if request.Params == nil {
+		return false
+	}
+	for _, tool := range request.Params.Tools {
+		switch tool.Type {
+		case schemas.ResponsesToolTypeWebSearch,
+			schemas.ResponsesToolTypeWebSearchPreview,
+			schemas.ResponsesToolTypeWebFetch:
+			return true
+		}
+	}
+	return false
 }
 
 func cursorInstructions(request *schemas.BifrostResponsesRequest) string {

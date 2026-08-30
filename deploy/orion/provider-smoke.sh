@@ -119,6 +119,31 @@ else:
 PY
 }
 
+assert_item_type() {
+  local path=$1
+  local item_type=$2
+  python3 - "$path" "$item_type" <<'PY'
+import json
+import sys
+
+path, item_type = sys.argv[1:]
+with open(path, encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+stack = [payload]
+while stack:
+    value = stack.pop()
+    if isinstance(value, list):
+        stack.extend(value)
+    elif isinstance(value, dict):
+        if value.get("type") == item_type:
+            break
+        stack.extend(value.values())
+else:
+    raise SystemExit(f"expected response item type {item_type!r}")
+PY
+}
+
 assert_model_exists() {
   local path=$1
   local model=$2
@@ -233,6 +258,12 @@ curl --fail --silent --show-error --max-time 180 --config "$cursor_auth" \
   --data '{"model":"cursor/default","input":"You must call the echo function with value BIFROST_CURSOR_TOOL_OK. Do not answer directly.","tools":[{"type":"function","name":"echo","description":"Echo the supplied value","parameters":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false}}]}' \
   "$base_url/v1/responses" > "$smoke_dir/cursor-tool.json"
 assert_function_call "$smoke_dir/cursor-tool.json" echo BIFROST_CURSOR_TOOL_OK
+
+curl --fail --silent --show-error --max-time 180 --config "$cursor_auth" \
+  -H 'Content-Type: application/json' \
+  --data '{"model":"cursor/default","input":"Use web search to find the current UTC date, then answer with the date.","tools":[{"type":"web_search"}]}' \
+  "$base_url/v1/responses" > "$smoke_dir/cursor-web-search.json"
+assert_item_type "$smoke_dir/cursor-web-search.json" web_search_call
 
 curl --fail --silent --show-error --no-buffer --max-time 180 --config "$cursor_auth" \
   -H 'Content-Type: application/json' \

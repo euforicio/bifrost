@@ -292,7 +292,7 @@ func (provider *CursorProvider) prepareBridge(ctx context.Context, key schemas.K
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
-		bridge, status, startErr := provider.startBridge(ctx, headers, wireRequest, blobs)
+		bridge, status, startErr := provider.startBridge(ctx, headers, wireRequest, blobs, cursorNativeWebEnabled(request))
 		if status == http.StatusUnauthorized && dynamic && attempt == 0 {
 			continue
 		}
@@ -304,7 +304,7 @@ func (provider *CursorProvider) prepareBridge(ctx context.Context, key schemas.K
 	panic("unreachable")
 }
 
-func (provider *CursorProvider) startBridge(ctx context.Context, headers http.Header, wireRequest *cursorpb.AgentRunRequest, blobs map[string][]byte) (*cursorBridge, int, *schemas.BifrostError) {
+func (provider *CursorProvider) startBridge(ctx context.Context, headers http.Header, wireRequest *cursorpb.AgentRunRequest, blobs map[string][]byte, nativeWebEnabled bool) (*cursorBridge, int, *schemas.BifrostError) {
 	// Relay caller cancellation only through response-header establishment. Once
 	// established, the Connect stream must survive the first HTTP response so a
 	// tool result can resume it through previous_response_id.
@@ -353,7 +353,7 @@ func (provider *CursorProvider) startBridge(ctx context.Context, headers http.He
 		_ = writer.Close()
 		return nil, resp.StatusCode, statusError(resp.StatusCode, body)
 	}
-	bridge := &cursorBridge{reader: resp.Body, writer: writer, frames: frames, cancel: cancel, heartbeatDone: make(chan struct{}), blobs: blobs, tools: wireRequest.McpTools, continuationID: randomID(), lastUsed: time.Now()}
+	bridge := &cursorBridge{reader: resp.Body, writer: writer, frames: frames, cancel: cancel, heartbeatDone: make(chan struct{}), blobs: blobs, tools: wireRequest.McpTools, nativeWebEnabled: nativeWebEnabled, continuationID: randomID(), lastUsed: time.Now()}
 	go func() {
 		ticker := time.NewTicker(cursorHeartbeatInterval)
 		defer ticker.Stop()
@@ -386,6 +386,7 @@ func readBoundedBody(reader io.Reader, limit int64) ([]byte, error) {
 type responseAccumulator struct {
 	text, reasoning string
 	output          []schemas.ResponsesMessage
+	outputByID      map[string]int
 	completed       *schemas.BifrostResponsesResponse
 }
 
@@ -399,7 +400,19 @@ func (a *responseAccumulator) emit(event *schemas.BifrostResponsesStreamResponse
 		}
 	}
 	if event.Item != nil {
-		a.output = append(a.output, *event.Item)
+		if event.Item.ID != nil {
+			if index, ok := a.outputByID[*event.Item.ID]; ok {
+				a.output[index] = *event.Item
+			} else {
+				if a.outputByID == nil {
+					a.outputByID = make(map[string]int)
+				}
+				a.outputByID[*event.Item.ID] = len(a.output)
+				a.output = append(a.output, *event.Item)
+			}
+		} else {
+			a.output = append(a.output, *event.Item)
+		}
 	}
 	if event.Response != nil {
 		a.completed = event.Response

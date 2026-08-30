@@ -23,24 +23,34 @@ type cursorPendingExec struct {
 	toolCallID string
 }
 
+type cursorNativeWebCall struct {
+	itemID      string
+	outputIndex int
+	kind        string
+	query       string
+	url         string
+}
+
 type cursorBridge struct {
-	reader         io.ReadCloser
-	writer         *io.PipeWriter
-	frames         *cursorFrameWriter
-	cancel         context.CancelFunc
-	heartbeatDone  chan struct{}
-	expiryTimer    *time.Timer
-	closeOnce      sync.Once
-	blobs          map[string][]byte
-	tools          *cursorpb.McpTools
-	cloudRule      string
-	pending        cursorPendingExec
-	continuationID string
-	outputTokens   int64
-	totalTokens    int64
-	emittedOutput  int64
-	emittedInput   int64
-	lastUsed       time.Time
+	reader           io.ReadCloser
+	writer           *io.PipeWriter
+	frames           *cursorFrameWriter
+	cancel           context.CancelFunc
+	heartbeatDone    chan struct{}
+	expiryTimer      *time.Timer
+	closeOnce        sync.Once
+	blobs            map[string][]byte
+	tools            *cursorpb.McpTools
+	cloudRule        string
+	nativeWebEnabled bool
+	nativeWebCalls   []cursorNativeWebCall
+	pending          cursorPendingExec
+	continuationID   string
+	outputTokens     int64
+	totalTokens      int64
+	emittedOutput    int64
+	emittedInput     int64
+	lastUsed         time.Time
 }
 
 type cursorEventEmitter func(*schemas.BifrostResponsesStreamResponse) error
@@ -78,6 +88,11 @@ func (bridge *cursorBridge) process(ctx context.Context, model string, emit curs
 			if err := parseEndStream(payload); err != nil {
 				return false, err
 			}
+			for _, event := range bridge.completeNativeWebEvents() {
+				if err := emitEvent(event); err != nil {
+					return false, err
+				}
+			}
 			return false, emitEvent(bridge.completedEvent(model))
 		}
 		var message cursorpb.AgentServerMessage
@@ -103,6 +118,18 @@ func (bridge *cursorBridge) process(ctx context.Context, model string, emit curs
 		}
 		if checkpoint := message.GetConversationCheckpointUpdate(); checkpoint != nil && checkpoint.GetTokenDetails() != nil {
 			bridge.totalTokens = int64(checkpoint.GetTokenDetails().GetUsedTokens())
+		}
+		if query := message.GetInteractionQuery(); query != nil {
+			events, err := bridge.approveNativeWeb(query)
+			if err != nil {
+				return false, err
+			}
+			for _, event := range events {
+				if err := emitEvent(event); err != nil {
+					return false, err
+				}
+			}
+			continue
 		}
 		if kv := message.GetKvServerMessage(); kv != nil {
 			if err := bridge.handleKV(kv); err != nil {
@@ -188,13 +215,122 @@ func (bridge *cursorBridge) handleKV(message *cursorpb.KvServerMessage) error {
 }
 
 func (bridge *cursorBridge) sendRequestContext(exec *cursorpb.ExecServerMessage) error {
-	requestContext := &cursorpb.RequestContext{Tools: bridge.tools.GetMcpTools()}
+	requestContext := &cursorpb.RequestContext{
+		Tools:            bridge.tools.GetMcpTools(),
+		WebSearchEnabled: bridge.nativeWebEnabled,
+		WebFetchEnabled:  bridge.nativeWebEnabled,
+	}
 	if bridge.cloudRule != "" {
 		requestContext.CloudRule = &bridge.cloudRule
 	}
 	result := &cursorpb.RequestContextResult{Result: &cursorpb.RequestContextResult_Success{Success: &cursorpb.RequestContextSuccess{RequestContext: requestContext}}}
 	client := &cursorpb.ExecClientMessage{Id: exec.Id, ExecId: exec.ExecId, Message: &cursorpb.ExecClientMessage_RequestContextResult{RequestContextResult: result}}
 	return writeCursorFrame(bridge.frames, &cursorpb.AgentClientMessage{Message: &cursorpb.AgentClientMessage_ExecClientMessage{ExecClientMessage: client}})
+}
+
+func (bridge *cursorBridge) approveNativeWeb(query *cursorpb.InteractionQuery) ([]*schemas.BifrostResponsesStreamResponse, error) {
+	if !bridge.nativeWebEnabled {
+		return nil, errors.New("cursor requested native web access without a web tool declaration")
+	}
+	call := cursorNativeWebCall{outputIndex: len(bridge.nativeWebCalls)}
+	response := &cursorpb.InteractionResponse{Id: query.Id}
+	switch value := query.Query.(type) {
+	case *cursorpb.InteractionQuery_WebSearchRequestQuery:
+		call.kind = "search"
+		if value.WebSearchRequestQuery != nil && value.WebSearchRequestQuery.Args != nil {
+			call.query = value.WebSearchRequestQuery.Args.SearchTerm
+			call.itemID = value.WebSearchRequestQuery.Args.ToolCallId
+		}
+		response.Response = &cursorpb.InteractionResponse_WebSearchRequestResponse{
+			WebSearchRequestResponse: &cursorpb.WebSearchRequestResponse{
+				Response: &cursorpb.WebSearchRequestResponse_Approved{Approved: &cursorpb.InteractionApproved{}},
+			},
+		}
+	case *cursorpb.InteractionQuery_WebFetchRequestQuery:
+		call.kind = "fetch"
+		if value.WebFetchRequestQuery != nil && value.WebFetchRequestQuery.Args != nil {
+			call.url = value.WebFetchRequestQuery.Args.Url
+			call.itemID = value.WebFetchRequestQuery.Args.ToolCallId
+		}
+		response.Response = &cursorpb.InteractionResponse_WebFetchRequestResponse{
+			WebFetchRequestResponse: &cursorpb.WebFetchRequestResponse{
+				Response: &cursorpb.WebFetchRequestResponse_Approved{Approved: &cursorpb.InteractionApproved{}},
+			},
+		}
+	default:
+		return nil, errors.New("cursor requested an unsupported native interaction")
+	}
+	if call.itemID == "" {
+		call.itemID = "ws_" + randomID()
+	}
+	if err := writeCursorFrame(bridge.frames, &cursorpb.AgentClientMessage{
+		Message: &cursorpb.AgentClientMessage_InteractionResponse{InteractionResponse: response},
+	}); err != nil {
+		return nil, err
+	}
+	bridge.nativeWebCalls = append(bridge.nativeWebCalls, call)
+	return call.startedEvents(), nil
+}
+
+func (call cursorNativeWebCall) startedEvents() []*schemas.BifrostResponsesStreamResponse {
+	status := schemas.ResponsesResponseStatusInProgress
+	item := call.item(status)
+	events := []*schemas.BifrostResponsesStreamResponse{
+		{Type: schemas.ResponsesStreamResponseTypeOutputItemAdded, OutputIndex: &call.outputIndex, ItemID: &call.itemID, Item: item},
+	}
+	if call.kind == "fetch" {
+		events = append(events,
+			&schemas.BifrostResponsesStreamResponse{Type: schemas.ResponsesStreamResponseTypeWebFetchCallInProgress, OutputIndex: &call.outputIndex, ItemID: &call.itemID},
+			&schemas.BifrostResponsesStreamResponse{Type: schemas.ResponsesStreamResponseTypeWebFetchCallFetching, OutputIndex: &call.outputIndex, ItemID: &call.itemID},
+		)
+	} else {
+		events = append(events,
+			&schemas.BifrostResponsesStreamResponse{Type: schemas.ResponsesStreamResponseTypeWebSearchCallInProgress, OutputIndex: &call.outputIndex, ItemID: &call.itemID},
+			&schemas.BifrostResponsesStreamResponse{Type: schemas.ResponsesStreamResponseTypeWebSearchCallSearching, OutputIndex: &call.outputIndex, ItemID: &call.itemID},
+		)
+	}
+	return events
+}
+
+func (bridge *cursorBridge) completeNativeWebEvents() []*schemas.BifrostResponsesStreamResponse {
+	var events []*schemas.BifrostResponsesStreamResponse
+	for _, call := range bridge.nativeWebCalls {
+		completedType := schemas.ResponsesStreamResponseTypeWebSearchCallCompleted
+		if call.kind == "fetch" {
+			completedType = schemas.ResponsesStreamResponseTypeWebFetchCallCompleted
+		}
+		status := schemas.ResponsesResponseStatusCompleted
+		events = append(events,
+			&schemas.BifrostResponsesStreamResponse{Type: completedType, OutputIndex: &call.outputIndex, ItemID: &call.itemID},
+			&schemas.BifrostResponsesStreamResponse{Type: schemas.ResponsesStreamResponseTypeOutputItemDone, OutputIndex: &call.outputIndex, ItemID: &call.itemID, Item: call.item(status)},
+		)
+	}
+	bridge.nativeWebCalls = nil
+	return events
+}
+
+func (call cursorNativeWebCall) item(status string) *schemas.ResponsesMessage {
+	if call.kind == "fetch" {
+		itemType := schemas.ResponsesMessageTypeWebFetchCall
+		return &schemas.ResponsesMessage{
+			ID: &call.itemID, Type: &itemType, Status: &status,
+			ResponsesToolMessage: &schemas.ResponsesToolMessage{Action: &schemas.ResponsesToolMessageActionStruct{
+				ResponsesWebFetchToolCallAction: &schemas.ResponsesWebFetchToolCallAction{Type: "fetch", URL: call.url},
+			}},
+		}
+	}
+	itemType := schemas.ResponsesMessageTypeWebSearchCall
+	action := &schemas.ResponsesWebSearchToolCallAction{Type: "search"}
+	if call.query != "" {
+		action.Query = &call.query
+		action.Queries = []string{call.query}
+	}
+	return &schemas.ResponsesMessage{
+		ID: &call.itemID, Type: &itemType, Status: &status,
+		ResponsesToolMessage: &schemas.ResponsesToolMessage{Action: &schemas.ResponsesToolMessageActionStruct{
+			ResponsesWebSearchToolCallAction: action,
+		}},
+	}
 }
 
 func decodeMCPArgs(values map[string][]byte) map[string]any {
