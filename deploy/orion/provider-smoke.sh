@@ -54,6 +54,19 @@ import sys
 path, sentinel, terminal = sys.argv[1:]
 values = []
 event_types = []
+text_keys = {"content", "text", "delta", "arguments", "output_text"}
+
+def collect_text(value):
+    if isinstance(value, list):
+        for item in value:
+            collect_text(item)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            if key in text_keys and isinstance(item, str):
+                values.append(item)
+            elif not isinstance(item, str):
+                collect_text(item)
+
 with open(path, encoding="utf-8") as handle:
     for line in handle:
         line = line.strip()
@@ -65,15 +78,7 @@ with open(path, encoding="utf-8") as handle:
         payload = json.loads(data)
         if isinstance(payload, dict) and isinstance(payload.get("type"), str):
             event_types.append(payload["type"])
-        stack = [payload]
-        while stack:
-            value = stack.pop()
-            if isinstance(value, str):
-                values.append(value)
-            elif isinstance(value, list):
-                stack.extend(value)
-            elif isinstance(value, dict):
-                stack.extend(value.values())
+        collect_text(payload)
 
 if sentinel not in "".join(values):
     raise SystemExit(f"expected sentinel {sentinel!r} in SSE response")
