@@ -8,6 +8,8 @@ icon: "openai"
 
 The OpenAI Codex provider connects Bifrost to an OpenAI account through the official device authorization flow. It is intended for Codex subscription access and supports the OpenAI Responses API in streaming and non-streaming modes.
 
+The ChatGPT Codex backend always streams upstream. Bifrost preserves native streaming for streaming callers and assembles the terminal `response.completed` event for non-streaming callers.
+
 ### Supported operations
 
 | Operation | Non-streaming | Streaming |
@@ -29,6 +31,8 @@ Unsupported operations fail explicitly instead of being translated to a differen
 
 The dashboard never displays or returns access, refresh, or ID tokens. Bifrost encrypts them in its config store and refreshes them before expiry.
 
+After connecting, the provider model picker is populated from the account-scoped Codex model catalog. Only API-capable models with `visibility: list` are shown; hidden review and internal rollout models remain unavailable in the normal picker.
+
 ## Multiple accounts
 
 Every OpenAI Codex provider key has its own account binding. Create one key per account, then use the existing weights, model allowlists, routing rules, budgets, and virtual-key policies to control which account serves a request. Disconnecting or refreshing one account does not affect another.
@@ -47,9 +51,9 @@ Use the normal Bifrost Responses endpoint with an `openai-codex/` model prefix:
 curl http://localhost:8080/v1/responses \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "openai-codex/gpt-5.5-codex",
+    "model": "openai-codex/gpt-5.6-sol",
     "input": "Explain this repository"
   }'
 ```
 
-Bifrost resolves the selected key's encrypted account credential at request time and supplies the account-scoped authorization headers to the upstream Codex Responses endpoint.
+Bifrost resolves the selected key's encrypted account credential at request time and supplies the account-scoped authorization headers to the upstream Codex Responses endpoint. It also normalizes the request to the current Codex account contract: streaming is enabled upstream, account-safe defaults are supplied, and unsupported general OpenAI fields are omitted. Models advertised with the Responses Lite capability receive the matching Lite header and input layout; instructions and function tools are moved into developer input items, functions are grouped under the reserved `functions` namespace, parallel tool calls are disabled, and reasoning uses all-turn context.

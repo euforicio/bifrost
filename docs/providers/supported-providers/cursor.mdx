@@ -39,6 +39,8 @@ The browser receives only a short-lived authorization URL and sanitized status. 
 
 Every Cursor provider key owns an independent encrypted account binding. Add one key per subscription, then use key weights, model allowlists, routing rules, budgets, and virtual-key policies to control selection. Login, refresh, reconnect, and disconnect actions affect only the selected account.
 
+Model discovery checks account slots independently. If one account is unavailable, models from healthy accounts are still returned and the response includes per-key success or failure status so the UI can identify the affected account.
+
 ## Account usage
 
 The provider account card reads the current billing period through `GET /api/providers/cursor/credentials/{credential_id}/usage`. Plan and spend-limit amounts are normalized as integer cents, with billing-cycle start and reset timestamps. Unknown protobuf fields are ignored so additive Cursor response changes do not break otherwise usable snapshots.

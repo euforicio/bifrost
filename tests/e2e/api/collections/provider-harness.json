@@ -137210,7 +137210,7 @@
       "description": "Pins the OpenAI Codex provider's only inference surface through the native Responses route. The provider resolves the selected key's account credential at runtime and sends the request to the ChatGPT Codex endpoint.",
       "item": [
         {
-          "name": "openai-codex/gpt-5-codex native Responses account auth",
+          "name": "openai-codex/gpt-5.6-sol native Responses account auth",
           "event": [
             {
               "listen": "test",
@@ -137238,7 +137238,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"model\": \"openai-codex/gpt-5-codex\",\n  \"input\": \"Reply with exactly: codex account ready\",\n  \"max_output_tokens\": 32\n}"
+              "raw": "{\n  \"model\": \"openai-codex/gpt-5.6-sol\",\n  \"input\": \"Reply with exactly: codex account ready\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/v1/responses",
