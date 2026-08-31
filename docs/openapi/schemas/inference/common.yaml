@@ -26,6 +26,8 @@ ModelProvider:
     - huggingface
     - nebius
     - xai
+    - openai-codex
+    - cursor
     - runway
     - fireworks
 

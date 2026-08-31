@@ -5,7 +5,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { getErrorMessage } from "@/lib/store";
 import { useCreateProviderKeyMutation, useGetProviderKeysQuery, useUpdateProviderKeyMutation } from "@/lib/store/apis/providersApi";
 import { ModelProvider } from "@/lib/types/config";
-import { modelProviderKeySchema } from "@/lib/types/schemas";
+import { accountProviderKeySchema, modelProviderKeySchema } from "@/lib/types/schemas";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Save } from "lucide-react";
@@ -22,14 +22,13 @@ interface Props {
 	onSave: () => void;
 }
 
-// Create a simple form schema using only ModelProviderKeySchema
-const providerKeyFormSchema = z.object({
-	key: modelProviderKeySchema,
-});
-
 type ProviderKeyFormValues = z.infer<typeof modelProviderKeySchema>;
 
 export default function ProviderKeyForm({ provider, keyId, onCancel, onSave }: Props) {
+	const supportsAccountLogin = provider.name === "openai-codex" || provider.name === "xai" || provider.name === "cursor";
+	const providerKeyFormSchema = z.object({
+		key: supportsAccountLogin ? accountProviderKeySchema : modelProviderKeySchema,
+	});
 	const hasUpdateProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Update);
 	const [createProviderKey, { isLoading: isCreatingProviderKey }] = useCreateProviderKeyMutation();
 	const [updateProviderKey, { isLoading: isUpdatingProviderKey }] = useUpdateProviderKeyMutation();

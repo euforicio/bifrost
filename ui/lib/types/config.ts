@@ -247,6 +247,85 @@ export interface ModelProviderKey {
 	description?: string;
 }
 
+export type ProviderCredentialState = "connected" | "connecting" | "expired" | "disconnected" | "error";
+
+// Public provider-account metadata returned by the credential manager. This
+// intentionally excludes access tokens, refresh tokens, and provider secrets.
+export interface ProviderCredentialStatus {
+	credential_id: string;
+	provider: string;
+	account_id?: string;
+	status: ProviderCredentialState;
+	expires_at?: string;
+	last_refresh?: string;
+	version: number;
+}
+
+export interface ListProviderCredentialsResponse {
+	credentials: ProviderCredentialStatus[];
+	total: number;
+}
+
+export type ProviderUsageAvailability = "available" | "unsupported" | "unavailable";
+
+export interface ProviderUsageQuota {
+	id: string;
+	name: string;
+	used_percent?: number;
+	used?: number;
+	limit?: number;
+	remaining?: number;
+	unit?: string;
+	window_duration_minutes?: number;
+	starts_at?: string;
+	resets_at?: string;
+}
+
+export interface ProviderUsageCredits {
+	has_credits: boolean;
+	unlimited: boolean;
+	balance?: number;
+}
+
+export interface ProviderUsageResetCredit {
+	id: string;
+	reset_type: string;
+	status: string;
+	granted_at?: string;
+	expires_at?: string;
+	title?: string;
+	description?: string;
+}
+
+export interface ProviderUsageResetCredits {
+	available_count: number;
+	credits: ProviderUsageResetCredit[];
+}
+
+export interface ProviderCredentialUsage {
+	credential_id: string;
+	provider: string;
+	availability: ProviderUsageAvailability;
+	fetched_at?: string;
+	stale?: boolean;
+	message?: string;
+	quotas: ProviderUsageQuota[];
+	credits?: ProviderUsageCredits;
+	reset_credits?: ProviderUsageResetCredits;
+}
+
+export interface ProviderCredentialLoginStatus {
+	login_id: string;
+	credential_id: string;
+	provider: string;
+	status: ProviderCredentialState;
+	verification_url?: string;
+	user_code?: string;
+	expires_at?: string;
+	poll_interval_seconds?: number;
+	error_code?: string;
+}
+
 // Default ModelProviderKey
 export const DefaultModelProviderKey: ModelProviderKey = {
 	id: "",

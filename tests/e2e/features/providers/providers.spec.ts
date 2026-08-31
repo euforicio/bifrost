@@ -145,6 +145,70 @@ test.describe("Providers", () => {
     });
   });
 
+  test.describe("Provider Accounts", () => {
+    test("should show each OpenAI Codex account slot as disconnected before authorization", async ({
+      providersPage,
+    }) => {
+      const providerName = "openai-codex";
+      if (!(await providersPage.providerExists(providerName))) {
+        await providersPage.addKnownProviderFromDropdown(providerName);
+        createdProviders.push(providerName);
+      }
+      await providersPage.selectProvider(providerName);
+
+      const accountSlotName = `E2E-Codex-Account-${Date.now()}`;
+      createdKeys.push({ provider: providerName, keyName: accountSlotName });
+      await providersPage.addAccountSlot(accountSlotName);
+
+      await expect(providersPage.providerAccountsCard).toBeVisible();
+      const accountRow = providersPage.getAccountRow(accountSlotName);
+      await expect(accountRow).toBeVisible();
+      await expect(
+        accountRow.getByText("disconnected", { exact: true }),
+      ).toBeVisible();
+      await expect(
+        accountRow.getByRole("button", { name: "Connect account", exact: true }),
+      ).toBeVisible();
+    });
+
+    test("should show multiple Cursor account slots without starting browser authorization", async ({
+      providersPage,
+    }) => {
+      const providerName = "cursor";
+      if (!(await providersPage.providerExists(providerName))) {
+        await providersPage.addKnownProviderFromDropdown(providerName);
+        createdProviders.push(providerName);
+      }
+      await providersPage.selectProvider(providerName);
+
+      const accountNames = [
+        `E2E-Cursor-Work-${Date.now()}`,
+        `E2E-Cursor-Personal-${Date.now()}`,
+      ];
+      for (const accountName of accountNames) {
+        createdKeys.push({ provider: providerName, keyName: accountName });
+        await providersPage.addAccountSlot(accountName);
+      }
+
+      await expect(providersPage.providerAccountsCard).toContainText(
+        "secure PKCE authorization",
+      );
+      for (const accountName of accountNames) {
+        const accountRow = providersPage.getAccountRow(accountName);
+        await expect(accountRow).toBeVisible();
+        await expect(
+          accountRow.getByText("disconnected", { exact: true }),
+        ).toBeVisible();
+        await expect(
+          accountRow.getByRole("button", { name: "Connect account", exact: true }),
+        ).toBeVisible();
+        await expect(accountRow.getByTestId(/^provider-account-enabled-/)).toBeVisible();
+        await expect(accountRow.getByTestId(/^provider-account-edit-/)).toBeVisible();
+        await expect(accountRow.getByTestId(/^provider-account-delete-/)).toBeVisible();
+      }
+    });
+  });
+
   test.describe("Custom Providers", () => {
     test("should open custom provider creation sheet", async ({
       providersPage,

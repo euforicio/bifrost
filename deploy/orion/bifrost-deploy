@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+readonly deploy_dir=/opt/bifrost
+readonly deploy_pattern='^deploy (ghcr\.io/euforicio/bifrost@sha256:[0-9a-f]{64}) ([A-Za-z0-9-]+)$'
+readonly rollback_pattern='^rollback ([A-Za-z0-9-]+)$'
+
+operation=
+image=
+registry_user=
+if [[ ${SSH_ORIGINAL_COMMAND:-} =~ $deploy_pattern ]]; then
+  operation=deploy
+  image=${BASH_REMATCH[1]}
+  registry_user=${BASH_REMATCH[2]}
+elif [[ ${SSH_ORIGINAL_COMMAND:-} =~ $rollback_pattern ]]; then
+  operation=rollback
+  registry_user=${BASH_REMATCH[1]}
+else
+  echo "refusing unsupported deployment command" >&2
+  exit 64
+fi
+
+exec 9>/run/lock/bifrost-orion-deploy.lock
+if ! flock -n 9; then
+  echo "another Orion deployment is already running" >&2
+  exit 75
+fi
+
+cd "$deploy_dir"
+for required in compose.yaml config.json .env data backups; do
+  if [[ ! -e $required ]]; then
+    echo "missing deployment prerequisite: $deploy_dir/$required" >&2
+    exit 78
+  fi
+done
+
+wait_healthy() {
+  local healthy=false
+  for _ in $(seq 1 24); do
+    if [[ $(docker inspect --format '{{.State.Health.Status}}' bifrost 2>/dev/null || true) == healthy ]]; then
+      healthy=true
+      break
+    fi
+    sleep 5
+  done
+  [[ $healthy == true ]]
+}
+
+stop_bifrost() {
+  local stop_image=$1
+  local container_id
+  if ! container_id=$(docker container ls --all --filter 'name=^/bifrost$' --format '{{.ID}}'); then
+    echo "could not query Docker for the Bifrost container" >&2
+    return 1
+  fi
+  if [[ -z $container_id ]]; then
+    return 0
+  fi
+  BIFROST_IMAGE="$stop_image" docker compose -f compose.yaml stop bifrost >/dev/null
+  [[ $(docker inspect --format '{{.State.Running}}' bifrost 2>/dev/null) == false ]]
+}
+
+restore_snapshot() {
+  local restore_image=$1
+  local restore_backup=$2
+  local failed_suffix=$3
+  local failed_dir="$deploy_dir/data.failed-${failed_suffix}"
+  local staging_dir
+  local container_id
+  local running_image
+  staging_dir=$(mktemp -d "$deploy_dir/.restore-${failed_suffix}.XXXXXX") || return 1
+  if ! tar -xzf "$restore_backup" -C "$staging_dir" || [[ ! -d $staging_dir/data ]]; then
+    rm -rf -- "$staging_dir"
+    echo "rollback archive could not be staged" >&2
+    return 1
+  fi
+  if [[ -e $failed_dir ]]; then
+    rm -rf -- "$staging_dir"
+    echo "rollback destination already exists: $failed_dir" >&2
+    return 1
+  fi
+  if ! container_id=$(docker container ls --all --filter 'name=^/bifrost$' --format '{{.ID}}'); then
+    rm -rf -- "$staging_dir"
+    echo "could not query Docker before rollback" >&2
+    return 1
+  fi
+  if [[ -n $container_id ]]; then
+    if ! running_image=$(docker inspect --format '{{.Config.Image}}' "$container_id"); then
+      rm -rf -- "$staging_dir"
+      return 1
+    fi
+    if ! stop_bifrost "$running_image"; then
+      rm -rf -- "$staging_dir"
+      echo "could not confirm Bifrost stopped before rollback" >&2
+      return 1
+    fi
+  fi
+  if [[ -d data ]] && ! mv data "$failed_dir"; then
+    rm -rf -- "$staging_dir"
+    return 1
+  fi
+  if ! mv "$staging_dir/data" data; then
+    [[ -d $failed_dir ]] && mv "$failed_dir" data || true
+    rm -rf -- "$staging_dir"
+    return 1
+  fi
+  rmdir "$staging_dir" || true
+  if [[ $restore_image == none ]]; then
+    echo "no previous service existed; restored pre-deploy data" >&2
+    return 0
+  fi
+  BIFROST_IMAGE="$restore_image" docker compose -f compose.yaml up -d --remove-orphans
+  wait_healthy
+}
+
+registry_token=$(cat)
+if [[ -z $registry_token ]]; then
+  echo "missing ephemeral registry token" >&2
+  exit 77
+fi
+docker_config=$(mktemp -d /run/bifrost-docker-config.XXXXXX)
+export DOCKER_CONFIG=$docker_config
+cleanup_registry() {
+  docker logout ghcr.io >/dev/null 2>&1 || true
+  rm -rf -- "$docker_config"
+}
+trap cleanup_registry EXIT
+printf '%s' "$registry_token" | docker login ghcr.io --username "$registry_user" --password-stdin >/dev/null
+unset registry_token
+
+if [[ $operation == rollback ]]; then
+  if [[ ! -s .previous-deployment ]]; then
+    echo "no previous deployment is recorded" >&2
+    exit 66
+  fi
+  IFS=$'\t' read -r previous_image previous_backup < .previous-deployment
+  if [[ $previous_image != none && ! $previous_image =~ ^ghcr\.io/euforicio/bifrost@sha256:[0-9a-f]{64}$ ]] \
+    || [[ ! -f $previous_backup ]]; then
+    echo "recorded rollback state is invalid or missing" >&2
+    exit 65
+  fi
+  if [[ $previous_image != none ]]; then
+    docker pull "$previous_image" >/dev/null
+  fi
+  timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+  if ! restore_snapshot "$previous_image" "$previous_backup" "$timestamp"; then
+    echo "rollback did not return Bifrost to healthy" >&2
+    exit 1
+  fi
+  mv .previous-deployment ".previous-deployment.used-${timestamp}"
+  if [[ $previous_image == none ]]; then
+    echo "none stopped"
+  else
+    docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' bifrost
+  fi
+  exit 0
+fi
+
+BIFROST_IMAGE="$image" docker compose -f compose.yaml config --quiet
+BIFROST_IMAGE="$image" docker compose -f compose.yaml pull bifrost
+
+data_kib=$(du -sk data | awk '{print $1}')
+available_kib=$(df -Pk "$deploy_dir" | awk 'NR == 2 {print $4}')
+required_kib=$((data_kib * 2 + 524288))
+if ((available_kib < required_kib)); then
+  echo "insufficient disk for a safe snapshot: need ${required_kib} KiB, have ${available_kib} KiB" >&2
+  exit 70
+fi
+
+timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+if ! container_id=$(docker container ls --all --filter 'name=^/bifrost$' --format '{{.ID}}'); then
+  echo "could not query Docker before deployment" >&2
+  exit 1
+fi
+previous_image=
+if [[ -n $container_id ]]; then
+  previous_image=$(docker inspect --format '{{.Config.Image}}' "$container_id")
+fi
+if [[ -n $previous_image && ! $previous_image =~ ^ghcr\.io/euforicio/bifrost@sha256:[0-9a-f]{64}$ ]]; then
+  echo "current Bifrost image is not rollback-capable: $previous_image" >&2
+  exit 65
+fi
+previous_record=${previous_image:-none}
+backup="backups/bifrost-${timestamp}.tar.gz"
+stopped=false
+new_started=false
+completed=false
+
+owns_rollback_record() {
+  local recorded_image recorded_backup
+  [[ -s .previous-deployment ]] || return 1
+  IFS=$'\t' read -r recorded_image recorded_backup < .previous-deployment
+  [[ $recorded_image == "$previous_record" && $recorded_backup == "$backup" ]]
+}
+
+recover() {
+  local status=$?
+  local recovered=false
+  trap - ERR HUP INT TERM
+  if [[ $completed == false && $stopped == true ]]; then
+    echo "deployment interrupted; recovering the previous service" >&2
+    if [[ $new_started == true && -f $backup ]]; then
+      if restore_snapshot "$previous_record" "$backup" "$timestamp"; then
+        recovered=true
+      fi
+    elif [[ -n $previous_image ]]; then
+      if BIFROST_IMAGE="$previous_image" docker compose -f compose.yaml up -d --remove-orphans \
+        && wait_healthy; then
+        recovered=true
+      fi
+    fi
+    if [[ $recovered == true ]] && owns_rollback_record; then
+      mv .previous-deployment ".previous-deployment.failed-${timestamp}" 2>/dev/null || true
+    else
+      echo "CRITICAL: automatic recovery did not return Bifrost to healthy" >&2
+    fi
+  fi
+  exit "$status"
+}
+trap recover ERR HUP INT TERM
+
+if ! stop_bifrost "${previous_image:-$image}"; then
+  echo "could not confirm Bifrost stopped before snapshot" >&2
+  exit 1
+fi
+stopped=true
+tar -czf "$backup" data
+record_tmp=$(mktemp "$deploy_dir/.previous-deployment.XXXXXX")
+printf '%s\t%s\n' "$previous_record" "$backup" > "$record_tmp"
+mv "$record_tmp" .previous-deployment
+
+new_started=true
+BIFROST_IMAGE="$image" docker compose -f compose.yaml up -d --remove-orphans
+if ! wait_healthy; then
+  docker logs --tail 100 bifrost >&2 || true
+  false
+fi
+
+completed=true
+trap - ERR HUP INT TERM
+find backups -maxdepth 1 -type f -name 'bifrost-*.tar.gz' -print0 \
+  | xargs -0 ls -1t 2>/dev/null \
+  | tail -n +6 \
+  | xargs -r rm -f
+printf '%s\t%s\t%s\t%s\n' "$timestamp" "$previous_image" "$image" "$backup" >> deployments.log
+docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' bifrost

@@ -27,6 +27,7 @@ import (
 	"github.com/maximhq/bifrost/core/providers/bedrockmantle"
 	"github.com/maximhq/bifrost/core/providers/cerebras"
 	"github.com/maximhq/bifrost/core/providers/cohere"
+	"github.com/maximhq/bifrost/core/providers/cursor"
 	"github.com/maximhq/bifrost/core/providers/deepseek"
 	"github.com/maximhq/bifrost/core/providers/elevenlabs"
 	"github.com/maximhq/bifrost/core/providers/fireworks"
@@ -37,6 +38,7 @@ import (
 	"github.com/maximhq/bifrost/core/providers/nebius"
 	"github.com/maximhq/bifrost/core/providers/ollama"
 	"github.com/maximhq/bifrost/core/providers/openai"
+	"github.com/maximhq/bifrost/core/providers/openaicodex"
 	"github.com/maximhq/bifrost/core/providers/opencode"
 	"github.com/maximhq/bifrost/core/providers/openrouter"
 	"github.com/maximhq/bifrost/core/providers/parasail"
@@ -4478,6 +4480,8 @@ func (bifrost *Bifrost) createBaseProvider(providerKey schemas.ModelProvider, co
 	switch targetProviderKey {
 	case schemas.OpenAI:
 		return openai.NewOpenAIProvider(config, bifrost.logger), nil
+	case schemas.OpenAICodex:
+		return openaicodex.NewOpenAICodexProvider(config, bifrost.logger)
 	case schemas.Anthropic:
 		return anthropic.NewAnthropicProvider(config, bifrost.logger), nil
 	case schemas.Bedrock:
@@ -4486,6 +4490,8 @@ func (bifrost *Bifrost) createBaseProvider(providerKey schemas.ModelProvider, co
 		return bedrockmantle.NewBedrockMantleProvider(config, bifrost.logger)
 	case schemas.Cohere:
 		return cohere.NewCohereProvider(config, bifrost.logger)
+	case schemas.CursorProvider:
+		return cursor.NewCursorProvider(config, bifrost.logger)
 	case schemas.Azure:
 		return azure.NewAzureProvider(config, bifrost.logger)
 	case schemas.Vertex:
@@ -6852,7 +6858,7 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 		if cfg := config.CustomProviderConfig; cfg != nil && cfg.BaseProviderType != "" {
 			baseProvider = cfg.BaseProviderType
 		}
-		req.Context.SetValue(schemas.BifrostContextKeyIsCustomProvider, !IsStandardProvider(baseProvider))
+		req.Context.SetValue(schemas.BifrostContextKeyIsCustomProvider, isCustomProviderConfig(config))
 		// Lets downstream converters resolve a custom provider key back to the built-in provider it wraps.
 		req.Context.SetValue(schemas.BifrostContextKeyBaseProviderType, baseProvider)
 
@@ -7057,10 +7063,7 @@ func (bifrost *Bifrost) requestWorker(provider schemas.Provider, config *schemas
 		// selection error) still produce a populated RoutingInfo on the error —
 		// otherwise the post-retry populate at line ~6221 would clobber RoutingInfo
 		// to a zero value, leaving new consumers without provider/model context.
-		attemptRoutingInfo := schemas.RoutingInfo{
-			Provider: provider.GetProviderKey(),
-			Model:    originalModelRequested,
-		}
+		attemptRoutingInfo := schemas.BuildRoutingInfo(req.Context, provider.GetProviderKey(), originalModelRequested, schemas.Key{})
 		// lastAttemptFinalizer captures the LAST attempt's postHookSpanFinalizer for the
 		// worker-level error fallback below. Single-threaded write (assigned by the retry
 		// loop's per-attempt closure) and single-threaded read (after retries finish), so

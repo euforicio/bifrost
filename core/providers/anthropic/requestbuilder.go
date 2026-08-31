@@ -292,7 +292,7 @@ func BuildAnthropicResponsesRequestBody(ctx *schemas.BifrostContext, request *sc
 			// than failing the whole request. Mirrors ValidateChatToolsForProvider
 			// and the Bedrock Responses path. Use a shallow copy so the shared
 			// (possibly pooled) request and its Params are never mutated.
-			if keep, dropped := ValidateResponsesToolsForProvider(request.Params.Tools, schemas.ResolveModelCaps(cfg.Provider, capModel)); len(dropped) > 0 {
+			if keep, dropped := ValidateResponsesToolsForProvider(request.Params.Tools, schemas.ResolveRequestModelCaps(ctx, cfg.Provider, capModel)); len(dropped) > 0 {
 				reqCopy := *request
 				paramsCopy := *request.Params
 				paramsCopy.Tools = keep

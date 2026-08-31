@@ -1,0 +1,59 @@
+---
+title: "OpenAI Codex"
+description: "Use OpenAI Codex subscriptions through secure device authentication and the Responses API"
+icon: "openai"
+---
+
+## Overview
+
+The OpenAI Codex provider connects Bifrost to an OpenAI account through the official device authorization flow. It is intended for Codex subscription access and supports the OpenAI Responses API in streaming and non-streaming modes.
+
+The ChatGPT Codex backend always streams upstream. Bifrost preserves native streaming for streaming callers and assembles the terminal `response.completed` event for non-streaming callers.
+
+### Supported operations
+
+| Operation | Non-streaming | Streaming |
+|---|---:|---:|
+| Responses API | ✅ | ✅ |
+| Chat Completions | ❌ | ❌ |
+| Text Completions | ❌ | ❌ |
+| Embeddings | ❌ | ❌ |
+
+Unsupported operations fail explicitly instead of being translated to a different API.
+
+## Connect an account
+
+1. Navigate to **Models** > **Model Providers** and add **OpenAI Codex**.
+2. Add a provider key and give it a recognizable account name.
+3. Select **Connect OpenAI account**.
+4. Open the displayed verification URL, enter the code, and approve access.
+5. Return to Bifrost. The account status changes to **Connected** when authorization completes.
+
+The dashboard never displays or returns access, refresh, or ID tokens. Bifrost encrypts them in its config store and refreshes them before expiry.
+
+After connecting, the provider model picker is populated from the account-scoped Codex model catalog. Only API-capable models with `visibility: list` are shown; hidden review and internal rollout models remain unavailable in the normal picker.
+
+## Multiple accounts
+
+Every OpenAI Codex provider key has its own account binding. Create one key per account, then use the existing weights, model allowlists, routing rules, budgets, and virtual-key policies to control which account serves a request. Disconnecting or refreshing one account does not affect another.
+
+## Account usage
+
+The provider account card reads current subscription usage through `GET /api/providers/openai-codex/credentials/{credential_id}/usage`. Bifrost returns normalized primary, secondary, and additional quota windows, credit balance when supplied by OpenAI, and reset-credit availability. Reset-credit detail rows are fetched separately with a five-second bound; a detail failure does not discard the quota snapshot.
+
+If OpenAI rejects the stored bearer token with `401`, Bifrost forces one credential refresh and retries once. Other upstream failures return `availability: unavailable` without disconnecting the account or changing whether it can serve inference. The response never contains access, refresh, or ID tokens.
+
+## Requests
+
+Use the normal Bifrost Responses endpoint with an `openai-codex/` model prefix:
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai-codex/gpt-5.6-sol",
+    "input": "Explain this repository"
+  }'
+```
+
+Bifrost resolves the selected key's encrypted account credential at request time and supplies the account-scoped authorization headers to the upstream Codex Responses endpoint. It also normalizes the request to the current Codex account contract: streaming is enabled upstream, account-safe defaults are supplied, and unsupported general OpenAI fields are omitted. Models advertised with the Responses Lite capability receive the matching Lite header and input layout; instructions and function tools are moved into developer input items, functions are grouped under the reserved `functions` namespace, parallel tool calls are disabled, and reasoning uses all-turn context.

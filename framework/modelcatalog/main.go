@@ -263,6 +263,11 @@ func Init(ctx context.Context, config *Config, configStore configstore.ConfigSto
 		if err := mc.datasheet.LoadFromURLIntoMemory(ctx); err != nil {
 			return nil, fmt.Errorf("failed to load pricing data into memory: %w", err)
 		}
+		if mc.datasheet.URL() == datasheet.DefaultURL {
+			if err := mc.datasheet.SyncOfficialPricingFromModelsDev(ctx, datasheet.DefaultModelsDevURL); err != nil {
+				logger.Warn("models.dev pricing supplement unavailable; keeping Bifrost pricing: %v", err)
+			}
+		}
 		if err := mc.datasheet.LoadModelParamsFromURLIntoMemory(ctx); err != nil {
 			return nil, fmt.Errorf("failed to load model parameters from URL: %w", err)
 		}
@@ -537,7 +542,17 @@ func (mc *ModelCatalog) runPricingSync(ctx context.Context) error {
 	if mc.shouldSyncGate != nil && !mc.shouldSyncGate(ctx) {
 		return nil
 	}
-	return mc.datasheet.SyncFromURL(ctx)
+	if err := mc.datasheet.SyncFromURL(ctx); err != nil {
+		return err
+	}
+	// Custom pricing sources are operator-owned and may be intentionally
+	// air-gapped. Supplement only the built-in Bifrost catalog.
+	if mc.datasheet.URL() == datasheet.DefaultURL {
+		if err := mc.datasheet.SyncOfficialPricingFromModelsDev(ctx, datasheet.DefaultModelsDevURL); err != nil {
+			mc.logger.Warn("models.dev pricing supplement unavailable; keeping cached pricing: %v", err)
+		}
+	}
+	return nil
 }
 
 // runParamsSync wraps the datasheet params sync with the gate check.

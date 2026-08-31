@@ -17,6 +17,7 @@ import (
 	"github.com/maximhq/bifrost/framework/modelcatalog/datasheet"
 	governanceplugin "github.com/maximhq/bifrost/plugins/governance"
 	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
+	"github.com/stretchr/testify/require"
 	"github.com/valyala/fasthttp"
 )
 
@@ -1105,6 +1106,37 @@ func TestListModelDetails_AppliesGlobalOverrideWithoutMutatingBase(t *testing.T)
 	if summary.Patch.InputCostPerToken == nil || *summary.Patch.InputCostPerToken != 0.000001 {
 		t.Fatalf("expected patch in summary, got %#v", summary.Patch)
 	}
+}
+
+func TestListModelDetails_CustomProviderInheritsBaseProviderCapabilities(t *testing.T) {
+	SetLogger(&mockLogger{})
+
+	customProvider := schemas.ModelProvider("company-openai")
+	h := providerHandlerForTest(customProvider, []schemas.Key{{ID: "key-a"}}, []string{"gpt-4.1-mini"}, []string{"gpt-4.1-mini"})
+	h.inMemoryStore.Providers[customProvider] = configstore.ProviderConfig{
+		Keys: []schemas.Key{{ID: "key-a"}},
+		CustomProviderConfig: &schemas.CustomProviderConfig{
+			BaseProviderType: schemas.OpenAI,
+		},
+	}
+	h.inMemoryStore.ModelCatalog = modelCatalogForPricingJSON(t, []byte(`{
+		"gpt-4.1-mini": {
+			"provider":"openai",
+			"mode":"responses",
+			"base_model":"gpt-4.1-mini",
+			"max_output_tokens":32768,
+			"architecture":{"modality":"text+image->text","input_modalities":["text","image"],"output_modalities":["text"]}
+		}
+	}`))
+
+	resp, _ := listModelDetailsForTest(t, h, "/api/models/details?provider=company-openai&limit=100")
+	require.Len(t, resp.Models, 1)
+	model := resp.Models[0]
+	require.Equal(t, "company-openai", model.Provider)
+	require.NotNil(t, model.MaxOutputTokens)
+	require.Equal(t, 32768, *model.MaxOutputTokens)
+	require.NotNil(t, model.Architecture)
+	require.Contains(t, model.Architecture.InputModalities, "image")
 }
 
 func TestListModelDetails_OverrideIndexIsDeduplicated(t *testing.T) {

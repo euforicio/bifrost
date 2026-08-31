@@ -2313,7 +2313,7 @@ func ToBedrockResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.
 
 	// capModel is the canonical model used only for Anthropic capability gating
 	capModel := schemas.ResolveCanonicalModel(ctx, bifrostReq.Model)
-	caps := schemas.ResolveModelCaps(bifrostReq.Provider, capModel)
+	caps := schemas.ResolveRequestModelCaps(ctx, bifrostReq.Provider, capModel)
 
 	// Filter provider-unsupported tools (e.g. an `mcp` server tool that points
 	// back at Bifrost's own gateway) instead of failing the whole request. This

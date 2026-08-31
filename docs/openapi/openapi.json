@@ -42725,6 +42725,503 @@
         }
       }
     },
+    "/api/providers/{provider}/credentials": {
+      "get": {
+        "operationId": "listProviderCredentials",
+        "summary": "List connected provider accounts",
+        "description": "Lists sanitized account status for every credential bound to a provider key. Token values are never returned.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider account statuses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListProviderCredentialsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}": {
+      "delete": {
+        "operationId": "disconnectProviderCredential",
+        "summary": "Disconnect a provider account",
+        "description": "Deletes the encrypted credential bound to a provider key without deleting the provider key itself.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Provider account disconnected"
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/status": {
+      "get": {
+        "operationId": "getProviderCredentialStatus",
+        "summary": "Get provider account status",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider account status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/usage": {
+      "get": {
+        "operationId": "getProviderCredentialUsage",
+        "summary": "Get provider account usage",
+        "description": "Returns a normalized quota snapshot for the account bound to an existing provider key. Upstream usage failures are reported with `availability: unavailable` and do not disable inference. xAI returns `availability: unsupported` because it does not expose a programmatic account quota endpoint. Credential tokens are never returned.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Normalized provider account usage or an explicit unsupported/unavailable state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialUsage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider credential storage is unavailable"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/refresh": {
+      "post": {
+        "operationId": "refreshProviderCredential",
+        "summary": "Refresh a provider account credential",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Refreshed provider account status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/login/device": {
+      "post": {
+        "operationId": "startProviderCredentialDeviceLogin",
+        "summary": "Start provider device authorization",
+        "description": "Starts an OpenAI Codex or xAI device login for an existing provider key.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Device authorization started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialLoginStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Provider authorization service unavailable"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/login/browser": {
+      "post": {
+        "operationId": "startProviderCredentialBrowserLogin",
+        "summary": "Start provider browser authorization",
+        "description": "Starts a Cursor PKCE browser login for an existing provider key. The returned verification URL contains no credential material.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Browser authorization started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialLoginStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Provider authorization service unavailable"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/login/{login_id}": {
+      "get": {
+        "operationId": "getProviderCredentialLoginStatus",
+        "summary": "Poll provider authorization",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderLoginId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider authorization status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialLoginStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "cancelProviderCredentialLogin",
+        "summary": "Cancel provider authorization",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderLoginId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Provider authorization cancelled"
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/keys": {
       "get": {
         "operationId": "listKeys",
@@ -81346,6 +81843,36 @@
         "schema": {
           "type": "string"
         }
+      },
+      "ProviderName": {
+        "name": "provider",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "openai-codex",
+            "xai",
+            "cursor"
+          ]
+        }
+      },
+      "ProviderCredentialId": {
+        "name": "credential_id",
+        "in": "path",
+        "required": true,
+        "description": "Existing provider key ID that owns this account binding",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ProviderLoginId": {
+        "name": "login_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "responses": {
@@ -81447,6 +81974,8 @@
           "huggingface",
           "nebius",
           "xai",
+          "openai-codex",
+          "cursor",
           "runway",
           "fireworks"
         ]
@@ -94772,6 +95301,299 @@
           },
           "total": {
             "type": "integer"
+          }
+        }
+      },
+      "ProviderCredentialStatus": {
+        "type": "object",
+        "required": [
+          "credential_id",
+          "provider",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": "string",
+            "description": "Provider key ID that owns this account binding"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai-codex",
+              "xai",
+              "cursor"
+            ]
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "connecting",
+              "expired",
+              "disconnected",
+              "error"
+            ]
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_refresh": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "uint64"
+          }
+        }
+      },
+      "ProviderCredentialUsage": {
+        "type": "object",
+        "required": [
+          "credential_id",
+          "provider",
+          "availability",
+          "quotas"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": "string",
+            "description": "Provider key ID that owns the account binding"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai-codex",
+              "xai",
+              "cursor"
+            ]
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "unsupported",
+              "unavailable"
+            ]
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time the provider snapshot was successfully fetched"
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Whether the returned provider snapshot is known to be stale"
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe provider-neutral explanation for unsupported or unavailable usage"
+          },
+          "quotas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCredentialQuota"
+            }
+          },
+          "credits": {
+            "$ref": "#/components/schemas/ProviderCredentialCredits"
+          },
+          "reset_credits": {
+            "$ref": "#/components/schemas/ProviderCredentialResetCredits"
+          }
+        }
+      },
+      "ProviderCredentialQuota": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable provider-scoped quota identifier"
+          },
+          "name": {
+            "type": "string"
+          },
+          "used_percent": {
+            "type": "number",
+            "format": "double"
+          },
+          "used": {
+            "type": "number",
+            "format": "double"
+          },
+          "limit": {
+            "type": "number",
+            "format": "double"
+          },
+          "remaining": {
+            "type": "number",
+            "format": "double"
+          },
+          "unit": {
+            "type": "string",
+            "description": "Unit for used, limit, and remaining values; Cursor monetary quotas use `cents`"
+          },
+          "window_duration_minutes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resets_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProviderCredentialCredits": {
+        "type": "object",
+        "required": [
+          "has_credits",
+          "unlimited"
+        ],
+        "properties": {
+          "has_credits": {
+            "type": "boolean"
+          },
+          "unlimited": {
+            "type": "boolean"
+          },
+          "balance": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "ProviderCredentialResetCredits": {
+        "type": "object",
+        "required": [
+          "available_count",
+          "credits"
+        ],
+        "properties": {
+          "available_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "credits": {
+            "type": "array",
+            "description": "Best-effort reset-credit detail rows. An empty array means no rows were returned or the bounded detail read was unavailable.",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCredentialResetCredit"
+            }
+          }
+        }
+      },
+      "ProviderCredentialResetCredit": {
+        "type": "object",
+        "required": [
+          "id",
+          "reset_type",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reset_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "granted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "ListProviderCredentialsResponse": {
+        "type": "object",
+        "required": [
+          "credentials",
+          "total"
+        ],
+        "properties": {
+          "credentials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCredentialStatus"
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "ProviderCredentialLoginStatus": {
+        "type": "object",
+        "required": [
+          "login_id",
+          "credential_id",
+          "provider",
+          "status"
+        ],
+        "properties": {
+          "login_id": {
+            "type": "string"
+          },
+          "credential_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai-codex",
+              "xai",
+              "cursor"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "connecting",
+              "connected",
+              "disconnected",
+              "error"
+            ]
+          },
+          "verification_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "user_code": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "poll_interval_seconds": {
+            "type": "integer"
+          },
+          "error_code": {
+            "type": "string"
           }
         }
       },

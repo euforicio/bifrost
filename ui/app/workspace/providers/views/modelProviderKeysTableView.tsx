@@ -91,9 +91,10 @@ function ProviderKeyActionsMenu({
 export default function ModelProviderKeysTableView({ provider, className, headerActions, isKeyless }: Props) {
 	const providerName = provider.name?.toLowerCase() ?? "";
 	const isVLLM = providerName === "vllm";
-	const isOllamaOrSGL = providerName === "ollama" || providerName === "sgl";
-	const entityLabel = isVLLM ? "model" : isOllamaOrSGL ? "server" : "key";
-	const entityLabelPlural = isVLLM ? "models" : isOllamaOrSGL ? "servers" : "keys";
+	const isOllama = providerName === "ollama";
+	const isSGL = providerName === "sgl";
+	const entityLabel = isVLLM ? "model" : isOllama ? "connection" : isSGL ? "server" : "key";
+	const entityLabelPlural = isVLLM ? "models" : isOllama ? "connections" : isSGL ? "servers" : "keys";
 	const EntityLabel = entityLabel.charAt(0).toUpperCase() + entityLabel.slice(1);
 	const hasUpdateProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Update);
 	const hasDeleteProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Delete);
@@ -256,7 +257,7 @@ export default function ModelProviderKeysTableView({ provider, className, header
 						</colgroup>
 						<TableHeader className="w-full">
 							<TableRow>
-								<TableHead>{isVLLM ? "Model" : isOllamaOrSGL ? "Server" : "API Key"}</TableHead>
+								<TableHead>{isVLLM ? "Model" : isOllama ? "Connection" : isSGL ? "Server" : "API Key"}</TableHead>
 								<TableHead>Weight</TableHead>
 								<TableHead>Enabled</TableHead>
 								<TableHead className="text-right"></TableHead>
@@ -306,6 +307,7 @@ export default function ModelProviderKeysTableView({ provider, className, header
 															(key.bedrock_key_config?.region?.type && key.bedrock_key_config.region.type !== "plain_text") ||
 															(key.bedrock_mantle_key_config?.region?.type && key.bedrock_mantle_key_config.region.type !== "plain_text") ||
 															(key.vllm_key_config?.url?.type && key.vllm_key_config.url.type !== "plain_text") ||
+															(key.ollama_key_config?.url?.type && key.ollama_key_config.url.type !== "plain_text") ||
 															(key.value?.type && key.value.type !== "plain_text");
 														const isEnvResolutionError =
 															hasSecretVarConfig && key.description && /not set|empty|missing/i.test(key.description);

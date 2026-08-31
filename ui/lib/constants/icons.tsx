@@ -213,6 +213,21 @@ export const ProviderIcons = {
 			</svg>
 		);
 	},
+	cursor: ({ size = "md", className = "" }: IconProps) => {
+		const resolvedSize = resolveSize(size);
+		return (
+			<img
+				src="/images/cursor.png"
+				alt="Cursor"
+				title="Cursor"
+				width={resolvedSize}
+				height={resolvedSize}
+				loading="lazy"
+				decoding="async"
+				className={className}
+			/>
+		);
+	},
 
 	elevenlabs: ({ size = "md", className = "" }: IconProps) => {
 		const resolvedSize = resolveSize(size);
@@ -488,6 +503,21 @@ export const ProviderIcons = {
 			</svg>
 		);
 	},
+	"openai-codex": ({ size = "md", className = "" }: IconProps) => {
+		const resolvedSize = resolveSize(size);
+		return (
+			<img
+				src="/images/codex.png"
+				alt="OpenAI Codex"
+				title="OpenAI Codex"
+				width={resolvedSize}
+				height={resolvedSize}
+				loading="lazy"
+				decoding="async"
+				className={className}
+			/>
+		);
+	},
 
 	vertex: ({ size = "md", className = "" }: IconProps) => {
 		const resolvedSize = resolveSize(size);
@@ -665,7 +695,7 @@ export const ProviderIcons = {
 				xmlns="http://www.w3.org/2000/svg"
 				className={className}
 			>
-				<title>Grok</title>
+				<title>xAI</title>
 				<path d="M6.469 8.776L16.512 23h-4.464L2.005 8.776H6.47zm-.004 7.9l2.233 3.164L6.467 23H2l4.465-6.324zM22 2.582V23h-3.659V7.764L22 2.582zM22 1l-9.952 14.095-2.233-3.163L17.533 1H22z"></path>
 			</svg>
 		);

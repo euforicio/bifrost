@@ -1,8 +1,8 @@
-import { SecretVarInput } from "@/components/ui/secretVarInput";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { ModelMultiselect } from "@/components/ui/modelMultiselect";
+import { SecretVarInput } from "@/components/ui/secretVarInput";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -16,6 +16,7 @@ import { DeploymentsTable } from "./deploymentsTable";
 
 // Providers that support batch APIs
 const BATCH_SUPPORTED_PROVIDERS = ["openai", "bedrock", "anthropic", "gemini", "azure", "vertex", "wafer"];
+const OLLAMA_CLOUD_URL = "https://ollama.com";
 
 interface Props {
 	control: Control<any>;
@@ -149,8 +150,14 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 	const isSGL = effectiveProvider === "sgl";
 	const isDeepseek = effectiveProvider === "deepseek";
 	const isFireworks = effectiveProvider === "fireworks";
+	const isOpenAICodex = effectiveProvider === "openai-codex";
+	const isXAI = effectiveProvider === "xai";
+	const isCursor = effectiveProvider === "cursor";
+	const nameLabel = isOpenAICodex || isCursor ? "Account name" : isXAI ? "Credential name" : "Name";
+	const namePlaceholder = isOpenAICodex ? "Work ChatGPT" : isCursor ? "Work Cursor" : isXAI ? "Production xAI" : "Production Key";
 	const isKeylessProvider = isOllama || isSGL;
 	const supportsBatchAPI = BATCH_SUPPORTED_PROVIDERS.includes(effectiveProvider);
+	const [ollamaMode, setOllamaMode] = useState<"local" | "cloud">("local");
 
 	// Auth type state for Azure: 'api_key', 'entra_id', or 'default_credential'
 	const [azureAuthType, setAzureAuthType] = useState<"api_key" | "entra_id" | "default_credential">("api_key");
@@ -165,6 +172,14 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 	const [vertexAuthType, setVertexAuthType] = useState<"service_account" | "service_account_json" | "api_key">("service_account");
 
 	// Detect auth type from existing form values when editing
+	useEffect(() => {
+		if (!isOllama || form.formState.isDirty) return;
+		const url = form.getValues("key.ollama_key_config.url")?.value?.replace(/\/$/, "");
+		const key = form.getValues("key.value");
+		const hasAPIKey = Boolean(key?.value || key?.ref);
+		setOllamaMode(url === OLLAMA_CLOUD_URL || (hasAPIKey && isRedacted(url ?? "")) ? "cloud" : "local");
+	}, [isOllama, form, form.formState.defaultValues]);
+
 	useEffect(() => {
 		if (form.formState.isDirty) return;
 		if (isAzure) {
@@ -253,9 +268,9 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 						name={`key.name`}
 						render={({ field }) => (
 							<FormItem>
-								<FormLabel>Name</FormLabel>
+								<FormLabel>{nameLabel}</FormLabel>
 								<FormControl>
-									<Input placeholder="Production Key" type="text" {...field} />
+									<Input placeholder={namePlaceholder} type="text" {...field} />
 								</FormControl>
 								<FormMessage />
 							</FormItem>
@@ -315,16 +330,25 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 				/>
 			</div>
 			{/* Hide API Key field for providers with dedicated auth tabs */}
-			{!isAzure && !isBedrock && !isBedrockMantle && !isVertex && (
+			{!isAzure && !isBedrock && !isBedrockMantle && !isVertex && !isOpenAICodex && !isCursor && (
 				<FormField
 					control={control}
 					name={`key.value`}
 					render={({ field }) => (
 						<FormItem>
-							<FormLabel>API Key {isVLLM ? "(Optional)" : ""}</FormLabel>
+							<FormLabel>API Key {isVLLM || isXAI || (isOllama && ollamaMode === "local") ? "(Optional)" : ""}</FormLabel>
 							<FormControl>
 								<SecretVarInput placeholder="API Key or env.MY_KEY" type="text" {...field} />
 							</FormControl>
+							{isXAI ? (
+								<FormDescription>Keep using an xAI API key, or leave this blank and connect an xAI account after saving.</FormDescription>
+							) : isOllama ? (
+								<FormDescription>
+									{ollamaMode === "cloud"
+										? "Required for Ollama Cloud. Create an API key in your Ollama account settings."
+										: "Optional for a local or self-hosted Ollama server that requires bearer authentication."}
+								</FormDescription>
+							) : null}
 							<FormMessage />
 						</FormItem>
 					)}
@@ -449,9 +473,15 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 							<FormItem data-testid="apikey-deployments-field">
 								<FormLabel>Deployments (Optional)</FormLabel>
 								<FormDescription>
-									Map a request model name to the provider&apos;s identifier (deployment name, inference profile ID, fine-tuned endpoint ID,
-									etc.). Expand a row to set the canonical model name, model family, and provider-specific overrides - these power
-									cost/pricing logs and family-based routing.
+									Map a request model name to the provider&apos;s identifier (deployment name, inference profile ID, etc.). Expand a row for
+									canonical name, model family, and provider overrides - these drive cost logs and family-based routing.
+									{isReplicate && (
+										<>
+											{" "}
+											Replicate deployments are listed only while &quot;Use Deployments Endpoint&quot; is on - otherwise type the owner/name
+											and press Enter.
+										</>
+									)}
 								</FormDescription>
 								<FormControl>
 									<div data-testid="apikey-deployments-table">
@@ -786,8 +816,11 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 								<div className="space-y-1.5">
 									<FormLabel>Use Deployments Endpoint</FormLabel>
 									<FormDescription>
-										Route requests through the Replicate deployments endpoint instead of the models endpoint.
+										Sends <strong>every</strong> model on this key to /v1/deployments/&#123;owner&#125;/&#123;name&#125;/predictions, so
+										plain model names stop working. To switch just one model, leave this off and set &quot;Use deployments endpoint&quot; on
+										its row above.
 									</FormDescription>
+									<FormMessage />
 								</div>
 								<FormControl>
 									<Switch checked={field.value ?? false} onCheckedChange={field.onChange} />
@@ -832,6 +865,35 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 			)}
 			{isKeylessProvider && (
 				<div className="space-y-4">
+					{isOllama && (
+						<FormItem>
+							<FormLabel>Connection</FormLabel>
+							<Tabs
+								value={ollamaMode}
+								onValueChange={(value) => {
+									const mode = value as "local" | "cloud";
+									setOllamaMode(mode);
+									form.setValue(
+										"key.ollama_key_config.url",
+										{ value: mode === "cloud" ? OLLAMA_CLOUD_URL : "http://localhost:11434", type: "plain_text" },
+										{ shouldDirty: true, shouldValidate: true },
+									);
+								}}
+							>
+								<TabsList className="flex w-full justify-start">
+									<TabsTrigger data-testid="apikey-ollama-local-tab" value="local">
+										Local / self-hosted
+									</TabsTrigger>
+									<TabsTrigger data-testid="apikey-ollama-cloud-tab" value="cloud">
+										Ollama Cloud
+									</TabsTrigger>
+								</TabsList>
+							</Tabs>
+							<FormDescription>
+								Cloud uses Ollama&apos;s hosted API with this key. Local mode connects directly to your own Ollama server.
+							</FormDescription>
+						</FormItem>
+					)}
 					<FormField
 						control={control}
 						name={`key.${isOllama ? "ollama_key_config" : "sgl_key_config"}.url`}
@@ -839,13 +901,18 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 							<FormItem>
 								<FormLabel>Server URL (Required)</FormLabel>
 								<FormDescription>
-									Base URL of the {isOllama ? "Ollama" : "SGLang"} server (e.g.{" "}
-									{isOllama ? "http://localhost:11434" : "http://localhost:30000"} or {isOllama ? "env.OLLAMA_URL" : "env.SGL_URL"})
+									{isOllama && ollamaMode === "cloud"
+										? `Ollama Cloud base URL. Keep this set to ${OLLAMA_CLOUD_URL}; Bifrost adds the /v1 endpoint path.`
+										: `Base URL of the ${isOllama ? "Ollama" : "SGLang"} server (e.g. ${
+												isOllama ? "http://localhost:11434" : "http://localhost:30000"
+											} or ${isOllama ? "env.OLLAMA_URL" : "env.SGL_URL"})`}
 								</FormDescription>
 								<FormControl>
 									<SecretVarInput
 										data-testid={`key-input-${isOllama ? "ollama" : "sgl"}-url`}
-										placeholder={isOllama ? "http://localhost:11434" : "http://localhost:30000"}
+										placeholder={
+											isOllama && ollamaMode === "cloud" ? OLLAMA_CLOUD_URL : isOllama ? "http://localhost:11434" : "http://localhost:30000"
+										}
 										{...field}
 									/>
 								</FormControl>

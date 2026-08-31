@@ -210,6 +210,7 @@ export const providersApi = baseApi.injectEndpoints({
 				method: "POST",
 				body: data,
 			}),
+			invalidatesTags: ["Models"],
 			async onQueryStarted(arg, { dispatch, queryFulfilled }) {
 				try {
 					const { data: newProvider } = await queryFulfilled;
@@ -230,7 +231,7 @@ export const providersApi = baseApi.injectEndpoints({
 				method: "PUT",
 				body,
 			}),
-			invalidatesTags: (result, error, arg) => [{ type: "ProviderKeys", id: arg.name }, "DBKeys", "VirtualKeys"],
+			invalidatesTags: (result, error, arg) => [{ type: "ProviderKeys", id: arg.name }, "Models", "DBKeys", "VirtualKeys"],
 			async onQueryStarted(arg, { dispatch, queryFulfilled }) {
 				try {
 					const { data: updatedProvider } = await queryFulfilled;
@@ -253,6 +254,7 @@ export const providersApi = baseApi.injectEndpoints({
 				method: "POST",
 				body: key,
 			}),
+			invalidatesTags: ["Models"],
 			async onQueryStarted({ provider }, { dispatch, queryFulfilled }) {
 				try {
 					const { data: newKey } = await queryFulfilled;
@@ -288,6 +290,7 @@ export const providersApi = baseApi.injectEndpoints({
 				method: "PUT",
 				body: key,
 			}),
+			invalidatesTags: ["Models"],
 			async onQueryStarted({ provider, keyId }, { dispatch, queryFulfilled }) {
 				try {
 					const { data: updatedKey } = await queryFulfilled;
@@ -321,6 +324,7 @@ export const providersApi = baseApi.injectEndpoints({
 				url: `/providers/${encodeURIComponent(provider)}/keys/${encodeURIComponent(keyId)}`,
 				method: "DELETE",
 			}),
+			invalidatesTags: ["Models"],
 			async onQueryStarted({ provider, keyId }, { dispatch, queryFulfilled }) {
 				try {
 					await queryFulfilled;
@@ -350,7 +354,7 @@ export const providersApi = baseApi.injectEndpoints({
 				url: `/providers/${encodeURIComponent(provider)}`,
 				method: "DELETE",
 			}),
-			invalidatesTags: ["VirtualKeys"],
+			invalidatesTags: ["Models", "VirtualKeys"],
 			async onQueryStarted(providerName, { dispatch, queryFulfilled }) {
 				try {
 					await queryFulfilled;
