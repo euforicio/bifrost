@@ -256,6 +256,6 @@ yarn-error.log*
 ui/app/routeTree.gen.ts
 
 
-bifrost-migration-cli
+/bifrost-migration-cli
 
 tests/e2e/clis/reports

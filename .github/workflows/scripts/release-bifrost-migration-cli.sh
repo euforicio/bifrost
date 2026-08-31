@@ -33,6 +33,20 @@ echo "✅ bifrost-migration-cli build validation successful"
 echo "🔨 Building executables..."
 bash "$SCRIPT_DIR/build-bifrost-migration-cli-executables.sh" "$VERSION"
 
+# Prepare an unambiguous GitHub release artifact.
+ASSET_NAME="bifrost-migration-cli_v${VERSION}_linux_amd64"
+RELEASE_ASSET_DIR="$(mktemp -d)"
+install -m 0755 \
+  "$REPO_ROOT/dist/linux/amd64/bifrost-migration-cli" \
+  "$RELEASE_ASSET_DIR/$ASSET_NAME"
+(
+  cd "$RELEASE_ASSET_DIR"
+  sha256sum "$ASSET_NAME" > "$ASSET_NAME.sha256"
+  sha256sum -c "$ASSET_NAME.sha256"
+)
+"$RELEASE_ASSET_DIR/$ASSET_NAME" version |
+  grep -Fx "bifrost-migration-cli v${VERSION} (${COMMIT})"
+
 # --- Preflight checks (no side effects) ---
 
 # Capturing changelog
@@ -83,11 +97,6 @@ fi
 
 # --- Publish steps (all checks passed) ---
 
-# Configure and upload to R2
-echo "📤 Uploading binaries..."
-bash "$SCRIPT_DIR/configure-r2.sh"
-bash "$SCRIPT_DIR/upload-bifrost-migration-cli-to-r2.sh" "$TAG_NAME"
-
 # Create and push tag
 if git rev-parse -q --verify "refs/tags/$TAG_NAME" >/dev/null; then
   echo "ℹ️ Tag $TAG_NAME already exists. Reusing it."
@@ -125,10 +134,32 @@ if gh release view "$TAG_NAME" >/dev/null 2>&1; then
 else
   echo "🎉 Creating GitHub release for $TITLE..."
   gh release create "$TAG_NAME" \
+    --verify-tag \
     --title "$TITLE" \
     --notes "$BODY" \
     ${PRERELEASE_FLAG}
 fi
+
+# Attach and then independently re-download the production artifact.
+gh release upload "$TAG_NAME" \
+  "$RELEASE_ASSET_DIR/$ASSET_NAME" \
+  "$RELEASE_ASSET_DIR/$ASSET_NAME.sha256" \
+  --clobber
+
+VERIFY_DIR="$(mktemp -d)"
+gh release download "$TAG_NAME" \
+  --pattern "$ASSET_NAME" \
+  --pattern "$ASSET_NAME.sha256" \
+  --dir "$VERIFY_DIR"
+(
+  cd "$VERIFY_DIR"
+  sha256sum -c "$ASSET_NAME.sha256"
+)
+
+# Update R2 only after the canonical GitHub artifact is verified.
+echo "📤 Uploading binaries..."
+bash "$SCRIPT_DIR/configure-r2.sh"
+bash "$SCRIPT_DIR/upload-bifrost-migration-cli-to-r2.sh" "$TAG_NAME"
 
 echo "✅ Bifrost Migration CLI released successfully"
 

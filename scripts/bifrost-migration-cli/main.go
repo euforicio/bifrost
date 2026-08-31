@@ -17,10 +17,17 @@ var (
 	commit  = "none"
 )
 
-// main parses CLI flags and runs all LiteLLM entity migrations in order.
+// main dispatches the whole-database SQLite migration command or, for backward
+// compatibility, runs all LiteLLM entity migrations in order.
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "version" {
 		fmt.Printf("bifrost-migration-cli %s (%s)\n", version, commit)
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "sqlite-to-postgres" {
+		if err := runSQLiteToPostgres(os.Args[2:]); err != nil {
+			log.Fatalf("sqlite-to-postgres: %v", err)
+		}
 		return
 	}
 
