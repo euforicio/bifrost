@@ -1,1 +1,1 @@
-- feat: add transactional SQLite config and logs migration to PostgreSQL with post-copy verification
+- feat: add transactional SQLite config and logs migration, one-shot native PostgreSQL schema initialization, and post-copy verification

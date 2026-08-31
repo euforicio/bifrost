@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"reflect"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/maximhq/bifrost/framework/logstore"
 	"github.com/maximhq/bifrost/framework/postgresconn"
+	"github.com/maximhq/bifrost/scripts/bifrost-migration-cli/nativepostgres"
 	migration "github.com/maximhq/bifrost/scripts/bifrost-migration-cli/sqlitetopostgres"
 )
 
@@ -59,7 +61,7 @@ func TestNativeBifrostSchemasRoundTrip(t *testing.T) {
 	nativePGConfig := parsed.Copy()
 	nativePGConfig.Database = databaseName
 	connection := nativeStoreConnection(nativePGConfig)
-	nativeDSN := postgresconn.BuildDSN(&connection)
+	nativeDSN := postgresDatabaseURL(t, baseDSN, databaseName)
 	logger := bifrost.NewDefaultLogger(schemas.LogLevelError)
 
 	configPath := t.TempDir() + "/config.db"
@@ -79,26 +81,13 @@ func TestNativeBifrostSchemasRoundTrip(t *testing.T) {
 	}, logger)
 	mustNoError(t, err)
 	mustNoError(t, logsSQLite.Close(ctx))
+	seedSQLiteConfigClient(t, configPath)
 	setSQLiteSequenceHighWater(t, configPath, "config_client", 500)
 
-	configPostgres, err := configstore.NewConfigStore(ctx, &configstore.Config{
-		Enabled: true,
-		Type:    configstore.ConfigStoreTypePostgres,
-		Config:  &connection,
-	}, logger)
-	mustNoError(t, err)
-	mustNoError(t, configPostgres.Close(ctx))
-	logsPostgres, err := logstore.NewLogStore(ctx, &logstore.Config{
-		Enabled:       true,
-		Type:          logstore.LogStoreTypePostgres,
-		RetentionDays: 30,
-		Config: &logstore.PostgresConfig{
-			Config:                 connection,
-			MatViewRefreshInterval: "off",
-		},
-	}, logger)
-	mustNoError(t, err)
-	mustNoError(t, logsPostgres.Close(ctx))
+	mustNoError(t, nativepostgres.Initialize(ctx, nativeDSN, "public", logger))
+	// Native initialization is intentionally idempotent while all mapped business
+	// tables are empty. Only the shared migration ledger may contain rows.
+	mustNoError(t, nativepostgres.Initialize(ctx, nativeDSN, "public", logger))
 
 	snapshots, err := migration.CreateSnapshots(ctx, configPath, logsPath, t.TempDir()+"/rollback")
 	mustNoError(t, err)
@@ -111,6 +100,9 @@ func TestNativeBifrostSchemasRoundTrip(t *testing.T) {
 	mustNoError(t, err)
 	if !reflect.DeepEqual(report, verified) {
 		t.Fatalf("native verification report differs:\nmigrate=%#v\nverify=%#v", report, verified)
+	}
+	if err := nativepostgres.Initialize(ctx, nativeDSN, "public", logger); err == nil || !strings.Contains(err.Error(), "config_client") {
+		t.Fatalf("native initializer did not refuse populated migrated schema: %v", err)
 	}
 
 	verification, err := pgx.Connect(ctx, nativeDSN)
@@ -142,6 +134,24 @@ func TestNativeBifrostSchemasRoundTrip(t *testing.T) {
 	}, logger)
 	mustNoError(t, err)
 	mustNoError(t, logsRuntime.Close(ctx))
+}
+
+func postgresDatabaseURL(t *testing.T, baseDSN, databaseName string) string {
+	t.Helper()
+	parsed, err := url.Parse(baseDSN)
+	mustNoError(t, err)
+	parsed.Path = "/" + databaseName
+	parsed.RawPath = ""
+	return parsed.String()
+}
+
+func seedSQLiteConfigClient(t *testing.T, path string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", path)
+	mustNoError(t, err)
+	defer db.Close()
+	_, err = db.Exec(`INSERT INTO config_client (created_at, updated_at) VALUES (?, ?)`, time.Now().UTC(), time.Now().UTC())
+	mustNoError(t, err)
 }
 
 func nativeStoreConnection(config *pgx.ConnConfig) postgresconn.Config {
