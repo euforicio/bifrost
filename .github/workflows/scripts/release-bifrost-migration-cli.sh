@@ -156,10 +156,15 @@ gh release download "$TAG_NAME" \
   sha256sum -c "$ASSET_NAME.sha256"
 )
 
-# Update R2 only after the canonical GitHub artifact is verified.
-echo "📤 Uploading binaries..."
-bash "$SCRIPT_DIR/configure-r2.sh"
-bash "$SCRIPT_DIR/upload-bifrost-migration-cli-to-r2.sh" "$TAG_NAME"
+# Update R2 only after the canonical GitHub artifact is verified. Fork releases
+# intentionally stop at GitHub; the canonical repository must still publish R2.
+if [[ "${BIFROST_MIGRATION_PUBLISH_R2:-true}" == "true" ]]; then
+  echo "📤 Uploading binaries..."
+  bash "$SCRIPT_DIR/configure-r2.sh"
+  bash "$SCRIPT_DIR/upload-bifrost-migration-cli-to-r2.sh" "$TAG_NAME"
+else
+  echo "ℹ️ Skipping R2 upload outside the canonical repository"
+fi
 
 echo "✅ Bifrost Migration CLI released successfully"
 
