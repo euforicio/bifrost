@@ -2,6 +2,11 @@ name: Roll back Orion
 
 on:
   workflow_dispatch:
+    inputs:
+      image:
+        description: "Previously deployed ghcr.io/euforicio/bifrost@sha256:... reference"
+        required: true
+        type: string
 
 concurrency:
   group: bifrost-orion-production
@@ -9,12 +14,11 @@ concurrency:
 
 permissions:
   contents: read
-  packages: read
 
 jobs:
   rollback:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment:
       name: orion-production
       url: https://bifrost.riftlabs.app
@@ -27,39 +31,21 @@ jobs:
         with:
           egress-policy: block
           allowed-endpoints: >
-            31.97.143.81:22
-            bifrost.riftlabs.app:443
-            ghcr.io:443
+            api.github.com:443
+            github.com:443
 
-      - name: Checkout pinned host key
+      - name: Checkout Bifrost deployment helper
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Restore the preceding image and data snapshot
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ORION_SSH_KEY: ${{ secrets.ORION_SSH_KEY }}
-        run: |
-          key=$(mktemp)
-          trap 'rm -f -- "$key"' EXIT
-          printf '%s\n' "$ORION_SSH_KEY" > "$key"
-          chmod 0600 "$key"
-          printf '%s' "$GHCR_TOKEN" | ssh \
-            -i "$key" \
-            -o BatchMode=yes \
-            -o ConnectTimeout=10 \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile=deploy/orion/known_hosts \
-            "$ORION_USER@$ORION_HOST" \
-            "SSH_ORIGINAL_COMMAND='rollback ${GITHUB_ACTOR}' /usr/local/sbin/bifrost-deploy"
+      - name: Checkout Orion GitOps repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: euforicio/orion-infra
+          ref: main
+          token: ${{ secrets.ORION_INFRA_TOKEN }}
+          path: orion-infra
 
-      - name: Verify public health and authentication
-        run: |
-          curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-            --retry-all-errors \
-            https://bifrost.riftlabs.app/health >/dev/null
-          [[ $(curl --silent --output /dev/null --write-out '%{http_code}' \
-            https://bifrost.riftlabs.app/api/config) == 401 ]]
-          curl --fail --silent --show-error \
-            https://bifrost.riftlabs.app/api/session/is-auth-enabled \
-            | grep -q '"is_auth_enabled":true'
+      - name: Promote selected rollback image through GitOps
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: deploy/orion/orion-push.sh "$IMAGE" orion-infra "$GITHUB_ACTOR"
