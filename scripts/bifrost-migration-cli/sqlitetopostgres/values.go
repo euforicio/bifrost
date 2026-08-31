@@ -297,7 +297,7 @@ func convertFloat(value any) (float64, error) {
 
 func convertTime(value any, dataType string) (any, error) {
 	if typed, ok := value.(time.Time); ok {
-		return typed, nil
+		return postgresTime(typed, dataType), nil
 	}
 	text := strings.TrimSpace(stringValue(value))
 	layouts := []string{
@@ -315,10 +315,20 @@ func convertTime(value any, dataType string) (any, error) {
 			if dataType == "timestamp without time zone" && parsed.Location() != time.UTC {
 				parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), parsed.Hour(), parsed.Minute(), parsed.Second(), parsed.Nanosecond(), time.UTC)
 			}
-			return parsed, nil
+			return postgresTime(parsed, dataType), nil
 		}
 	}
 	return nil, fmt.Errorf("invalid %s value %q", dataType, text)
+}
+
+func postgresTime(value time.Time, dataType string) time.Time {
+	if dataType == "date" {
+		return value
+	}
+	// PostgreSQL timestamps and pgx's binary timestamp codec retain microseconds.
+	// Normalize before COPY and fingerprinting so SQLite nanoseconds cannot make
+	// a successfully stored value fail the post-copy fidelity check.
+	return value.Truncate(time.Microsecond)
 }
 
 func convertArray(udtName string, value any) (any, error) {

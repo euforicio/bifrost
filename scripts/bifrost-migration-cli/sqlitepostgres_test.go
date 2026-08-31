@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestSQLiteToPostgresUsageIncludesNativeInitializer(t *testing.T) {
+	t.Parallel()
+
+	err := runSQLiteToPostgres(nil)
+	if err == nil || !strings.Contains(err.Error(), "initialize") {
+		t.Fatalf("sqlite-to-postgres usage does not advertise initialize: %v", err)
+	}
+}
+
+func TestResolvePostgresEnvironmentRequiresMigrationDSN(t *testing.T) {
+	t.Setenv(postgresDSNEnv, "")
+
+	_, err := resolvePostgresEnvironment(false)
+	if err == nil || err.Error() != postgresDSNEnv+" is required" {
+		t.Fatalf("missing initializer DSN error = %v", err)
+	}
+}
+
 func TestValidatePostgresTransportRequiresVerifiedTLS(t *testing.T) {
 	t.Parallel()
 

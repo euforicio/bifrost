@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/scripts/bifrost-migration-cli/nativepostgres"
 	"github.com/maximhq/bifrost/scripts/bifrost-migration-cli/sqlitetopostgres"
 )
 
@@ -19,16 +21,43 @@ const postgresDSNEnv = "BIFROST_MIGRATION_POSTGRES_DSN"
 
 func runSQLiteToPostgres(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("expected migrate or verify subcommand")
+		return fmt.Errorf("expected initialize, migrate, or verify subcommand")
 	}
 	switch args[0] {
+	case "initialize":
+		return runSQLiteToPostgresInitialize(args[1:])
 	case "migrate":
 		return runSQLiteToPostgresMigrate(args[1:])
 	case "verify":
 		return runSQLiteToPostgresVerify(args[1:])
 	default:
-		return fmt.Errorf("unknown subcommand %q; expected migrate or verify", args[0])
+		return fmt.Errorf("unknown subcommand %q; expected initialize, migrate, or verify", args[0])
 	}
+}
+
+func runSQLiteToPostgresInitialize(args []string) error {
+	flags := flag.NewFlagSet("sqlite-to-postgres initialize", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	allowInsecurePostgres := flags.Bool("allow-insecure-postgres", false, "allow sslmode=disable only for an explicit loopback PostgreSQL URL")
+	schema := flags.String("schema", "public", "empty PostgreSQL schema (native initialization supports public)")
+	timeout := flags.Duration("timeout", 15*time.Minute, "native schema initialization timeout")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected positional arguments: %s", strings.Join(flags.Args(), " "))
+	}
+	dsn, err := resolvePostgresEnvironment(*allowInsecurePostgres)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
+	defer cancel()
+	if err := nativepostgres.Initialize(ctx, dsn, *schema, nativeSchemaLogger{}); err != nil {
+		return err
+	}
+	fmt.Println("sqlite-to-postgres: native PostgreSQL schema initialized; destination business tables are empty")
+	return nil
 }
 
 func runSQLiteToPostgresMigrate(args []string) error {
@@ -117,6 +146,17 @@ func resolvePostgresDSN(flagValue string, allowInsecure bool) (string, error) {
 	return dsn, nil
 }
 
+func resolvePostgresEnvironment(allowInsecure bool) (string, error) {
+	dsn := strings.TrimSpace(os.Getenv(postgresDSNEnv))
+	if dsn == "" {
+		return "", fmt.Errorf("%s is required", postgresDSNEnv)
+	}
+	if err := validatePostgresTransport(dsn, allowInsecure); err != nil {
+		return "", err
+	}
+	return dsn, nil
+}
+
 func validatePostgresTransport(rawDSN string, allowInsecure bool) error {
 	parsed, err := url.Parse(rawDSN)
 	if err != nil || (parsed.Scheme != "postgres" && parsed.Scheme != "postgresql") || parsed.Hostname() == "" {
@@ -138,7 +178,7 @@ func validatePostgresTransport(rawDSN string, allowInsecure bool) error {
 
 	config, err := pgx.ParseConfig(rawDSN)
 	if err != nil {
-		return fmt.Errorf("parse PostgreSQL URL: %w", err)
+		return fmt.Errorf("invalid PostgreSQL URL")
 	}
 	expectedPort := uint16(5432)
 	if port := parsed.Port(); port != "" {
@@ -181,4 +221,17 @@ func printSQLitePostgresReport(status, snapshotDir string, report sqlitetopostgr
 	for _, table := range report.Tables {
 		fmt.Printf("%s.%s: sqlite=%d postgres=%d digest=%s\n", table.Store, table.Table, table.SourceRows, table.TargetRows, table.Digest)
 	}
+}
+
+type nativeSchemaLogger struct{}
+
+func (nativeSchemaLogger) Debug(string, ...any)                   {}
+func (nativeSchemaLogger) Info(string, ...any)                    {}
+func (nativeSchemaLogger) Warn(string, ...any)                    {}
+func (nativeSchemaLogger) Error(string, ...any)                   {}
+func (nativeSchemaLogger) Fatal(string, ...any)                   {}
+func (nativeSchemaLogger) SetLevel(schemas.LogLevel)              {}
+func (nativeSchemaLogger) SetOutputType(schemas.LoggerOutputType) {}
+func (nativeSchemaLogger) LogHTTPRequest(schemas.LogLevel, string) schemas.LogEventBuilder {
+	return schemas.NoopLogEvent
 }
