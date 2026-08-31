@@ -1,1 +1,1 @@
-- feat: initial release of the Bifrost migration CLI
+- feat: add transactional SQLite config and logs migration to PostgreSQL with post-copy verification

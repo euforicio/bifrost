@@ -1,6 +1,6 @@
 ---
 title: "Overview"
-description: "What carries over from open-source Bifrost, what changes, and how to migrate your SQLite config store to PostgreSQL before upgrading."
+description: "What carries over from open-source Bifrost, what changes, and how to migrate both SQLite stores to PostgreSQL before upgrading."
 icon: "book"
 ---
 
@@ -36,71 +36,102 @@ Anything that lives in `config.json` works identically in Enterprise - same sche
 
 Open-source Bifrost ships with a SQLite store as the zero-config default. Enterprise requires PostgreSQL for both the config store and the log store. Any production-grade PostgreSQL distribution works: Amazon RDS, Aurora PostgreSQL, Google Cloud SQL, AlloyDB, Azure Database for PostgreSQL, Crunchy Bridge, or self-managed PG 16+.
 
-### Migrating SQLite to PostgreSQL with pgloader
+### Migrate both SQLite stores with the Bifrost migration CLI
 
-[`pgloader`](https://github.com/dimitri/pgloader) is the recommended one-shot migration tool. It reads the SQLite file directly, translates the schema, and streams data into PostgreSQL using the native `COPY` protocol in a single command. It also handles type mapping and skips bad rows instead of aborting the whole load.
+Bifrost keeps configuration and logs in separate SQLite files (`config.db` and `logs.db` by default). Use the Bifrost migration CLI so both databases are copied into one PostgreSQL transaction. The command discovers every source table and relationship from the retained SQLite snapshots and compares them with the schema created by Bifrost's native PostgreSQL migrations.
 
-**Install pgloader:**
+Before running it:
 
-```bash
-# Debian / Ubuntu
-sudo apt-get install pgloader
+- Stop every Bifrost process that can write either SQLite file and keep it stopped through verification.
+- Run the same Bifrost release against SQLite first so both migration ledgers are current.
+- Provision a UTF8 PostgreSQL 16 or later database. Initialize an empty schema with the **same Bifrost release's native PostgreSQL migrations**, then stop the initializer before it accepts traffic or synchronizes configuration. The mapped business tables must be empty; migration-ledger rows are expected.
+- Use one PostgreSQL database and schema for both destination stores. This is what lets the CLI commit configuration, logs, sequence resets, and verification atomically.
+- Give the migration role ownership of the destination schema, or equivalent permissions to lock, select, insert, update, and use its sequences.
+- Require `sslmode=verify-full` with a trusted CA file. The migration CLI rejects weaker remote transport and endpoint-override parameters; `--allow-insecure-postgres` is restricted to explicit loopback development.
 
-# macOS
-brew install pgloader
-
-# Or run via Docker
-docker run --rm -v "$PWD":/data dimitri/pgloader \
-  pgloader /data/migrate.load
-```
-
-**One-shot migration (CLI form):**
+Keep the DSN out of shell history by passing it through the environment. The snapshot directory must be a new path:
 
 ```bash
-pgloader \
-  ./bifrost.db \
-  postgresql://bifrost:PASSWORD@postgres-host:5432/bifrost
+export BIFROST_MIGRATION_POSTGRES_DSN='postgresql://bifrost:<PASSWORD>@postgres-host:5432/bifrost?sslmode=verify-full&sslrootcert=/etc/bifrost/postgres-ca.crt'
+
+./bifrost-migration-cli sqlite-to-postgres migrate \
+  --config-sqlite /app/data/config.db \
+  --logs-sqlite /app/data/logs.db \
+  --snapshot-dir /secure/rollback/bifrost-sqlite-2026-08-30 \
+  --schema public
 ```
 
-**Reusable migration script (`migrate.load`):**
+The command creates consistent online-backup snapshots of each stopped SQLite database, retains them with their SHA-256 hashes, and then starts the PostgreSQL transaction. It fails closed on a schema or relationship mismatch, an unvalidated PostgreSQL constraint, any pre-existing row in a mapped destination table, a conversion error, or a count/content mismatch. A failure rolls back the entire PostgreSQL transaction and leaves the SQLite source files and retained snapshots untouched.
 
-```text
-LOAD DATABASE
-  FROM   sqlite:///var/bifrost/data/bifrost.db
-  INTO   postgresql://bifrost:PASSWORD@postgres-host:5432/bifrost
-
-WITH    include drop, create tables, create indexes, reset sequences
-SET     work_mem to '256MB', maintenance_work_mem to '512MB';
-```
+Run the independent read-only verification before starting Bifrost on PostgreSQL:
 
 ```bash
-pgloader migrate.load
+./bifrost-migration-cli sqlite-to-postgres verify \
+  --snapshot-dir /secure/rollback/bifrost-sqlite-2026-08-30 \
+  --schema public
 ```
 
-<Note>
-pgloader is a one-shot loader, not a continuous replicator. Stop the OSS Bifrost gateway before running the migration so no writes land in SQLite after the snapshot is taken. For databases under 10 GB this typically completes in well under an hour.
-</Note>
+Verification re-discovers both schemas and checks every copied value, every mapped table count, migration IDs and timestamps, and every PostgreSQL foreign-key relationship. A successful migration cannot be merged into or overwrite existing destination business data; rerunning `migrate` against the populated target fails closed.
 
-**Reference:** [pgloader SQLite documentation](https://pgloader.readthedocs.io/en/latest/ref/sqlite.html), [Render's SQLite-to-Postgres guide](https://render.com/articles/how-to-migrate-from-sqlite-to-postgresql).
+<Warning>
+Do not delete `config.db`, `logs.db`, or the retained snapshot directory during the rollback window. To roll back, stop Bifrost, restore the pre-cutover SQLite configuration, and start only the original SQLite-backed release.
+</Warning>
 
 ### After the migration
 
-Point Bifrost Enterprise at the new PostgreSQL DSN in your `config.json` (or the equivalent Helm value). Boot a single Enterprise pod first and confirm it migrates the schema cleanly before scaling out - see [Sizing & redundancy](/enterprise/moving-from-oss/sizing) for the recommended pod and DB shapes.
+Point both stores at the same migrated PostgreSQL database in `config.json` (or the equivalent Helm values). The runtime contract uses discrete connection fields rather than a DSN:
+
+```json
+{
+  "config_store": {
+    "enabled": true,
+    "type": "postgres",
+    "config": {
+      "host": "env.PG_HOST",
+      "port": "5432",
+      "user": "env.PG_USER",
+      "password": "env.PG_PASSWORD",
+      "db_name": "bifrost",
+      "ssl_mode": "verify-full",
+      "max_idle_conns": 2,
+      "max_open_conns": 5
+    }
+  },
+  "logs_store": {
+    "enabled": true,
+    "type": "postgres",
+    "config": {
+      "host": "env.PG_HOST",
+      "port": "5432",
+      "user": "env.PG_USER",
+      "password": "env.PG_PASSWORD",
+      "db_name": "bifrost",
+      "ssl_mode": "verify-full",
+      "max_idle_conns": 2,
+      "max_open_conns": 5
+    }
+  }
+}
+```
+
+Set `PGSSLROOTCERT=/etc/bifrost/postgres-ca.crt` in the runtime environment and mount that file read-only from the same trusted CA used by the migration CLI. These limits bound the two independent runtime pools to 10 open connections in total per Bifrost pod, leaving headroom on a 50-connection PostgreSQL service for migrations, administration, and recovery. Native schema initialization uses a separate short-lived pool capped at 2 open and 1 idle connection; the migration CLI itself holds one PostgreSQL connection. Keep the first boot to one pod, then include the 10-connections-per-pod budget when scaling.
+
+Boot one Enterprise pod first and validate health and representative configuration/log reads before scaling out. See [Storage configuration](/deployment-guides/config-json/storage) for the complete connection contract and [Sizing & redundancy](/enterprise/moving-from-oss/sizing) for the recommended pod and database shapes.
 
 ## Pre-flight checklist
 
 <Steps>
-<Step title="Snapshot your SQLite file">
-  Stop the OSS gateway and copy `bifrost.db` to a safe location. This is your rollback point.
+<Step title="Quiesce and update SQLite">
+  Run the same release against SQLite, then stop every writer to both `config.db` and `logs.db`.
 </Step>
-<Step title="Provision PostgreSQL">
-  Pick a production-grade PostgreSQL service. See [Sizing](/enterprise/moving-from-oss/sizing) for hardware recommendations.
+<Step title="Initialize an empty PostgreSQL schema">
+  Use PostgreSQL 16 or later and the same Bifrost release's native migrations. Do not allow traffic or configuration synchronization into the destination.
 </Step>
-<Step title="Run pgloader">
-  Migrate the SQLite snapshot into PostgreSQL with the command above. Verify row counts on a couple of representative tables.
+<Step title="Migrate and verify both databases">
+  Run `sqlite-to-postgres migrate`, retain its two snapshots and hashes, then run `sqlite-to-postgres verify` before first boot.
 </Step>
-<Step title="Point Enterprise at the new DSN">
-  Update the database URL in `config.json` (or your Helm values) to the PostgreSQL DSN.
+<Step title="Point both stores at PostgreSQL">
+  Configure `config_store` and `logs_store` with the same database, boot one pod, and validate health and representative reads.
 </Step>
 <Step title="Apply hardening before exposing the gateway">
   Work through [Security hardening](/enterprise/moving-from-oss/security-hardening) before allowing inference traffic.

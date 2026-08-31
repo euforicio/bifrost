@@ -55,6 +55,20 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    services:
+      postgres:
+        image: postgres:17.11-bookworm@sha256:051f7b7b3abdd564d5d1bd1e8c4b9c1b6e77087d1dd22020ede611c096a272e0
+        env:
+          POSTGRES_DB: bifrost_migration_test
+          POSTGRES_PASSWORD: bifrost_test_password
+          POSTGRES_USER: bifrost
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U bifrost -d bifrost_migration_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Harden the runner (Audit all outbound calls)
         uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
@@ -75,8 +89,11 @@ jobs:
       - name: Run bifrost-migration-cli tests
         working-directory: scripts/bifrost-migration-cli
         env:
+          BIFROST_MIGRATION_TEST_POSTGRES_DSN: postgresql://bifrost:bifrost_test_password@127.0.0.1:5432/bifrost_migration_test?sslmode=disable
           GOWORK: "off"
-        run: go test ./...
+        run: |
+          go test ./...
+          (cd native-e2e && go test ./...)
 
   release-bifrost-migration-cli:
     needs: [check-version, test-bifrost-migration-cli]
