@@ -282,7 +282,8 @@ func TestCursorUsageSendsProtocolHeadersDecodesFieldsAndRetriesOnce(t *testing.T
 	require.NotNil(t, usage.Plan.BillingCycleEnd)
 	require.NotNil(t, usage.OnDemand)
 	require.True(t, usage.OnDemand.Enabled)
-	require.Equal(t, float64(5000), *usage.OnDemand.Limit)
+	require.True(t, usage.OnDemand.CanUpdate)
+	require.Equal(t, float64(10000), *usage.OnDemand.Limit)
 	require.NotNil(t, usage.ResetCredits)
 	require.Equal(t, int64(2), usage.ResetCredits.AvailableCount)
 }
@@ -335,6 +336,107 @@ func TestCursorUsagePreservesCurrentPeriodWhenAuxiliaryReadsFail(t *testing.T) {
 	require.Len(t, usage.Quotas, 5)
 	require.Nil(t, usage.Plan)
 	require.NotNil(t, usage.OnDemand)
+}
+
+func TestCursorOnDemandUpdateWritesAndVerifiesHardLimit(t *testing.T) {
+	var getCalls atomic.Int64
+	var setCalls atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer access-token", r.Header.Get("Authorization"))
+		require.Equal(t, "application/proto", r.Header.Get("Content-Type"))
+		switch r.URL.Path {
+		case cursorCurrentPeriodUsagePath:
+			_, _ = w.Write(cursorUsageFixture(t))
+		case cursorHardLimitPath:
+			call := getCalls.Add(1)
+			response := appendProtoVarint(nil, 1, 200)
+			response = appendProtoVarint(response, 2, 1)
+			if call > 1 {
+				response = appendProtoVarint(nil, 1, 150)
+				response = appendProtoVarint(response, 2, 0)
+			}
+			_, _ = w.Write(response)
+		case cursorSetHardLimitPath:
+			setCalls.Add(1)
+			body, err := io.ReadAll(r.Body)
+			require.NoError(t, err)
+			request, err := decodeCursorSetHardLimitRequest(body)
+			require.NoError(t, err)
+			require.Equal(t, int32(150), request.hardLimitDollars)
+			require.False(t, request.noUsageBasedAllowed)
+			require.True(t, request.preserveHardLimitPerUser)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	_, db := newTestManager(t, server)
+	manager := NewManager(databaseStore{db: db}, WithHTTPClient(server.Client()), WithCursorEndpoints(server.URL, server.URL), WithUsageEndpoints("", server.URL))
+	expiresAt := time.Now().Add(time.Hour)
+	require.NoError(t, db.Create(&tables.TableProviderCredential{
+		CredentialID: "cursor-key", Provider: string(ProviderCursor), ProviderKeyID: "cursor-key", AuthMode: "pkce_browser",
+		AccessToken: "access-token", RefreshToken: "refresh-token", ExpiresAt: &expiresAt, Status: StatusConnected, Version: 1,
+	}).Error)
+	expectedEnabled := false
+	expectedLimit := int32(200)
+
+	updated, err := manager.UpdateOnDemand(context.Background(), ProviderCursor, "cursor-key", UpdateCredentialOnDemandRequest{
+		Enabled:              true,
+		LimitDollars:         150,
+		ExpectedEnabled:      &expectedEnabled,
+		ExpectedLimitDollars: &expectedLimit,
+	})
+	require.NoError(t, err)
+	require.True(t, updated.Enabled)
+	require.True(t, updated.CanUpdate)
+	require.Equal(t, float64(15000), *updated.Limit)
+	require.Equal(t, int64(2), getCalls.Load())
+	require.Equal(t, int64(1), setCalls.Load())
+}
+
+func TestCursorOnDemandUpdateRejectsStaleAndOrganizationManagedSettings(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		response   []byte
+		expected   error
+		expectedOn bool
+	}{
+		{name: "stale", response: appendProtoVarint(appendProtoVarint(nil, 1, 200), 2, 0), expected: ErrOnDemandConflict, expectedOn: false},
+		{name: "organization managed", response: appendProtoVarint(appendProtoVarint(nil, 1, 200), 10, 1), expected: ErrOnDemandManagedByOrg, expectedOn: true},
+		{name: "dynamic team limit", response: appendProtoVarint(appendProtoVarint(nil, 1, 200), 5, 1), expected: ErrOnDemandManagedByOrg, expectedOn: true},
+		{name: "per user limit", response: appendProtoVarint(appendProtoVarint(nil, 1, 200), 3, 100), expected: ErrOnDemandManagedByOrg, expectedOn: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var setCalls atomic.Int64
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case cursorCurrentPeriodUsagePath:
+					_, _ = w.Write(cursorUsageFixture(t))
+				case cursorHardLimitPath:
+					_, _ = w.Write(test.response)
+				case cursorSetHardLimitPath:
+					setCalls.Add(1)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			_, db := newTestManager(t, server)
+			manager := NewManager(databaseStore{db: db}, WithHTTPClient(server.Client()), WithCursorEndpoints(server.URL, server.URL), WithUsageEndpoints("", server.URL))
+			expiresAt := time.Now().Add(time.Hour)
+			require.NoError(t, db.Create(&tables.TableProviderCredential{
+				CredentialID: "cursor-key", Provider: string(ProviderCursor), ProviderKeyID: "cursor-key", AuthMode: "pkce_browser",
+				AccessToken: "access-token", RefreshToken: "refresh-token", ExpiresAt: &expiresAt, Status: StatusConnected, Version: 1,
+			}).Error)
+			expectedEnabled := test.expectedOn
+			expectedLimit := int32(200)
+			_, err := manager.UpdateOnDemand(context.Background(), ProviderCursor, "cursor-key", UpdateCredentialOnDemandRequest{
+				Enabled: true, LimitDollars: 150, ExpectedEnabled: &expectedEnabled, ExpectedLimitDollars: &expectedLimit,
+			})
+			require.ErrorIs(t, err, test.expected)
+			require.Zero(t, setCalls.Load())
+		})
+	}
 }
 
 func cursorUsageFixture(t *testing.T) []byte {

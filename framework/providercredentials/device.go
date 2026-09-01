@@ -310,7 +310,7 @@ func (m *Manager) refreshTokens(ctx context.Context, provider schemas.ModelProvi
 	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refreshToken}, "client_id": {xAIClientID}}
 	tokens, state, err := m.postTokenForm(ctx, m.endpoints.xAITokenURL, form)
 	if state == "invalid_grant" || state == "access_denied" || state == "expired_token" {
-		return tokenSet{}, errors.New("xAI authentication expired")
+		return tokenSet{}, err
 	}
 	return tokens, err
 }
@@ -343,7 +343,7 @@ func (m *Manager) postTokenForm(ctx context.Context, endpoint string, form url.V
 		Error string `json:"error"`
 	}
 	_ = decodeOAuthJSON(resp.Body, &failure)
-	return tokenSet{}, failure.Error, fmt.Errorf("provider token exchange failed with status %d", resp.StatusCode)
+	return tokenSet{}, failure.Error, &tokenRefreshHTTPError{status: resp.StatusCode, label: "provider token exchange"}
 }
 
 func (m *Manager) doTokenRequest(req *http.Request) (tokenSet, error) {
@@ -353,7 +353,7 @@ func (m *Manager) doTokenRequest(req *http.Request) (tokenSet, error) {
 	}
 	defer resp.Body.Close() //nolint:errcheck // Best-effort protocol cleanup.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return tokenSet{}, fmt.Errorf("provider token refresh failed with status %d", resp.StatusCode)
+		return tokenSet{}, &tokenRefreshHTTPError{status: resp.StatusCode, label: "provider token refresh"}
 	}
 	var payload struct {
 		AccessToken  *string `json:"access_token"`

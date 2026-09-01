@@ -650,6 +650,46 @@ provider-credential-usage:
       '503':
         description: Provider credential storage is unavailable
 
+provider-credential-on-demand:
+  put:
+    operationId: updateProviderCredentialOnDemand
+    summary: Update provider account on-demand spending
+    description: >-
+      Updates and verifies Cursor personal-account on-demand spending. The
+      expected fields provide optimistic concurrency protection. Organization-
+      managed policies are read-only.
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../../schemas/management/providers.yaml#/UpdateProviderCredentialOnDemandRequest'
+    responses:
+      '200':
+        description: Verified provider on-demand settings
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialOnDemand'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '403':
+        $ref: '../../openapi.yaml#/components/responses/Forbidden'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+      '409':
+        description: Provider settings changed since the usage snapshot was read
+      '502':
+        description: Provider settings could not be updated or verified
+
 provider-credential-refresh:
   post:
     operationId: refreshProviderCredential

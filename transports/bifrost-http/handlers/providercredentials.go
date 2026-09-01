@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -132,6 +133,41 @@ func (h *ProviderHandler) getProviderCredentialUsage(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	SendJSON(ctx, manager.Usage(ctx, provider, credentialID))
+}
+
+func (h *ProviderHandler) updateProviderCredentialOnDemand(ctx *fasthttp.RequestCtx) {
+	manager, provider, ok := h.providerCredentialRequest(ctx)
+	if !ok {
+		return
+	}
+	credentialID, ok := h.providerCredentialID(ctx, provider)
+	if !ok {
+		return
+	}
+	var request providercredentials.UpdateCredentialOnDemandRequest
+	if err := json.Unmarshal(ctx.PostBody(), &request); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid on-demand settings")
+		return
+	}
+	if request.LimitDollars < 0 || (request.Enabled && request.LimitDollars == 0) {
+		SendError(ctx, fasthttp.StatusBadRequest, "On-demand limit must be a positive whole-dollar amount when enabled")
+		return
+	}
+	onDemand, err := manager.UpdateOnDemand(ctx, provider, credentialID, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, providercredentials.ErrOnDemandUnsupportedProvider):
+			SendError(ctx, fasthttp.StatusBadRequest, "Provider does not support on-demand updates")
+		case errors.Is(err, providercredentials.ErrOnDemandManagedByOrg):
+			SendError(ctx, fasthttp.StatusForbidden, "On-demand settings are managed by the organization")
+		case errors.Is(err, providercredentials.ErrOnDemandConflict):
+			SendError(ctx, fasthttp.StatusConflict, "On-demand settings changed; refresh usage and try again")
+		default:
+			SendError(ctx, fasthttp.StatusBadGateway, "Provider on-demand settings could not be updated")
+		}
+		return
+	}
+	SendJSON(ctx, onDemand)
 }
 
 func (h *ProviderHandler) refreshProviderCredential(ctx *fasthttp.RequestCtx) {

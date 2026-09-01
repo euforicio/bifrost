@@ -163,6 +163,7 @@ func (h *ProviderHandler) RegisterRoutes(r *router.Router, middlewares ...schema
 	r.DELETE("/api/providers/{provider}/credentials/{credential_id}/login/{login_id}", lib.ChainMiddlewares(h.cancelProviderCredentialLogin, middlewares...))
 	r.GET("/api/providers/{provider}/credentials/{credential_id}/status", lib.ChainMiddlewares(h.getProviderCredentialStatus, middlewares...))
 	r.GET("/api/providers/{provider}/credentials/{credential_id}/usage", lib.ChainMiddlewares(h.getProviderCredentialUsage, middlewares...))
+	r.PUT("/api/providers/{provider}/credentials/{credential_id}/usage/on-demand", lib.ChainMiddlewares(h.updateProviderCredentialOnDemand, middlewares...))
 	r.POST("/api/providers/{provider}/credentials/{credential_id}/refresh", lib.ChainMiddlewares(h.refreshProviderCredential, middlewares...))
 	r.DELETE("/api/providers/{provider}/credentials/{credential_id}", lib.ChainMiddlewares(h.deleteProviderCredential, middlewares...))
 	r.GET("/api/keys", lib.ChainMiddlewares(h.listKeys, middlewares...))

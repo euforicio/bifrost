@@ -292,12 +292,20 @@ export interface ProviderUsagePlan {
 
 export interface ProviderUsageOnDemand {
 	enabled: boolean;
+	can_update: boolean;
 	used?: number;
 	limit?: number;
 	remaining?: number;
 	unit?: string;
 	limit_type?: string;
 	disabled_reason?: string;
+}
+
+export interface UpdateProviderOnDemandRequest {
+	enabled: boolean;
+	limit_dollars: number;
+	expected_enabled?: boolean;
+	expected_limit_dollars?: number;
 }
 
 export interface ProviderUsageCredits {

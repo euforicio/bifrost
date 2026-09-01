@@ -144,6 +144,20 @@ type Manager struct {
 	locks    map[string]*credentialLockEntry
 }
 
+type tokenRefreshHTTPError struct {
+	status int
+	label  string
+}
+
+func (e *tokenRefreshHTTPError) Error() string {
+	return fmt.Sprintf("%s failed with status %d", e.label, e.status)
+}
+
+func isTerminalRefreshError(err error) bool {
+	var statusErr *tokenRefreshHTTPError
+	return errors.As(err, &statusErr) && statusErr.status >= 400 && statusErr.status < 500 && statusErr.status != http.StatusTooManyRequests
+}
+
 type credentialLockEntry struct {
 	mu   sync.Mutex
 	refs int
@@ -436,7 +450,10 @@ func (m *Manager) Refresh(ctx context.Context, provider schemas.ModelProvider, c
 	if err != nil {
 		return CredentialStatus{}, err
 	}
-	row, err = m.refreshLocked(ctx, row)
+	// A user-initiated refresh is a best-effort token rotation. A transient
+	// provider failure must not invalidate an otherwise connected credential;
+	// callers can retry or explicitly disconnect it.
+	row, err = m.refreshLockedWithPolicy(ctx, row, false)
 	if err != nil {
 		return CredentialStatus{}, err
 	}
@@ -488,7 +505,7 @@ func (m *Manager) refreshWithLease(ctx context.Context, row *tables.TableProvide
 	tokens, err := m.refreshTokens(refreshCtx, schemas.ModelProvider(row.Provider), row.RefreshToken)
 	if err != nil {
 		var markErr error
-		if expireOnFailure {
+		if expireOnFailure || isTerminalRefreshError(err) {
 			markErr = m.failRefreshLease(ctx, row, leaseOwner)
 		} else {
 			markErr = m.releaseRefreshLease(ctx, row, leaseOwner)

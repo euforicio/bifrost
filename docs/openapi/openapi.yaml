@@ -779,6 +779,8 @@ paths:
     $ref: "./paths/management/providers.yaml#/provider-credential-status"
   /api/providers/{provider}/credentials/{credential_id}/usage:
     $ref: "./paths/management/providers.yaml#/provider-credential-usage"
+  /api/providers/{provider}/credentials/{credential_id}/usage/on-demand:
+    $ref: "./paths/management/providers.yaml#/provider-credential-on-demand"
   /api/providers/{provider}/credentials/{credential_id}/refresh:
     $ref: "./paths/management/providers.yaml#/provider-credential-refresh"
   /api/providers/{provider}/credentials/{credential_id}/login/device:

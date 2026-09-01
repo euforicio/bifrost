@@ -84,6 +84,24 @@ func TestProviderCredentialUsageValidatesProviderKeyBinding(t *testing.T) {
 	require.NotNil(t, usage.Quotas)
 }
 
+func TestProviderCredentialOnDemandRejectsInvalidSettingsBeforeProviderCall(t *testing.T) {
+	provider := providercredentials.ProviderCursor
+	handler := &ProviderHandler{inMemoryStore: &lib.Config{
+		Providers: map[schemas.ModelProvider]configstore.ProviderConfig{
+			provider: {Keys: []schemas.Key{{ID: "account-a", Name: "cursor-account-a", Value: *schemas.NewSecretVar("")}}},
+		},
+		ProviderCredentialManager: providercredentials.NewManager(nil),
+	}}
+	ctx := &fasthttp.RequestCtx{}
+	ctx.SetUserValue("provider", string(provider))
+	ctx.SetUserValue("credential_id", "account-a")
+	ctx.Request.SetBodyString(`{"enabled":true,"limit_dollars":0}`)
+
+	handler.updateProviderCredentialOnDemand(ctx)
+
+	require.Equal(t, fasthttp.StatusBadRequest, ctx.Response.StatusCode())
+}
+
 func TestProviderCredentialLoginRoutesBindLoginToProviderAndCredential(t *testing.T) {
 	ctx := context.Background()
 	store, err := configstore.NewConfigStore(ctx, &configstore.Config{

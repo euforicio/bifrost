@@ -3,6 +3,8 @@ import {
 	ProviderCredentialLoginStatus,
 	ProviderCredentialStatus,
 	ProviderCredentialUsage,
+	ProviderUsageOnDemand,
+	UpdateProviderOnDemandRequest,
 } from "@/lib/types/config";
 import { baseApi } from "./baseApi";
 
@@ -13,6 +15,10 @@ interface ProviderCredentialRequest {
 
 interface ProviderCredentialLoginRequest extends ProviderCredentialRequest {
 	loginId: string;
+}
+
+interface UpdateProviderCredentialOnDemandRequest extends ProviderCredentialRequest {
+	settings: UpdateProviderOnDemandRequest;
 }
 
 const credentialPath = ({ provider, keyId }: ProviderCredentialRequest) =>
@@ -51,6 +57,17 @@ export const providerCredentialsApi = baseApi.injectEndpoints({
 				{ type: "ProviderCredentials", id: `${provider}:${keyId}:usage` },
 			],
 		}),
+		updateProviderCredentialOnDemand: builder.mutation<ProviderUsageOnDemand, UpdateProviderCredentialOnDemandRequest>({
+			query: (request) => ({
+				url: `${credentialPath(request)}/usage/on-demand`,
+				method: "PUT",
+				body: request.settings,
+			}),
+			invalidatesTags: (result, error, { provider, keyId }) => [
+				{ type: "ProviderCredentials", id: provider },
+				{ type: "ProviderCredentials", id: `${provider}:${keyId}:usage` },
+			],
+		}),
 		refreshProviderCredential: builder.mutation<ProviderCredentialStatus, ProviderCredentialRequest>({
 			query: (request) => ({
 				url: `${credentialPath(request)}/refresh`,
@@ -77,4 +94,5 @@ export const {
 	useGetProviderCredentialUsageQuery,
 	useRefreshProviderCredentialMutation,
 	useStartProviderCredentialLoginMutation,
+	useUpdateProviderCredentialOnDemandMutation,
 } = providerCredentialsApi;

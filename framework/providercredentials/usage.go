@@ -76,6 +76,7 @@ type CredentialPlan struct {
 
 type CredentialOnDemand struct {
 	Enabled        bool     `json:"enabled"`
+	CanUpdate      bool     `json:"can_update"`
 	Used           *float64 `json:"used,omitempty"`
 	Limit          *float64 `json:"limit,omitempty"`
 	Remaining      *float64 `json:"remaining,omitempty"`
@@ -919,55 +920,11 @@ func parseCursorSandUsage(data []byte) (*CredentialQuota, *ResetCredits, error) 
 }
 
 func parseCursorHardLimit(data []byte, current *CredentialOnDemand) (*CredentialOnDemand, error) {
-	policy := &CredentialOnDemand{Enabled: true, Unit: "cents"}
-	if current != nil {
-		*policy = *current
+	policy, err := decodeCursorHardLimit(data)
+	if err != nil {
+		return nil, err
 	}
-	var noUsageBasedAllowed, disabledByOrganization bool
-	var perUserMonthlyLimitDollars *float64
-	for len(data) > 0 {
-		number, wireType, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			return nil, protowire.ParseError(n)
-		}
-		data = data[n:]
-		if number == 1 || number == 2 || number == 3 || number == 4 || number == 10 {
-			value, consumed := protowire.ConsumeVarint(data)
-			if consumed < 0 {
-				return nil, protowire.ParseError(consumed)
-			}
-			switch number {
-			case 2:
-				noUsageBasedAllowed = value != 0
-			case 4:
-				limit := float64(int32(value))
-				perUserMonthlyLimitDollars = &limit
-			case 10:
-				disabledByOrganization = value != 0
-			}
-			data = data[consumed:]
-			continue
-		}
-		consumed := protowire.ConsumeFieldValue(number, wireType, data)
-		if consumed < 0 {
-			return nil, protowire.ParseError(consumed)
-		}
-		data = data[consumed:]
-	}
-	policy.Enabled = !noUsageBasedAllowed && !disabledByOrganization
-	if policy.Limit == nil && perUserMonthlyLimitDollars != nil && *perUserMonthlyLimitDollars > 0 {
-		limit := *perUserMonthlyLimitDollars * 100
-		policy.Limit = &limit
-		policy.Remaining = remaining(policy.Limit, policy.Used)
-	}
-	if disabledByOrganization {
-		policy.DisabledReason = "Disabled by organization policy"
-	} else if noUsageBasedAllowed {
-		policy.DisabledReason = "On-demand spending is disabled"
-	} else if policy.Enabled {
-		policy.DisabledReason = ""
-	}
-	return policy, nil
+	return policy.normalized(current), nil
 }
 
 func decodeProtoTimestamp(data []byte) (*time.Time, error) {

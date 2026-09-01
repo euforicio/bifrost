@@ -197,6 +197,61 @@ func TestCursorRefreshPreservesAndRotatesRefreshToken(t *testing.T) {
 	require.Equal(t, int64(2), refreshes.Load())
 }
 
+func TestManualRefreshFailurePreservesConnectedCredential(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != cursorRefreshPath {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "temporary provider failure", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	manager, db := newCursorTestManager(t, server)
+	expiresAt := time.Now().Add(time.Hour)
+	require.NoError(t, db.Create(&tables.TableProviderCredential{
+		CredentialID: "cursor-account", Provider: string(ProviderCursor), ProviderKeyID: "cursor-account",
+		AuthMode: "pkce_browser", AccessToken: "current-access", RefreshToken: "current-refresh",
+		AccountID: "cursor-account", ExpiresAt: &expiresAt, Status: StatusConnected, Version: 1,
+	}).Error)
+
+	_, err := manager.Refresh(context.Background(), ProviderCursor, "cursor-account")
+	require.Error(t, err)
+
+	var row tables.TableProviderCredential
+	require.NoError(t, db.Where("credential_id = ?", "cursor-account").First(&row).Error)
+	require.Equal(t, StatusConnected, row.Status)
+	require.Equal(t, "current-access", row.AccessToken)
+	require.Equal(t, "current-refresh", row.RefreshToken)
+	require.EqualValues(t, 1, row.Version)
+	require.Empty(t, row.RefreshLeaseOwner)
+	require.Nil(t, row.RefreshLeaseExpiresAt)
+}
+
+func TestManualRefreshAuthFailureExpiresCredential(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != cursorRefreshPath {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "revoked refresh token", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	manager, db := newCursorTestManager(t, server)
+	expiresAt := time.Now().Add(time.Hour)
+	require.NoError(t, db.Create(&tables.TableProviderCredential{
+		CredentialID: "cursor-account", Provider: string(ProviderCursor), ProviderKeyID: "cursor-account",
+		AuthMode: "pkce_browser", AccessToken: "current-access", RefreshToken: "current-refresh",
+		AccountID: "cursor-account", ExpiresAt: &expiresAt, Status: StatusConnected, Version: 1,
+	}).Error)
+
+	_, err := manager.Refresh(context.Background(), ProviderCursor, "cursor-account")
+	require.Error(t, err)
+
+	var row tables.TableProviderCredential
+	require.NoError(t, db.Where("credential_id = ?", "cursor-account").First(&row).Error)
+	require.Equal(t, StatusExpired, row.Status)
+}
+
 func TestCursorDisconnectCancelsOnlyMatchingLoginAndCredential(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)

@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getErrorMessage } from "@/lib/store";
@@ -31,7 +32,7 @@ import {
 import { useAppDispatch } from "@/lib/store/hooks";
 import { ModelProvider, ModelProviderKey, ProviderCredentialLoginStatus, ProviderCredentialStatus } from "@/lib/types/config";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
-import { Link2, Loader2, Pencil, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
+import { ChevronDown, Link2, Loader2, Pencil, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
 import { ReactNode, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import AddNewKeySheet from "../dialogs/addNewKeySheet";
@@ -318,122 +319,146 @@ export default function ProviderAccountsCard({ provider, headerActions }: Props)
 								const hasApiKey = isXAI && !!(key.value?.value?.trim() || key.value?.ref?.trim());
 								const refreshedAt = formatTimestamp(credential.last_refresh);
 								const expiresAt = formatTimestamp(credential.expires_at);
+								const hasUsage = credential.status === "connected" || hasApiKey;
 								return (
-									<div
-										key={key.id}
-										className="flex flex-col gap-3 p-4 lg:flex-row lg:flex-wrap lg:items-start lg:justify-between"
-										data-testid={`provider-account-row-${key.id}`}
-									>
-										<div className="min-w-0 flex-1 space-y-1">
-											<div className="flex flex-wrap items-center gap-2">
-												<span className="truncate font-medium">{credential.account_id || key.name}</span>
-												<Badge
-													variant={hasApiKey && credential.status === "disconnected" ? "secondary" : statusBadgeVariant[credential.status]}
-													data-testid={`provider-account-status-${key.id}`}
-												>
-													{hasApiKey && credential.status === "disconnected" ? "API key" : credential.status}
-												</Badge>
+									<Collapsible key={key.id} className="group" defaultOpen={false}>
+										<div
+											className="flex flex-col gap-3 p-4 lg:flex-row lg:flex-wrap lg:items-start lg:justify-between"
+											data-testid={`provider-account-row-${key.id}`}
+										>
+											<div className="min-w-0 flex-1 space-y-1">
+												<div className="flex flex-wrap items-center gap-2">
+													<span className="truncate font-medium">{key.name}</span>
+													<Badge
+														variant={
+															hasApiKey && credential.status === "disconnected" ? "secondary" : statusBadgeVariant[credential.status]
+														}
+														data-testid={`provider-account-status-${key.id}`}
+													>
+														{hasApiKey && credential.status === "disconnected" ? "API key" : credential.status}
+													</Badge>
+												</div>
+												<p className="text-muted-foreground truncate font-mono text-xs" data-testid={`provider-account-id-${key.id}`}>
+													{credential.account_id || key.id}
+												</p>
+												<p className="text-muted-foreground text-xs">
+													Weight {key.weight} · {(key.enabled ?? true) ? "Enabled" : "Disabled"}
+												</p>
+												{refreshedAt ? <p className="text-muted-foreground text-xs">Last refreshed {refreshedAt}</p> : null}
+												{expiresAt ? <p className="text-muted-foreground text-xs">Expires {expiresAt}</p> : null}
 											</div>
-											<p className="text-muted-foreground text-xs">
-												Routing name: {key.name} · Weight {key.weight} · {(key.enabled ?? true) ? "Enabled" : "Disabled"}
-											</p>
-											{refreshedAt ? <p className="text-muted-foreground text-xs">Last refreshed {refreshedAt}</p> : null}
-											{expiresAt ? <p className="text-muted-foreground text-xs">Expires {expiresAt}</p> : null}
-										</div>
-										{hasUpdateProviderAccess || hasDeleteProviderAccess ? (
-											<div className="flex flex-wrap items-center gap-2">
-												{hasUpdateProviderAccess ? (
-													<>
-														<Tooltip>
-															<TooltipTrigger asChild>
-																<span className="inline-flex items-center gap-2">
-																	<span className="text-muted-foreground text-xs">Enabled</span>
-																	<Switch
-																		checked={key.enabled ?? true}
-																		disabled={togglingKeyId === key.id}
-																		onAsyncCheckedChange={(enabled) => handleEnabledChange(key, enabled)}
-																		data-testid={`provider-account-enabled-${key.id}`}
-																	/>
-																</span>
-															</TooltipTrigger>
-															<TooltipContent>Include this credential in request routing.</TooltipContent>
-														</Tooltip>
-														{canReconnect ? (
-															<Button
-																onClick={() => handleConnect(key.id)}
-																disabled={isBusy}
-																data-testid={`provider-account-connect-${key.id}`}
-															>
-																{isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
-																{credential.status === "disconnected" ? "Connect account" : "Reconnect"}
-															</Button>
-														) : null}
-														{credential.status === "connected" ? (
-															<Button
-																variant="outline"
-																onClick={() => handleRefresh(key.id)}
-																disabled={isBusy}
-																data-testid={`provider-account-refresh-${key.id}`}
-															>
-																<RefreshCw className="h-4 w-4" /> Refresh
-															</Button>
-														) : null}
-														{credential.status !== "disconnected" ? (
-															<Button
-																variant="outline"
-																onClick={() => setDisconnectKeyId(key.id)}
-																disabled={isBusy}
-																data-testid={`provider-account-disconnect-${key.id}`}
-															>
-																<Unlink className="h-4 w-4" /> Disconnect
-															</Button>
-														) : null}
-														<Tooltip>
-															<TooltipTrigger asChild>
+											{hasUpdateProviderAccess || hasDeleteProviderAccess || hasUsage ? (
+												<div className="flex flex-wrap items-center gap-2">
+													{hasUpdateProviderAccess ? (
+														<>
+															<Tooltip>
+																<TooltipTrigger asChild>
+																	<span className="inline-flex items-center gap-2">
+																		<span className="text-muted-foreground text-xs">Enabled</span>
+																		<Switch
+																			checked={key.enabled ?? true}
+																			disabled={togglingKeyId === key.id}
+																			onAsyncCheckedChange={(enabled) => handleEnabledChange(key, enabled)}
+																			data-testid={`provider-account-enabled-${key.id}`}
+																		/>
+																	</span>
+																</TooltipTrigger>
+																<TooltipContent>Include this credential in request routing.</TooltipContent>
+															</Tooltip>
+															{canReconnect ? (
 																<Button
-																	variant="ghost"
-																	size="icon"
-																	onClick={() => handleRefreshModels(key)}
-																	disabled={refreshingKeyId !== null || isRefreshingProvider || !(key.enabled ?? true)}
-																	aria-label={`Refresh models for ${key.name}`}
-																	data-testid={`provider-account-refresh-models-${key.id}`}
+																	onClick={() => handleConnect(key.id)}
+																	disabled={isBusy}
+																	data-testid={`provider-account-connect-${key.id}`}
 																>
-																	<RefreshCw className={`h-4 w-4 ${refreshingKeyId === key.id ? "animate-spin" : ""}`} />
+																	{isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+																	{credential.status === "disconnected" ? "Connect account" : "Reconnect"}
 																</Button>
-															</TooltipTrigger>
-															<TooltipContent>Refresh models for this credential.</TooltipContent>
-														</Tooltip>
+															) : null}
+															{credential.status === "connected" ? (
+																<Button
+																	variant="outline"
+																	onClick={() => handleRefresh(key.id)}
+																	disabled={isBusy}
+																	data-testid={`provider-account-refresh-${key.id}`}
+																>
+																	<RefreshCw className="h-4 w-4" /> Refresh
+																</Button>
+															) : null}
+															{credential.status !== "disconnected" ? (
+																<Button
+																	variant="outline"
+																	onClick={() => setDisconnectKeyId(key.id)}
+																	disabled={isBusy}
+																	data-testid={`provider-account-disconnect-${key.id}`}
+																>
+																	<Unlink className="h-4 w-4" /> Disconnect
+																</Button>
+															) : null}
+															<Tooltip>
+																<TooltipTrigger asChild>
+																	<Button
+																		variant="ghost"
+																		size="icon"
+																		onClick={() => handleRefreshModels(key)}
+																		disabled={refreshingKeyId !== null || isRefreshingProvider || !(key.enabled ?? true)}
+																		aria-label={`Refresh models for ${key.name}`}
+																		data-testid={`provider-account-refresh-models-${key.id}`}
+																	>
+																		<RefreshCw className={`h-4 w-4 ${refreshingKeyId === key.id ? "animate-spin" : ""}`} />
+																	</Button>
+																</TooltipTrigger>
+																<TooltipContent>Refresh models for this credential.</TooltipContent>
+															</Tooltip>
+															<Button
+																variant="ghost"
+																size="icon"
+																onClick={() => setEditKeyId(key.id)}
+																aria-label={`Edit ${key.name}`}
+																data-testid={`provider-account-edit-${key.id}`}
+															>
+																<Pencil className="h-4 w-4" />
+															</Button>
+														</>
+													) : null}
+													{hasDeleteProviderAccess ? (
 														<Button
 															variant="ghost"
 															size="icon"
-															onClick={() => setEditKeyId(key.id)}
-															aria-label={`Edit ${key.name}`}
-															data-testid={`provider-account-edit-${key.id}`}
+															className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+															onClick={() => setDeleteKeyId(key.id)}
+															aria-label={`Delete ${key.name}`}
+															data-testid={`provider-account-delete-${key.id}`}
 														>
-															<Pencil className="h-4 w-4" />
+															<Trash2 className="h-4 w-4" />
 														</Button>
-													</>
-												) : null}
-												{hasDeleteProviderAccess ? (
-													<Button
-														variant="ghost"
-														size="icon"
-														className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-														onClick={() => setDeleteKeyId(key.id)}
-														aria-label={`Delete ${key.name}`}
-														data-testid={`provider-account-delete-${key.id}`}
-													>
-														<Trash2 className="h-4 w-4" />
-													</Button>
-												) : null}
-											</div>
-										) : null}
-										{credential.status === "connected" || hasApiKey ? (
-											<div className="basis-full">
-												<ProviderUsageSummary provider={provider.name} credentialId={credential.credential_id} />
-											</div>
-										) : null}
-									</div>
+													) : null}
+													{hasUsage ? (
+														<Tooltip>
+															<TooltipTrigger asChild>
+																<CollapsibleTrigger asChild>
+																	<Button
+																		variant="ghost"
+																		size="icon"
+																		aria-label={`Toggle usage for ${key.name}`}
+																		data-testid={`provider-account-toggle-${key.id}`}
+																	>
+																		<ChevronDown className="h-4 w-4 transition-transform group-data-[state=open]:rotate-180" />
+																	</Button>
+																</CollapsibleTrigger>
+															</TooltipTrigger>
+															<TooltipContent>Show or hide account usage.</TooltipContent>
+														</Tooltip>
+													) : null}
+												</div>
+											) : null}
+											{hasUsage ? (
+												<CollapsibleContent className="basis-full" data-testid={`provider-account-details-${key.id}`}>
+													<ProviderUsageSummary provider={provider.name} credentialId={credential.credential_id} />
+												</CollapsibleContent>
+											) : null}
+										</div>
+									</Collapsible>
 								);
 							})}
 						</div>

@@ -1,10 +1,14 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
+import { Switch } from "@/components/ui/switch";
+import { useToast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/store";
-import { useGetProviderCredentialUsageQuery } from "@/lib/store/apis/providerCredentialsApi";
+import { useGetProviderCredentialUsageQuery, useUpdateProviderCredentialOnDemandMutation } from "@/lib/store/apis/providerCredentialsApi";
 import { ProviderCredentialUsage, ProviderUsageOnDemand, ProviderUsageQuota } from "@/lib/types/config";
 import { AlertCircle, CircleDollarSign, Gauge, Loader2, RefreshCw, RotateCcw } from "lucide-react";
+import { useEffect, useState } from "react";
 
 interface Props {
 	credentialId: string;
@@ -89,62 +93,88 @@ function UsageQuota({ quota }: { quota: ProviderUsageQuota }) {
 	);
 }
 
-function CursorQuotaRow({ quota }: { quota: ProviderUsageQuota }) {
-	const resetAt = formatTimestamp(quota.resets_at);
-	const percent = quota.used_percent === undefined ? null : Math.max(0, Math.min(quota.used_percent, 100));
-	const details = quotaDetails(quota);
-	const testId = safeTestId(quota.id);
+function CursorOnDemand({ credentialId, onDemand }: { credentialId: string; onDemand: ProviderUsageOnDemand }) {
+	const { toast } = useToast();
+	const initialLimitDollars = onDemand.limit === undefined ? 0 : Math.round(onDemand.limit / 100);
+	const [enabled, setEnabled] = useState(onDemand.enabled);
+	const [limitDollars, setLimitDollars] = useState(String(initialLimitDollars));
+	const [updateOnDemand, { isLoading }] = useUpdateProviderCredentialOnDemandMutation();
+	useEffect(() => {
+		setEnabled(onDemand.enabled);
+		setLimitDollars(String(onDemand.limit === undefined ? 0 : Math.round(onDemand.limit / 100)));
+	}, [onDemand.enabled, onDemand.limit]);
 
-	return (
-		<div className="py-3 first:pt-0 last:pb-0" data-testid={`provider-usage-quota-${testId}`}>
-			<div className="flex items-start justify-between gap-3">
-				<div>
-					<p className="text-sm font-medium">{quota.name}</p>
-					{quota.description ? <p className="text-muted-foreground mt-0.5 text-xs">{quota.description}</p> : null}
-				</div>
-				{percent !== null ? <span className="shrink-0 text-sm font-medium">{numberFormatter.format(percent)}% used</span> : null}
-			</div>
-			{percent !== null ? (
-				<Progress
-					value={percent}
-					className="mt-2 h-1.5"
-					aria-label={`${quota.name} usage`}
-					aria-valuetext={`${numberFormatter.format(percent)} percent used`}
-					data-testid={`provider-usage-progress-${testId}`}
-				/>
-			) : null}
-			{details || resetAt ? (
-				<p className="text-muted-foreground mt-2 text-xs">
-					{details}
-					{details && resetAt ? " · " : null}
-					{resetAt ? `Resets ${resetAt}` : null}
-				</p>
-			) : null}
-		</div>
-	);
-}
-
-function CursorOnDemand({ onDemand }: { onDemand: ProviderUsageOnDemand }) {
 	const details: string[] = [];
 	if (onDemand.used !== undefined) details.push(`${formatQuotaValue(onDemand.used, onDemand.unit)} spent`);
 	if (onDemand.limit !== undefined) details.push(`${formatQuotaValue(onDemand.limit, onDemand.unit)} monthly limit`);
 	if (onDemand.remaining !== undefined) details.push(`${formatQuotaValue(onDemand.remaining, onDemand.unit)} remaining`);
+	const parsedLimit = Number(limitDollars);
+	const validLimit = Number.isSafeInteger(parsedLimit) && parsedLimit >= 0 && (!enabled || parsedLimit > 0);
+	const dirty = enabled !== onDemand.enabled || parsedLimit !== initialLimitDollars;
+	const save = async () => {
+		if (!validLimit) return;
+		try {
+			await updateOnDemand({
+				provider: "cursor",
+				keyId: credentialId,
+				settings: {
+					enabled,
+					limit_dollars: parsedLimit,
+					expected_enabled: onDemand.enabled,
+					expected_limit_dollars: onDemand.limit === undefined ? undefined : initialLimitDollars,
+				},
+			}).unwrap();
+			toast({ title: "On-demand spending updated" });
+		} catch (error) {
+			toast({ title: "Could not update on-demand spending", description: getErrorMessage(error), variant: "destructive" });
+		}
+	};
 
 	return (
-		<div className="mt-4" data-testid="provider-usage-cursor-on-demand">
-			<p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">On-demand usage</p>
-			<div className="bg-background rounded-sm border p-3">
-				<div className="flex flex-wrap items-center justify-between gap-2">
-					<div>
-						<p className="text-sm font-medium">On-Demand Spending</p>
-						<p className="text-muted-foreground mt-0.5 text-xs">
-							{onDemand.enabled ? "Additional usage is enabled" : onDemand.disabled_reason || "On-demand spending is disabled"}
-						</p>
-					</div>
-					<Badge variant={onDemand.enabled ? "success" : "secondary"}>{onDemand.enabled ? "Enabled" : "Disabled"}</Badge>
+		<div className="bg-background min-w-0 rounded-sm border p-3" data-testid="provider-usage-cursor-on-demand">
+			<div className="flex flex-wrap items-start justify-between gap-2">
+				<div className="min-w-0">
+					<p className="text-sm font-medium">On-Demand Spending</p>
+					<p className="text-muted-foreground mt-0.5 text-xs">
+						{onDemand.enabled ? "Additional usage is enabled" : onDemand.disabled_reason || "On-demand spending is disabled"}
+					</p>
 				</div>
-				{details.length > 0 ? <p className="text-muted-foreground mt-2 text-xs">{details.join(" · ")}</p> : null}
+				<Badge variant={onDemand.enabled ? "success" : "secondary"}>{onDemand.enabled ? "Enabled" : "Disabled"}</Badge>
 			</div>
+			{details.length > 0 ? <p className="text-muted-foreground mt-2 text-xs">{details.join(" · ")}</p> : null}
+			{onDemand.can_update ? (
+				<div className="mt-3 flex flex-wrap items-end gap-2 border-t pt-3">
+					<label className="flex h-8 items-center gap-2 text-xs font-medium">
+						<Switch checked={enabled} onCheckedChange={setEnabled} data-testid="provider-usage-cursor-on-demand-toggle" />
+						Allow
+					</label>
+					<label className="min-w-28 flex-1 text-xs font-medium">
+						Monthly limit
+						<div className="relative mt-1">
+							<span className="text-muted-foreground absolute top-1/2 left-2 -translate-y-1/2">$</span>
+							<Input
+								type="number"
+								min={enabled ? 1 : 0}
+								step={1}
+								value={limitDollars}
+								onChange={(event) => setLimitDollars(event.target.value)}
+								className="h-8 pl-5"
+								aria-label="Monthly on-demand spending limit in dollars"
+								data-testid="provider-usage-cursor-on-demand-limit"
+							/>
+						</div>
+					</label>
+					<Button
+						size="sm"
+						className="h-8"
+						disabled={!dirty || !validLimit || isLoading}
+						onClick={save}
+						data-testid="provider-usage-cursor-on-demand-save"
+					>
+						{isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save
+					</Button>
+				</div>
+			) : null}
 		</div>
 	);
 }
@@ -159,9 +189,9 @@ function CursorUsage({ data, credentialId }: { data: ProviderCredentialUsage; cr
 	);
 
 	return (
-		<div data-testid={`provider-usage-cursor-${credentialId}`}>
+		<div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" data-testid={`provider-usage-cursor-${credentialId}`}>
 			{data.plan ? (
-				<div className="bg-background mt-3 rounded-sm border p-3" data-testid="provider-usage-cursor-plan">
+				<div className="bg-background min-w-0 rounded-sm border p-3" data-testid="provider-usage-cursor-plan">
 					<p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">Current plan</p>
 					<div className="mt-1 flex flex-wrap items-baseline gap-2">
 						<p className="text-lg font-semibold">{data.plan.name}</p>
@@ -171,34 +201,15 @@ function CursorUsage({ data, credentialId }: { data: ProviderCredentialUsage; cr
 				</div>
 			) : null}
 
-			{cursorModels || otherModels ? (
-				<div className="mt-4">
-					<p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">Included usage</p>
-					<div className="bg-background divide-y rounded-sm border p-3">
-						{cursorModels ? <CursorQuotaRow quota={cursorModels} /> : null}
-						{otherModels ? <CursorQuotaRow quota={otherModels} /> : null}
-					</div>
-				</div>
-			) : null}
+			{cursorModels ? <UsageQuota quota={cursorModels} /> : null}
+			{otherModels ? <UsageQuota quota={otherModels} /> : null}
+			{grokBot ? <UsageQuota quota={grokBot} /> : null}
 
-			{grokBot ? (
-				<div className="mt-4">
-					<p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">Grok Bot</p>
-					<div className="bg-background rounded-sm border p-3">
-						<CursorQuotaRow quota={grokBot} />
-					</div>
-				</div>
-			) : null}
+			{data.on_demand ? <CursorOnDemand credentialId={credentialId} onDemand={data.on_demand} /> : null}
 
-			{data.on_demand ? <CursorOnDemand onDemand={data.on_demand} /> : null}
-
-			{extraQuotas.length > 0 ? (
-				<div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-					{extraQuotas.map((quota) => (
-						<UsageQuota key={quota.id} quota={quota} />
-					))}
-				</div>
-			) : null}
+			{extraQuotas.map((quota) => (
+				<UsageQuota key={quota.id} quota={quota} />
+			))}
 		</div>
 	);
 }

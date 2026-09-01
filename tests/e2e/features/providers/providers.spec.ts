@@ -166,9 +166,12 @@ test.describe("Providers", () => {
       await expect(
         accountRow.getByText("disconnected", { exact: true }),
       ).toBeVisible();
+      await expect(accountRow.getByText(accountSlotName, { exact: true })).toBeVisible();
+      await expect(accountRow.getByTestId(/^provider-account-id-/)).toBeVisible();
       await expect(
         accountRow.getByRole("button", { name: "Connect account", exact: true }),
       ).toBeVisible();
+      await expect(accountRow.getByTestId(/^provider-account-toggle-/)).toHaveCount(0);
     });
 
     test("should show multiple Cursor account slots without starting browser authorization", async ({
@@ -196,6 +199,8 @@ test.describe("Providers", () => {
       for (const accountName of accountNames) {
         const accountRow = providersPage.getAccountRow(accountName);
         await expect(accountRow).toBeVisible();
+        await expect(accountRow.getByText(accountName, { exact: true })).toBeVisible();
+        await expect(accountRow.getByTestId(/^provider-account-id-/)).toBeVisible();
         await expect(
           accountRow.getByText("disconnected", { exact: true }),
         ).toBeVisible();
@@ -205,6 +210,7 @@ test.describe("Providers", () => {
         await expect(accountRow.getByTestId(/^provider-account-enabled-/)).toBeVisible();
         await expect(accountRow.getByTestId(/^provider-account-edit-/)).toBeVisible();
         await expect(accountRow.getByTestId(/^provider-account-delete-/)).toBeVisible();
+        await expect(accountRow.getByTestId(/^provider-account-toggle-/)).toHaveCount(0);
       }
     });
   });

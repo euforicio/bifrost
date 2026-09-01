@@ -616,10 +616,13 @@ ProviderCredentialPlan:
 
 ProviderCredentialOnDemand:
   type: object
-  required: [enabled]
+  required: [enabled, can_update]
   properties:
     enabled:
       type: boolean
+    can_update:
+      type: boolean
+      description: Whether this account permits personal on-demand settings to be updated
     used:
       type: number
       format: double
@@ -635,6 +638,26 @@ ProviderCredentialOnDemand:
       type: string
     disabled_reason:
       type: string
+
+UpdateProviderCredentialOnDemandRequest:
+  type: object
+  required: [enabled, limit_dollars]
+  properties:
+    enabled:
+      type: boolean
+    limit_dollars:
+      type: integer
+      format: int32
+      minimum: 0
+      description: Monthly on-demand spending limit in whole US dollars; must be positive when enabled
+    expected_enabled:
+      type: boolean
+      description: Last observed enabled state used to prevent overwriting a concurrent change
+    expected_limit_dollars:
+      type: integer
+      format: int32
+      minimum: 0
+      description: Last observed whole-dollar limit used to prevent overwriting a concurrent change
 
 ProviderCredentialCredits:
   type: object

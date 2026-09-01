@@ -42947,6 +42947,156 @@
         }
       }
     },
+    "/api/providers/{provider}/credentials/{credential_id}/usage/on-demand": {
+      "put": {
+        "operationId": "updateProviderCredentialOnDemand",
+        "summary": "Update provider account on-demand spending",
+        "description": "Updates and verifies Cursor personal-account on-demand spending. The expected fields provide optimistic concurrency protection. Organization- managed policies are read-only.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "enabled",
+                  "limit_dollars"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "limit_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0,
+                    "description": "Monthly on-demand spending limit in whole US dollars; must be positive when enabled"
+                  },
+                  "expected_enabled": {
+                    "type": "boolean",
+                    "description": "Last observed enabled state used to prevent overwriting a concurrent change"
+                  },
+                  "expected_limit_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0,
+                    "description": "Last observed whole-dollar limit used to prevent overwriting a concurrent change"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified provider on-demand settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "enabled",
+                    "can_update"
+                  ],
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "can_update": {
+                      "type": "boolean",
+                      "description": "Whether this account permits personal on-demand settings to be updated"
+                    },
+                    "used": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "limit": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "remaining": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "unit": {
+                      "type": "string"
+                    },
+                    "limit_type": {
+                      "type": "string"
+                    },
+                    "disabled_reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — authenticated, but not permitted to perform this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Provider settings changed since the usage snapshot was read"
+          },
+          "502": {
+            "description": "Provider settings could not be updated or verified"
+          }
+        }
+      }
+    },
     "/api/providers/{provider}/credentials/{credential_id}/refresh": {
       "post": {
         "operationId": "refreshProviderCredential",
@@ -95429,11 +95579,16 @@
           "on_demand": {
             "type": "object",
             "required": [
-              "enabled"
+              "enabled",
+              "can_update"
             ],
             "properties": {
               "enabled": {
                 "type": "boolean"
+              },
+              "can_update": {
+                "type": "boolean",
+                "description": "Whether this account permits personal on-demand settings to be updated"
               },
               "used": {
                 "type": "number",

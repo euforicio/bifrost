@@ -192,7 +192,7 @@ func (m *Manager) refreshCursorTokens(ctx context.Context, refreshToken string) 
 		return tokenSet{}, errors.New("cursor token refresh response is invalid")
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return tokenSet{}, fmt.Errorf("cursor token refresh failed with status %d", resp.StatusCode)
+		return tokenSet{}, &tokenRefreshHTTPError{status: resp.StatusCode, label: "cursor token refresh"}
 	}
 	var payload struct {
 		AccessToken  string `json:"accessToken"`
