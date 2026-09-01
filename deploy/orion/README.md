@@ -1,87 +1,46 @@
 # Orion production deployment
 
-This deployment serves Bifrost from `https://bifrost.riftlabs.app` on the
-Hostinger Orion server at `31.97.143.81`.
+Bifrost is served at `https://bifrost.riftlabs.app` by the Orion K3s cluster.
+The deployment is GitOps-managed by `euforicio/orion-infra`; this repository
+builds and publishes the application image but does not SSH application files
+to the server.
 
-## Runtime contract
+## Deployment flow
 
-- GitHub Actions follows the Rift control-plane deployment shape: validate and
-  build in a serialized production workflow, pack the host deployment surface,
-  copy it into a private Orion staging directory, and run an idempotent host
-  installer. Bifrost retains immutable GHCR promotion because its runtime is
-  containerized.
-- Production deploys an immutable `image@sha256:digest`, never a mutable tag.
-- Bifrost binds only to `127.0.0.1:8180`; the existing Orion Caddy service is
-  the public TLS and reverse-proxy boundary.
-- `/opt/bifrost/data` persists the single-instance SQLite configuration, logs,
-  provider accounts, and encrypted refresh tokens.
-- `/opt/bifrost/.env` is created once on the host with mode `0600`. Its stable
-  encryption key must be backed up with the data directory.
-- Dashboard and inference authentication are enabled before public exposure.
+`.github/workflows/orion-image.yml` follows the Rift control-plane deployment
+model:
 
-## GitHub configuration
+1. Run the provider-account, transport, and UI validation suites.
+2. Build and boot-smoke a Linux AMD64 image.
+3. Push the image to `ghcr.io/euforicio/bifrost` and resolve its immutable
+   digest.
+4. Update `apps/bifrost/kustomization.yaml` in `euforicio/orion-infra` with
+   that digest.
+5. Let Flux reconcile the K3s Deployment on Orion.
 
-Create the `orion-production` environment and add one environment secret:
+The `orion-production` GitHub environment must contain `ORION_INFRA_TOKEN`, a
+fine-grained token that can update the Orion infrastructure repository. The
+runtime secrets, PostgreSQL credentials, Caddy ingress, network policy, and
+persistent storage are owned by `orion-infra`, not this repository.
 
-- `ORION_SSH_KEY`: dedicated Orion SSH private key, matching the secret name and
-  staged-copy convention used by the Rift control-plane deployment.
+## Rollback
 
-Pushes to `dev` run validation, immutable image build, boot smoke, private
-staging copy, host installation, managed Caddy update, and public verification.
-The feature branch is included during the initial rollout and should be removed
-from the trigger after merge. Dispatch `orion-rollback.yml` to restore the
-image and data snapshot from the immediately preceding deployment.
+Run `.github/workflows/orion-rollback.yml` with a previously healthy
+`sha256:...` image digest. The workflow pins that digest in the GitOps
+repository; Flux performs the rollback. It does not mutate application data.
 
-Restrict the `orion-production` environment to the protected production branch,
-require an independent reviewer, and disable self-approval before adding its
-secret. After the initial rollout, restrict it to the protected production
-branch.
+## Verification
 
-Provision the checked-in contract once as root:
+After Flux reports the new revision ready, verify the deployed digest and
+public health on Orion:
 
 ```bash
-install -d -m 0700 /opt/bifrost
-install -d -m 0770 -o 1000 -g 0 /opt/bifrost/data /opt/bifrost/backups
-install -m 0644 compose.yaml config.json /opt/bifrost/
-install -m 0755 bifrost-deploy /usr/local/sbin/bifrost-deploy
-```
-
-Create `/opt/bifrost/.env` with mode `0600` and stable values for
-`BIFROST_ENCRYPTION_KEY`, `BIFROST_ADMIN_USERNAME`,
-`BIFROST_ADMIN_PASSWORD`, and `BIFROST_SETUP_TOKEN`. The dedicated deployment
-key must be installed for `root`, because the installer updates Docker, the
-shared Caddy configuration, and host deployment files. The deploy command still
-accepts only an immutable `ghcr.io/euforicio/bifrost@sha256:...` image or a
-rollback operation. Registry credentials remain ephemeral and are removed with
-the private staging directory.
-
-## Caddy and Cloudflare DNS
-
-The installer renders the marked `Caddyfile.bifrost` block into Orion's shared
-Caddyfile, preserves unrelated sites, rejects ambiguous host blocks, validates
-the complete candidate, and only then reloads Caddy:
-
-```bash
-caddy validate --config /etc/caddy/Caddyfile
-systemctl reload caddy
-```
-
-Create a Cloudflare DNS `A` record for `bifrost.riftlabs.app` pointing to
-`31.97.143.81`. Keep the record DNS-only so Caddy terminates public TLS
-directly. Ports 80 and 443 must reach Caddy; port 8180 remains loopback-only.
-
-## Operations
-
-```bash
-cd /opt/bifrost
-BIFROST_IMAGE="$(docker inspect --format '{{.Config.Image}}' bifrost)" \
-  docker compose -f compose.yaml ps
-docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' bifrost
+kubectl -n bifrost get deployment bifrost \
+  -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
+kubectl -n bifrost rollout status deployment/bifrost --timeout=180s
 curl --fail --silent --show-error https://bifrost.riftlabs.app/health
 ```
 
-The last five consistent pre-deploy archives are retained under
-`/opt/bifrost/backups`.
-The previous image and matching backup are stored together in
-`/opt/bifrost/.previous-deployment`. Restore requires that local image, the
-matching data backup, and the unchanged `BIFROST_ENCRYPTION_KEY`.
+`provider-smoke.sh` remains the explicit inference acceptance suite. Supply
+the virtual keys as environment variables; the script never reads runtime
+provider credentials from the cluster.
