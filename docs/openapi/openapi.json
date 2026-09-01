@@ -95688,6 +95688,10 @@
           "balance": {
             "type": "number",
             "format": "double"
+          },
+          "unit": {
+            "type": "string",
+            "description": "Unit for the balance value; Grok prepaid balances use `cent`"
           }
         }
       },

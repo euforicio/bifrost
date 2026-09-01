@@ -53,6 +53,7 @@ type endpoints struct {
 	openAIUsageAPI string
 	xAIDeviceURL   string
 	xAITokenURL    string
+	xAIUsageAPI    string
 	cursorLoginURL string
 	cursorAPIBase  string
 }
@@ -121,6 +122,16 @@ func WithUsageEndpoints(openAIBaseURL, cursorAPIBaseURL string) Option {
 	}
 }
 
+// WithXAIUsageEndpoint replaces the Grok subscription usage endpoint for local
+// protocol fixtures. An empty value preserves the production default.
+func WithXAIUsageEndpoint(baseURL string) Option {
+	return func(m *Manager) {
+		if strings.TrimSpace(baseURL) != "" {
+			m.endpoints.xAIUsageAPI = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
+
 // WithNow replaces the manager clock for deterministic local protocol tests.
 func WithNow(now func() time.Time) Option {
 	return func(m *Manager) {
@@ -177,6 +188,7 @@ func NewManager(store Store, opts ...Option) *Manager {
 			openAIUsageAPI: "https://chatgpt.com/backend-api",
 			xAIDeviceURL:   "https://auth.x.ai/oauth2/device/code",
 			xAITokenURL:    "https://auth.x.ai/oauth2/token",
+			xAIUsageAPI:    "https://cli-chat-proxy.grok.com/v1",
 			cursorLoginURL: "https://cursor.com/loginDeepControl",
 			cursorAPIBase:  "https://api2.cursor.sh",
 		},
@@ -784,6 +796,11 @@ func accountIDFromToken(idToken string) string {
 	claims := jwtClaims(idToken)
 	authClaims, _ := claims["https://api.openai.com/auth"].(map[string]any)
 	accountID, _ := authClaims["chatgpt_account_id"].(string)
+	if accountID == "" {
+		// xAI's OIDC token identifies the Grok user with the standard subject
+		// claim. It is routing metadata only; the bearer remains authoritative.
+		accountID, _ = claims["sub"].(string)
+	}
 	return accountID
 }
 

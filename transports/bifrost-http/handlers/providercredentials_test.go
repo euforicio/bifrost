@@ -80,7 +80,7 @@ func TestProviderCredentialUsageValidatesProviderKeyBinding(t *testing.T) {
 	require.NoError(t, json.Unmarshal(matching.Response.Body(), &usage))
 	require.Equal(t, "account-a", usage.CredentialID)
 	require.Equal(t, string(provider), usage.Provider)
-	require.Equal(t, providercredentials.UsageUnsupported, usage.Availability)
+	require.Equal(t, providercredentials.UsageUnavailable, usage.Availability)
 	require.NotNil(t, usage.Quotas)
 }
 

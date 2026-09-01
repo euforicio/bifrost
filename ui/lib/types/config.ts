@@ -312,6 +312,7 @@ export interface ProviderUsageCredits {
 	has_credits: boolean;
 	unlimited: boolean;
 	balance?: number;
+	unit?: string;
 }
 
 export interface ProviderUsageResetCredit {

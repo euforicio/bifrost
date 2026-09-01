@@ -29,10 +29,12 @@ const (
 	cursorPlanInfoPath           = "/aiserver.v1.DashboardService/GetPlanInfo"
 	cursorSandUsageStatusPath    = "/aiserver.v1.DashboardService/GetSandUsageStatus"
 	cursorHardLimitPath          = "/aiserver.v1.DashboardService/GetHardLimit"
+	xAIUserPath                  = "/user?include=subscription"
+	xAIUsagePath                 = "/billing?format=credits"
+	xAIClientVersion             = "1.0.13"
 	maxUsageResponseBytes        = 1024 * 1024
 	providerUsageTimeout         = 10 * time.Second
 	resetCreditsTimeout          = 5 * time.Second
-	xAIUsageUnsupportedMessage   = "xAI does not provide a programmatic account quota endpoint."
 	usageUnavailableMessage      = "Provider usage is temporarily unavailable."
 )
 
@@ -89,6 +91,7 @@ type CredentialCredits struct {
 	HasCredits bool     `json:"has_credits"`
 	Unlimited  bool     `json:"unlimited"`
 	Balance    *float64 `json:"balance,omitempty"`
+	Unit       string   `json:"unit,omitempty"`
 }
 
 type ResetCredits struct {
@@ -115,12 +118,7 @@ func (m *Manager) Usage(ctx context.Context, provider schemas.ModelProvider, cre
 		Provider:     string(provider),
 		Quotas:       make([]CredentialQuota, 0),
 	}
-	if provider == ProviderXAI {
-		base.Availability = UsageUnsupported
-		base.Message = xAIUsageUnsupportedMessage
-		return base
-	}
-	if provider != ProviderOpenAICodex && provider != ProviderCursor {
+	if provider != ProviderOpenAICodex && provider != ProviderXAI && provider != ProviderCursor {
 		base.Availability = UsageUnsupported
 		base.Message = "Provider account usage is not supported."
 		return base
@@ -132,9 +130,12 @@ func (m *Manager) Usage(ctx context.Context, provider schemas.ModelProvider, cre
 		return base
 	}
 	var usage CredentialUsage
-	if provider == ProviderOpenAICodex {
+	switch provider {
+	case ProviderOpenAICodex:
 		usage, err = m.openAIUsage(ctx, credentialID, credential)
-	} else {
+	case ProviderXAI:
+		usage, err = m.xAIUsage(ctx, credentialID, credential)
+	case ProviderCursor:
 		usage, err = m.cursorUsage(ctx, credentialID, credential)
 	}
 	if err != nil {
@@ -143,6 +144,231 @@ func (m *Manager) Usage(ctx context.Context, provider schemas.ModelProvider, cre
 		return base
 	}
 	return usage
+}
+
+type xAIUserPayload struct {
+	UserID           string `json:"userId"`
+	SubscriptionTier string `json:"subscriptionTier"`
+}
+
+type xAICent struct {
+	Val float64 `json:"val"`
+}
+
+type xAIUsagePeriod struct {
+	Type  string `json:"type"`
+	Start string `json:"start"`
+	End   string `json:"end"`
+}
+
+type xAIProductUsage struct {
+	Product      string   `json:"product"`
+	UsagePercent *float64 `json:"usagePercent"`
+}
+
+type xAIUsagePayload struct {
+	Config *struct {
+		CreditUsagePercent *float64          `json:"creditUsagePercent"`
+		CurrentPeriod      *xAIUsagePeriod   `json:"currentPeriod"`
+		MonthlyLimit       *xAICent          `json:"monthlyLimit"`
+		Used               *xAICent          `json:"used"`
+		OnDemandCap        *xAICent          `json:"onDemandCap"`
+		OnDemandUsed       *xAICent          `json:"onDemandUsed"`
+		PrepaidBalance     *xAICent          `json:"prepaidBalance"`
+		ProductUsage       []xAIProductUsage `json:"productUsage"`
+		UnifiedBilling     *bool             `json:"isUnifiedBillingUser"`
+		BillingPeriodStart string            `json:"billingPeriodStart"`
+		BillingPeriodEnd   string            `json:"billingPeriodEnd"`
+	} `json:"config"`
+}
+
+func (m *Manager) xAIUsage(ctx context.Context, credentialID string, credential schemas.ResolvedProviderCredential) (CredentialUsage, error) {
+	forcedRefresh := false
+	request := func(path string, userID string) (usageHTTPResponse, error) {
+		requestCtx, cancel := context.WithTimeout(ctx, providerUsageTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, m.endpoints.xAIUsageAPI+path, nil)
+		if err != nil {
+			return usageHTTPResponse{}, err
+		}
+		req.Header.Set("Authorization", "Bearer "+credential.AccessToken)
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+		req.Header.Set("x-grok-client-version", xAIClientVersion)
+		req.Header.Set("x-grok-client-mode", "headless")
+		if userID != "" {
+			req.Header.Set("x-userid", userID)
+		}
+		return m.doUsageRequest(req)
+	}
+	fetch := func(path string, userID string, retryUnauthorized bool) (usageHTTPResponse, error) {
+		resp, err := request(path, userID)
+		if err != nil || resp.status != http.StatusUnauthorized || !retryUnauthorized || forcedRefresh {
+			return resp, err
+		}
+		forcedRefresh = true
+		credential, err = m.resolveProviderCredentialForUsage(ctx, ProviderXAI, credentialID, true)
+		if err != nil {
+			return usageHTTPResponse{}, err
+		}
+		return request(path, userID)
+	}
+
+	userID := strings.TrimSpace(credential.AccountID)
+	if userID == "" {
+		userID = jwtSubject(credential.AccessToken)
+	}
+	var user xAIUserPayload
+	userResp, userErr := fetch(xAIUserPath, "", true)
+	if userErr == nil && userResp.status >= http.StatusOK && userResp.status < http.StatusMultipleChoices {
+		if err := json.Unmarshal(userResp.body, &user); err == nil && strings.TrimSpace(user.UserID) != "" {
+			userID = strings.TrimSpace(user.UserID)
+		}
+	}
+	if userID == "" {
+		if userErr != nil {
+			return CredentialUsage{}, userErr
+		}
+		return CredentialUsage{}, fmt.Errorf("xAI user identity returned status %d", userResp.status)
+	}
+
+	resp, err := fetch(xAIUsagePath, userID, true)
+	if err != nil {
+		return CredentialUsage{}, err
+	}
+	if resp.status < http.StatusOK || resp.status >= http.StatusMultipleChoices {
+		return CredentialUsage{}, fmt.Errorf("xAI usage returned status %d", resp.status)
+	}
+	return parseXAIUsage(resp.body, credentialID, user.SubscriptionTier, m.now().UTC())
+}
+
+func jwtSubject(token string) string {
+	claims := jwtClaims(token)
+	subject, _ := claims["sub"].(string)
+	return strings.TrimSpace(subject)
+}
+
+func parseXAIUsage(body []byte, credentialID, subscriptionTier string, fetchedAt time.Time) (CredentialUsage, error) {
+	var payload xAIUsagePayload
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		return CredentialUsage{}, err
+	}
+	if payload.Config == nil {
+		return CredentialUsage{}, errors.New("xAI usage response did not include a billing config")
+	}
+	config := payload.Config
+	usage := CredentialUsage{
+		CredentialID: credentialID,
+		Provider:     string(ProviderXAI),
+		Availability: UsageAvailable,
+		FetchedAt:    &fetchedAt,
+		Quotas:       make([]CredentialQuota, 0, 1+len(config.ProductUsage)),
+	}
+	quota := CredentialQuota{ID: "grok-subscription", Name: "Grok subscription", UsedPercent: finiteFloat(config.CreditUsagePercent)}
+	if config.MonthlyLimit != nil {
+		quota.Limit = finiteFloat(&config.MonthlyLimit.Val)
+		quota.Unit = "cent"
+	}
+	if config.Used != nil {
+		quota.Used = finiteFloat(&config.Used.Val)
+		quota.Unit = "cent"
+	}
+	if quota.Limit != nil && quota.Used != nil && *quota.Limit > 0 {
+		remaining := math.Max(0, *quota.Limit-*quota.Used)
+		quota.Remaining = &remaining
+		if quota.UsedPercent == nil {
+			percent := math.Min(100, math.Max(0, *quota.Used / *quota.Limit * 100))
+			quota.UsedPercent = &percent
+		}
+	}
+	applyXAIUsagePeriod(&quota, config.CurrentPeriod, config.BillingPeriodStart, config.BillingPeriodEnd)
+	usage.Quotas = append(usage.Quotas, quota)
+	for _, product := range config.ProductUsage {
+		name := strings.TrimSpace(product.Product)
+		if name == "" || product.UsagePercent == nil {
+			continue
+		}
+		usage.Quotas = append(usage.Quotas, CredentialQuota{
+			ID:                    "grok-product:" + safeUsageID(name),
+			Name:                  name,
+			Description:           "Included product usage",
+			UsedPercent:           finiteFloat(product.UsagePercent),
+			StartsAt:              quota.StartsAt,
+			ResetsAt:              quota.ResetsAt,
+			WindowDurationMinutes: quota.WindowDurationMinutes,
+		})
+	}
+	if tier := strings.TrimSpace(subscriptionTier); tier != "" {
+		usage.Plan = &CredentialPlan{Name: tier, BillingCycleEnd: quota.ResetsAt}
+	}
+	if config.OnDemandCap != nil || config.OnDemandUsed != nil {
+		onDemand := &CredentialOnDemand{CanUpdate: false, Unit: "cent", LimitType: "provider_managed"}
+		if config.OnDemandCap != nil {
+			onDemand.Limit = finiteFloat(&config.OnDemandCap.Val)
+			onDemand.Enabled = config.OnDemandCap.Val > 0
+		}
+		if config.OnDemandUsed != nil {
+			onDemand.Used = finiteFloat(&config.OnDemandUsed.Val)
+		}
+		if onDemand.Limit != nil && onDemand.Used != nil {
+			remaining := math.Max(0, *onDemand.Limit-*onDemand.Used)
+			onDemand.Remaining = &remaining
+		}
+		if !onDemand.Enabled {
+			onDemand.DisabledReason = "On-demand spending is disabled in Grok"
+		}
+		usage.OnDemand = onDemand
+	}
+	if config.PrepaidBalance != nil {
+		balance := config.PrepaidBalance.Val
+		usage.Credits = &CredentialCredits{HasCredits: balance > 0, Balance: finiteFloat(&balance), Unit: "cent"}
+	}
+	if config.UnifiedBilling != nil && *config.UnifiedBilling {
+		usage.Message = "Usage is shared across the account's unified Grok billing pool."
+	}
+	return usage, nil
+}
+
+func applyXAIUsagePeriod(quota *CredentialQuota, period *xAIUsagePeriod, legacyStart, legacyEnd string) {
+	startText, endText, periodType := legacyStart, legacyEnd, ""
+	if period != nil {
+		periodType = period.Type
+		if period.Start != "" {
+			startText = period.Start
+		}
+		if period.End != "" {
+			endText = period.End
+		}
+	}
+	if started, err := time.Parse(time.RFC3339, startText); err == nil {
+		started = started.UTC()
+		quota.StartsAt = &started
+	}
+	if reset, err := time.Parse(time.RFC3339, endText); err == nil {
+		reset = reset.UTC()
+		quota.ResetsAt = &reset
+	}
+	if quota.StartsAt != nil && quota.ResetsAt != nil && quota.ResetsAt.After(*quota.StartsAt) {
+		minutes := int64(quota.ResetsAt.Sub(*quota.StartsAt) / time.Minute)
+		quota.WindowDurationMinutes = &minutes
+	}
+	if strings.Contains(strings.ToUpper(periodType), "WEEKLY") {
+		quota.Description = "Weekly included usage"
+	} else if strings.Contains(strings.ToUpper(periodType), "MONTHLY") {
+		quota.Description = "Monthly included usage"
+	}
+}
+
+func safeUsageID(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			return r
+		}
+		return '-'
+	}, value)
 }
 
 type usageHTTPResponse struct {

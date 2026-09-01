@@ -7,7 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/store";
 import { useGetProviderCredentialUsageQuery, useUpdateProviderCredentialOnDemandMutation } from "@/lib/store/apis/providerCredentialsApi";
 import { ProviderCredentialUsage, ProviderUsageOnDemand, ProviderUsageQuota } from "@/lib/types/config";
-import { AlertCircle, CircleDollarSign, Gauge, Loader2, RefreshCw, RotateCcw } from "lucide-react";
+import { AlertCircle, CircleDollarSign, ExternalLink, Gauge, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 
 interface Props {
@@ -89,6 +89,74 @@ function UsageQuota({ quota }: { quota: ProviderUsageQuota }) {
 					{resetAt ? `Resets ${resetAt}` : null}
 				</p>
 			) : null}
+		</div>
+	);
+}
+
+function UsagePlan({ data }: { data: ProviderCredentialUsage }) {
+	if (!data.plan) return null;
+	const planReset = formatTimestamp(data.plan.billing_cycle_end);
+	return (
+		<div className="bg-background min-w-0 rounded-sm border p-3" data-testid="provider-usage-plan">
+			<p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">Current plan</p>
+			<div className="mt-1 flex flex-wrap items-baseline gap-2">
+				<p className="text-lg font-semibold">{data.plan.name}</p>
+				{data.plan.price ? <span className="text-muted-foreground text-sm">{data.plan.price}</span> : null}
+			</div>
+			{planReset ? <p className="text-muted-foreground mt-1 text-xs">Usage limits reset {planReset}</p> : null}
+		</div>
+	);
+}
+
+function ReadOnlyOnDemand({ onDemand, provider }: { onDemand: ProviderUsageOnDemand; provider: string }) {
+	const details: string[] = [];
+	if (onDemand.used !== undefined) details.push(`${formatQuotaValue(onDemand.used, onDemand.unit)} spent`);
+	if (onDemand.limit !== undefined) details.push(`${formatQuotaValue(onDemand.limit, onDemand.unit)} limit`);
+	if (onDemand.remaining !== undefined) details.push(`${formatQuotaValue(onDemand.remaining, onDemand.unit)} remaining`);
+	return (
+		<div className="bg-background min-w-0 rounded-sm border p-3" data-testid="provider-usage-on-demand">
+			<div className="flex flex-wrap items-start justify-between gap-2">
+				<div className="min-w-0">
+					<p className="text-sm font-medium">On-demand spending</p>
+					<p className="text-muted-foreground mt-0.5 text-xs">
+						{onDemand.enabled
+							? `Additional usage is enabled and managed by ${provider}`
+							: onDemand.disabled_reason || "On-demand spending is disabled"}
+					</p>
+				</div>
+				<Badge variant={onDemand.enabled ? "success" : "secondary"}>{onDemand.enabled ? "Enabled" : "Disabled"}</Badge>
+			</div>
+			{details.length > 0 ? <p className="text-muted-foreground mt-2 text-xs">{details.join(" · ")}</p> : null}
+			{provider === "Grok" ? (
+				<Button asChild variant="outline" size="sm" className="mt-3 h-8">
+					<a href="https://grok.com?_s=usage" target="_blank" rel="noreferrer">
+						Manage in Grok <ExternalLink className="h-3.5 w-3.5" />
+					</a>
+				</Button>
+			) : null}
+		</div>
+	);
+}
+
+function UsageCredits({ data, credentialId }: { data: ProviderCredentialUsage; credentialId: string }) {
+	if (!data.credits) return null;
+	const credits = data.credits;
+	let label = "Account credits available";
+	if (credits.unlimited) label = "Unlimited credits";
+	else if (!credits.has_credits)
+		label = credits.unit?.toLowerCase().startsWith("cent") ? "No prepaid balance" : "No account credits available";
+	else if (credits.balance !== undefined) {
+		label = credits.unit?.toLowerCase().startsWith("cent")
+			? `${formatQuotaValue(credits.balance, credits.unit)} prepaid balance`
+			: `${numberFormatter.format(credits.balance)} credits remaining`;
+	}
+	return (
+		<div
+			className="bg-background flex min-w-0 items-center gap-2 rounded-sm border p-3 text-sm"
+			data-testid={`provider-usage-credits-${credentialId}`}
+		>
+			<CircleDollarSign className="text-muted-foreground h-4 w-4 shrink-0" />
+			<span className="font-medium">{label}</span>
 		</div>
 	);
 }
@@ -183,23 +251,13 @@ function CursorUsage({ data, credentialId }: { data: ProviderCredentialUsage; cr
 	const cursorModels = data.quotas.find((quota) => quota.id === "cursor-models");
 	const otherModels = data.quotas.find((quota) => quota.id === "other-models");
 	const grokBot = data.quotas.find((quota) => quota.id === "grok-bot");
-	const planReset = formatTimestamp(data.plan?.billing_cycle_end);
 	const extraQuotas = data.quotas.filter(
 		(quota) => !["plan", "cursor-models", "other-models", "grok-bot"].includes(quota.id) && !quota.id.startsWith("spend-limit:"),
 	);
 
 	return (
 		<div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" data-testid={`provider-usage-cursor-${credentialId}`}>
-			{data.plan ? (
-				<div className="bg-background min-w-0 rounded-sm border p-3" data-testid="provider-usage-cursor-plan">
-					<p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">Current plan</p>
-					<div className="mt-1 flex flex-wrap items-baseline gap-2">
-						<p className="text-lg font-semibold">{data.plan.name}</p>
-						{data.plan.price ? <span className="text-muted-foreground text-sm">{data.plan.price}</span> : null}
-					</div>
-					{planReset ? <p className="text-muted-foreground mt-1 text-xs">Usage limits reset {planReset}</p> : null}
-				</div>
-			) : null}
+			<UsagePlan data={data} />
 
 			{cursorModels ? <UsageQuota quota={cursorModels} /> : null}
 			{otherModels ? <UsageQuota quota={otherModels} /> : null}
@@ -210,6 +268,19 @@ function CursorUsage({ data, credentialId }: { data: ProviderCredentialUsage; cr
 			{extraQuotas.map((quota) => (
 				<UsageQuota key={quota.id} quota={quota} />
 			))}
+		</div>
+	);
+}
+
+function ProviderUsageGrid({ data, credentialId }: { data: ProviderCredentialUsage; credentialId: string }) {
+	return (
+		<div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" data-testid={`provider-usage-quotas-${credentialId}`}>
+			<UsagePlan data={data} />
+			{data.quotas.map((quota) => (
+				<UsageQuota key={quota.id} quota={quota} />
+			))}
+			{data.on_demand ? <ReadOnlyOnDemand onDemand={data.on_demand} provider={data.provider === "xai" ? "Grok" : data.provider} /> : null}
+			<UsageCredits data={data} credentialId={credentialId} />
 		</div>
 	);
 }
@@ -258,7 +329,6 @@ export default function ProviderUsageSummary({ credentialId, provider }: Props) 
 	if (!data) return null;
 
 	const unsupportedMessage = "Provider does not expose account usage through its API";
-	const showCredits = data.credits !== undefined;
 	const isCursor = data.provider.toLowerCase() === "cursor";
 
 	return (
@@ -306,30 +376,8 @@ export default function ProviderUsageSummary({ credentialId, provider }: Props) 
 					{data.message ? <p className="text-muted-foreground mt-2 text-xs">{data.message}</p> : null}
 					{isCursor ? (
 						<CursorUsage data={data} credentialId={credentialId} />
-					) : data.quotas.length > 0 ? (
-						<div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" data-testid={`provider-usage-quotas-${credentialId}`}>
-							{data.quotas.map((quota) => (
-								<UsageQuota key={quota.id} quota={quota} />
-							))}
-						</div>
-					) : null}
-
-					{showCredits ? (
-						<div
-							className="bg-background mt-3 flex items-center gap-2 rounded-sm border p-3 text-sm"
-							data-testid={`provider-usage-credits-${credentialId}`}
-						>
-							<CircleDollarSign className="text-muted-foreground h-4 w-4 shrink-0" />
-							<span className="font-medium">
-								{data.credits?.unlimited
-									? "Unlimited credits"
-									: !data.credits?.has_credits
-										? "No account credits available"
-										: data.credits.balance !== undefined
-											? `${numberFormatter.format(data.credits.balance)} credits remaining`
-											: "Account credits available"}
-							</span>
-						</div>
+					) : data.quotas.length > 0 || data.plan || data.on_demand || data.credits ? (
+						<ProviderUsageGrid data={data} credentialId={credentialId} />
 					) : null}
 
 					{data.reset_credits ? (

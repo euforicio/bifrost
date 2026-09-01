@@ -187,17 +187,150 @@ func TestOpenAIUsagePreservesResetCountWhenDetailsAreUnavailable(t *testing.T) {
 	require.Empty(t, usage.ResetCredits.Credits)
 }
 
-func TestXAIUsageIsUnsupportedWithoutNetworkProbe(t *testing.T) {
-	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests.Add(1) }))
+func TestXAIUsageFetchesIdentitySubscriptionQuotaAndBalances(t *testing.T) {
+	fetchedAt := time.Date(2026, time.August, 31, 20, 0, 0, 0, time.UTC)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer xai-access", r.Header.Get("Authorization"))
+		require.Equal(t, "xai-grok-cli", r.Header.Get("X-XAI-Token-Auth"))
+		require.Equal(t, xAIClientVersion, r.Header.Get("x-grok-client-version"))
+		require.Equal(t, "headless", r.Header.Get("x-grok-client-mode"))
+		switch r.URL.Path {
+		case "/user":
+			require.Equal(t, "subscription", r.URL.Query().Get("include"))
+			require.Empty(t, r.Header.Get("x-userid"))
+			_, _ = io.WriteString(w, `{"userId":"grok-user-123","subscriptionTier":"SuperGrok Heavy"}`)
+		case "/billing":
+			require.Equal(t, "credits", r.URL.Query().Get("format"))
+			require.Equal(t, "grok-user-123", r.Header.Get("x-userid"))
+			_, _ = io.WriteString(w, `{
+				"config": {
+					"creditUsagePercent": 42.5,
+					"currentPeriod": {"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-08-28T20:00:00Z","end":"2026-09-04T20:00:00Z"},
+					"monthlyLimit":{"val":10000},
+					"used":{"val":4250},
+					"onDemandCap":{"val":5000},
+					"onDemandUsed":{"val":1200},
+					"prepaidBalance":{"val":2500},
+					"productUsage":[{"product":"Api","usagePercent":40}],
+					"isUnifiedBillingUser":true
+				}
+			}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
 	defer server.Close()
-	manager := NewManager(nil, WithHTTPClient(server.Client()), WithUsageEndpoints(server.URL, server.URL))
+	_, db := newTestManager(t, server)
+	manager := NewManager(databaseStore{db: db}, WithHTTPClient(server.Client()), WithXAIUsageEndpoint(server.URL), WithNow(func() time.Time { return fetchedAt }))
+	expiresAt := fetchedAt.Add(time.Hour)
+	require.NoError(t, db.Create(&tables.TableProviderCredential{
+		CredentialID: "xai-key", Provider: string(ProviderXAI), ProviderKeyID: "xai-key", AuthMode: "device_code",
+		AccessToken: "xai-access", RefreshToken: "xai-refresh", ExpiresAt: &expiresAt, Status: StatusConnected, Version: 1,
+	}).Error)
 
 	usage := manager.Usage(context.Background(), ProviderXAI, "xai-key")
-	require.Equal(t, UsageUnsupported, usage.Availability)
-	require.Equal(t, xAIUsageUnsupportedMessage, usage.Message)
-	require.Empty(t, usage.Quotas)
-	require.Zero(t, requests.Load())
+	require.Equal(t, UsageAvailable, usage.Availability)
+	require.Equal(t, fetchedAt, *usage.FetchedAt)
+	require.Equal(t, "SuperGrok Heavy", usage.Plan.Name)
+	require.Equal(t, time.Date(2026, time.September, 4, 20, 0, 0, 0, time.UTC), *usage.Plan.BillingCycleEnd)
+	require.Len(t, usage.Quotas, 2)
+	require.Equal(t, "grok-subscription", usage.Quotas[0].ID)
+	require.Equal(t, 42.5, *usage.Quotas[0].UsedPercent)
+	require.Equal(t, 10000.0, *usage.Quotas[0].Limit)
+	require.Equal(t, 4250.0, *usage.Quotas[0].Used)
+	require.Equal(t, "cent", usage.Quotas[0].Unit)
+	require.Equal(t, int64(7*24*60), *usage.Quotas[0].WindowDurationMinutes)
+	require.Equal(t, "Weekly included usage", usage.Quotas[0].Description)
+	require.Equal(t, "grok-product:api", usage.Quotas[1].ID)
+	require.Equal(t, 40.0, *usage.Quotas[1].UsedPercent)
+	require.True(t, usage.OnDemand.Enabled)
+	require.False(t, usage.OnDemand.CanUpdate)
+	require.Equal(t, 5000.0, *usage.OnDemand.Limit)
+	require.Equal(t, 1200.0, *usage.OnDemand.Used)
+	require.Equal(t, 3800.0, *usage.OnDemand.Remaining)
+	require.True(t, usage.Credits.HasCredits)
+	require.Equal(t, 2500.0, *usage.Credits.Balance)
+	require.Equal(t, "cent", usage.Credits.Unit)
+	require.Contains(t, usage.Message, "unified Grok billing pool")
+}
+
+func TestXAIUsageRetriesOneUnauthorizedWithForcedRefresh(t *testing.T) {
+	var userRequests atomic.Int64
+	var refreshRequests atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user":
+			userRequests.Add(1)
+			if r.Header.Get("Authorization") == "Bearer stale-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			require.Equal(t, "Bearer fresh-token", r.Header.Get("Authorization"))
+			_, _ = io.WriteString(w, `{"userId":"grok-user-123","subscriptionTier":"SuperGrok"}`)
+		case "/billing":
+			require.Equal(t, "Bearer fresh-token", r.Header.Get("Authorization"))
+			_, _ = io.WriteString(w, `{"config":{"creditUsagePercent":0}}`)
+		case "/oauth2/token":
+			refreshRequests.Add(1)
+			_, _ = io.WriteString(w, `{"access_token":"fresh-token","refresh_token":"fresh-refresh","expires_in":3600}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	_, db := newTestManager(t, server)
+	manager := NewManager(
+		databaseStore{db: db},
+		WithHTTPClient(server.Client()),
+		WithEndpoints("", server.URL+"/oauth2/device/code", server.URL+"/oauth2/token"),
+		WithXAIUsageEndpoint(server.URL),
+	)
+	expiresAt := time.Now().Add(time.Hour)
+	require.NoError(t, db.Create(&tables.TableProviderCredential{
+		CredentialID: "xai-key", Provider: string(ProviderXAI), ProviderKeyID: "xai-key", AuthMode: "device_code",
+		AccessToken: "stale-token", RefreshToken: "refresh-token", ExpiresAt: &expiresAt, Status: StatusConnected, Version: 1,
+	}).Error)
+
+	usage := manager.Usage(context.Background(), ProviderXAI, "xai-key")
+	require.Equal(t, UsageAvailable, usage.Availability)
+	require.Equal(t, int64(2), userRequests.Load())
+	require.Equal(t, int64(1), refreshRequests.Load())
+	resolved, err := manager.ResolveProviderCredential(context.Background(), ProviderXAI, "xai-key", false)
+	require.NoError(t, err)
+	require.Equal(t, "fresh-token", resolved.AccessToken)
+}
+
+func TestXAIUsageFailureDoesNotChangeInferenceCredential(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+	_, db := newTestManager(t, server)
+	manager := NewManager(databaseStore{db: db}, WithHTTPClient(server.Client()), WithXAIUsageEndpoint(server.URL))
+	expiresAt := time.Now().Add(time.Hour)
+	require.NoError(t, db.Create(&tables.TableProviderCredential{
+		CredentialID: "xai-key", Provider: string(ProviderXAI), ProviderKeyID: "xai-key", AuthMode: "device_code",
+		AccessToken: "inference-token", RefreshToken: "refresh-token", ExpiresAt: &expiresAt, Status: StatusConnected, Version: 3,
+	}).Error)
+
+	usage := manager.Usage(context.Background(), ProviderXAI, "xai-key")
+	require.Equal(t, UsageUnavailable, usage.Availability)
+	resolved, err := manager.ResolveProviderCredential(context.Background(), ProviderXAI, "xai-key", false)
+	require.NoError(t, err)
+	require.Equal(t, "inference-token", resolved.AccessToken)
+}
+
+func TestParseXAIUsageCalculatesLegacyCreditPercentage(t *testing.T) {
+	usage, err := parseXAIUsage(
+		[]byte(`{"config":{"monthlyLimit":{"val":10000},"used":{"val":2500}}}`),
+		"xai-key",
+		"",
+		time.Date(2026, time.August, 31, 20, 0, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+	require.Len(t, usage.Quotas, 1)
+	require.Equal(t, 25.0, *usage.Quotas[0].UsedPercent)
+	require.Equal(t, 7500.0, *usage.Quotas[0].Remaining)
 }
 
 func TestCursorUsageSendsProtocolHeadersDecodesFieldsAndRetriesOnce(t *testing.T) {

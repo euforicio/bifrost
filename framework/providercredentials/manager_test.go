@@ -145,6 +145,10 @@ func TestOpenAIDeviceLoginPersistsAccountBinding(t *testing.T) {
 	require.Equal(t, int64(2), polls.Load())
 }
 
+func TestAccountIDFromTokenUsesXAIStandardSubject(t *testing.T) {
+	require.Equal(t, "grok-user-123", accountIDFromToken(unsignedJWT(map[string]any{"sub": "grok-user-123"})))
+}
+
 func TestConcurrentForcedRefreshRotatesOnce(t *testing.T) {
 	var refreshes atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
