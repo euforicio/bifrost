@@ -120,7 +120,7 @@ function ReadOnlyOnDemand({ onDemand, provider }: { onDemand: ProviderUsageOnDem
 					<p className="text-sm font-medium">On-demand spending</p>
 					<p className="text-muted-foreground mt-0.5 text-xs">
 						{onDemand.enabled
-							? `Additional usage is enabled and managed by ${provider}`
+							? `Additional usage is enabled${provider === "Grok" ? "; changes are managed by xAI" : ` and managed by ${provider}`}`
 							: onDemand.disabled_reason || "On-demand spending is disabled"}
 					</p>
 				</div>
@@ -130,7 +130,7 @@ function ReadOnlyOnDemand({ onDemand, provider }: { onDemand: ProviderUsageOnDem
 			{provider === "Grok" ? (
 				<Button asChild variant="outline" size="sm" className="mt-3 h-8">
 					<a href="https://grok.com?_s=usage" target="_blank" rel="noreferrer">
-						Manage in Grok <ExternalLink className="h-3.5 w-3.5" />
+						Edit spending settings <ExternalLink className="h-3.5 w-3.5" />
 					</a>
 				</Button>
 			) : null}
