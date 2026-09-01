@@ -33,7 +33,7 @@ import { useAppDispatch } from "@/lib/store/hooks";
 import { ModelProvider, ModelProviderKey, ProviderCredentialLoginStatus, ProviderCredentialStatus } from "@/lib/types/config";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { ChevronDown, Link2, Loader2, Pencil, Plus, RefreshCw, Trash2, Unlink } from "lucide-react";
-import { ReactNode, useCallback, useMemo, useState } from "react";
+import { MouseEvent as ReactMouseEvent, ReactNode, useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import AddNewKeySheet from "../dialogs/addNewKeySheet";
 import ProviderDeviceLoginDialog from "../dialogs/providerDeviceLoginDialog";
@@ -85,6 +85,30 @@ export default function ProviderAccountsCard({ provider, headerActions }: Props)
 	const [showAddKey, setShowAddKey] = useState(false);
 	const [togglingKeyId, setTogglingKeyId] = useState<string | null>(null);
 	const [refreshingKeyId, setRefreshingKeyId] = useState<string | null>(null);
+	const [expandedAccountIds, setExpandedAccountIds] = useState<Set<string>>(() => new Set());
+
+	const setAccountExpanded = (keyId: string, expanded: boolean) => {
+		setExpandedAccountIds((current) => {
+			const next = new Set(current);
+			if (expanded) next.add(keyId);
+			else next.delete(keyId);
+			return next;
+		});
+	};
+	const toggleAccountExpanded = (keyId: string) => {
+		setExpandedAccountIds((current) => {
+			const next = new Set(current);
+			if (next.has(keyId)) next.delete(keyId);
+			else next.add(keyId);
+			return next;
+		});
+	};
+
+	const handleAccountRowClick = (event: ReactMouseEvent<HTMLDivElement>, keyId: string, hasUsage: boolean) => {
+		if (!hasUsage || !(event.target instanceof Element)) return;
+		if (event.target.closest("button, a, input, select, textarea, [role='switch'], [data-provider-account-details]")) return;
+		toggleAccountExpanded(keyId);
+	};
 
 	const accounts = useMemo<AccountRow[]>(() => {
 		const byCredentialID = new Map(credentials.map((credential) => [credential.credential_id, credential]));
@@ -321,9 +345,15 @@ export default function ProviderAccountsCard({ provider, headerActions }: Props)
 								const expiresAt = formatTimestamp(credential.expires_at);
 								const hasUsage = credential.status === "connected" || hasApiKey;
 								return (
-									<Collapsible key={key.id} className="group" defaultOpen={false}>
+									<Collapsible
+										key={key.id}
+										className="group"
+										open={expandedAccountIds.has(key.id)}
+										onOpenChange={(expanded) => setAccountExpanded(key.id, expanded)}
+									>
 										<div
-											className="flex flex-col gap-3 p-4 lg:flex-row lg:flex-wrap lg:items-start lg:justify-between"
+											className={`flex flex-col gap-3 p-4 lg:flex-row lg:flex-wrap lg:items-start lg:justify-between ${hasUsage ? "cursor-pointer" : ""}`}
+											onClick={(event) => handleAccountRowClick(event, key.id, hasUsage)}
 											data-testid={`provider-account-row-${key.id}`}
 										>
 											<div className="min-w-0 flex-1 space-y-1">
@@ -453,7 +483,11 @@ export default function ProviderAccountsCard({ provider, headerActions }: Props)
 												</div>
 											) : null}
 											{hasUsage ? (
-												<CollapsibleContent className="basis-full" data-testid={`provider-account-details-${key.id}`}>
+												<CollapsibleContent
+													className="basis-full cursor-default"
+													data-provider-account-details
+													data-testid={`provider-account-details-${key.id}`}
+												>
 													<ProviderUsageSummary provider={provider.name} credentialId={credential.credential_id} />
 												</CollapsibleContent>
 											) : null}
