@@ -3,7 +3,10 @@ import {
 	ProviderCredentialLoginStatus,
 	ProviderCredentialStatus,
 	ProviderCredentialUsage,
+	ProviderUsageAutoTopUp,
 	ProviderUsageOnDemand,
+	ProviderUsageResetCredits,
+	UpdateProviderAutoTopUpRequest,
 	UpdateProviderOnDemandRequest,
 } from "@/lib/types/config";
 import { baseApi } from "./baseApi";
@@ -19,6 +22,14 @@ interface ProviderCredentialLoginRequest extends ProviderCredentialRequest {
 
 interface UpdateProviderCredentialOnDemandRequest extends ProviderCredentialRequest {
 	settings: UpdateProviderOnDemandRequest;
+}
+
+interface UpdateProviderCredentialAutoTopUpRequest extends ProviderCredentialRequest {
+	settings: UpdateProviderAutoTopUpRequest;
+}
+
+interface RedeemProviderCredentialResetRequest extends ProviderCredentialRequest {
+	resetId: string;
 }
 
 const credentialPath = ({ provider, keyId }: ProviderCredentialRequest) =>
@@ -68,6 +79,27 @@ export const providerCredentialsApi = baseApi.injectEndpoints({
 				{ type: "ProviderCredentials", id: `${provider}:${keyId}:usage` },
 			],
 		}),
+		updateProviderCredentialAutoTopUp: builder.mutation<ProviderUsageAutoTopUp, UpdateProviderCredentialAutoTopUpRequest>({
+			query: (request) => ({
+				url: `${credentialPath(request)}/usage/auto-top-up`,
+				method: "PUT",
+				body: request.settings,
+			}),
+			invalidatesTags: (result, error, { provider, keyId }) => [
+				{ type: "ProviderCredentials", id: provider },
+				{ type: "ProviderCredentials", id: `${provider}:${keyId}:usage` },
+			],
+		}),
+		redeemProviderCredentialReset: builder.mutation<ProviderUsageResetCredits, RedeemProviderCredentialResetRequest>({
+			query: (request) => ({
+				url: `${credentialPath(request)}/usage/resets/${encodeURIComponent(request.resetId)}/redeem`,
+				method: "POST",
+			}),
+			invalidatesTags: (result, error, { provider, keyId }) => [
+				{ type: "ProviderCredentials", id: provider },
+				{ type: "ProviderCredentials", id: `${provider}:${keyId}:usage` },
+			],
+		}),
 		refreshProviderCredential: builder.mutation<ProviderCredentialStatus, ProviderCredentialRequest>({
 			query: (request) => ({
 				url: `${credentialPath(request)}/refresh`,
@@ -93,6 +125,8 @@ export const {
 	useGetProviderCredentialStatusQuery,
 	useGetProviderCredentialUsageQuery,
 	useRefreshProviderCredentialMutation,
+	useRedeemProviderCredentialResetMutation,
 	useStartProviderCredentialLoginMutation,
 	useUpdateProviderCredentialOnDemandMutation,
+	useUpdateProviderCredentialAutoTopUpMutation,
 } = providerCredentialsApi;

@@ -5,8 +5,13 @@ import { Progress } from "@/components/ui/progress";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { getErrorMessage } from "@/lib/store";
-import { useGetProviderCredentialUsageQuery, useUpdateProviderCredentialOnDemandMutation } from "@/lib/store/apis/providerCredentialsApi";
-import { ProviderCredentialUsage, ProviderUsageOnDemand, ProviderUsageQuota } from "@/lib/types/config";
+import {
+	useGetProviderCredentialUsageQuery,
+	useRedeemProviderCredentialResetMutation,
+	useUpdateProviderCredentialAutoTopUpMutation,
+	useUpdateProviderCredentialOnDemandMutation,
+} from "@/lib/store/apis/providerCredentialsApi";
+import { ProviderCredentialUsage, ProviderUsageAutoTopUp, ProviderUsageOnDemand, ProviderUsageQuota } from "@/lib/types/config";
 import { AlertCircle, CircleDollarSign, ExternalLink, Gauge, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -161,7 +166,15 @@ function UsageCredits({ data, credentialId }: { data: ProviderCredentialUsage; c
 	);
 }
 
-function CursorOnDemand({ credentialId, onDemand }: { credentialId: string; onDemand: ProviderUsageOnDemand }) {
+function EditableOnDemand({
+	credentialId,
+	onDemand,
+	provider,
+}: {
+	credentialId: string;
+	onDemand: ProviderUsageOnDemand;
+	provider: string;
+}) {
 	const { toast } = useToast();
 	const initialLimitDollars = onDemand.limit === undefined ? 0 : Math.round(onDemand.limit / 100);
 	const [enabled, setEnabled] = useState(onDemand.enabled);
@@ -183,7 +196,7 @@ function CursorOnDemand({ credentialId, onDemand }: { credentialId: string; onDe
 		if (!validLimit) return;
 		try {
 			await updateOnDemand({
-				provider: "cursor",
+				provider,
 				keyId: credentialId,
 				settings: {
 					enabled,
@@ -199,7 +212,7 @@ function CursorOnDemand({ credentialId, onDemand }: { credentialId: string; onDe
 	};
 
 	return (
-		<div className="bg-background min-w-0 rounded-sm border p-3" data-testid="provider-usage-cursor-on-demand">
+		<div className="bg-background min-w-0 rounded-sm border p-3" data-testid={`provider-usage-${provider}-on-demand`}>
 			<div className="flex flex-wrap items-start justify-between gap-2">
 				<div className="min-w-0">
 					<p className="text-sm font-medium">On-Demand Spending</p>
@@ -213,7 +226,7 @@ function CursorOnDemand({ credentialId, onDemand }: { credentialId: string; onDe
 			{onDemand.can_update ? (
 				<div className="mt-3 flex flex-wrap items-end gap-2 border-t pt-3">
 					<label className="flex h-8 items-center gap-2 text-xs font-medium">
-						<Switch checked={enabled} onCheckedChange={setEnabled} data-testid="provider-usage-cursor-on-demand-toggle" />
+						<Switch checked={enabled} onCheckedChange={setEnabled} data-testid={`provider-usage-${provider}-on-demand-toggle`} />
 						Allow
 					</label>
 					<label className="min-w-28 flex-1 text-xs font-medium">
@@ -228,7 +241,7 @@ function CursorOnDemand({ credentialId, onDemand }: { credentialId: string; onDe
 								onChange={(event) => setLimitDollars(event.target.value)}
 								className="h-8 pl-5"
 								aria-label="Monthly on-demand spending limit in dollars"
-								data-testid="provider-usage-cursor-on-demand-limit"
+								data-testid={`provider-usage-${provider}-on-demand-limit`}
 							/>
 						</div>
 					</label>
@@ -237,7 +250,103 @@ function CursorOnDemand({ credentialId, onDemand }: { credentialId: string; onDe
 						className="h-8"
 						disabled={!dirty || !validLimit || isLoading}
 						onClick={save}
-						data-testid="provider-usage-cursor-on-demand-save"
+						data-testid={`provider-usage-${provider}-on-demand-save`}
+					>
+						{isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save
+					</Button>
+				</div>
+			) : null}
+		</div>
+	);
+}
+
+function XAIAutoTopUp({ credentialId, autoTopUp }: { credentialId: string; autoTopUp: ProviderUsageAutoTopUp }) {
+	const { toast } = useToast();
+	const dollars = (value?: number) => Math.round((value ?? 0) / 100);
+	const initial = {
+		threshold: dollars(autoTopUp.threshold),
+		topUp: dollars(autoTopUp.top_up_amount),
+		monthly: dollars(autoTopUp.monthly_limit),
+	};
+	const [enabled, setEnabled] = useState(autoTopUp.enabled);
+	const [threshold, setThreshold] = useState(String(initial.threshold));
+	const [topUp, setTopUp] = useState(String(initial.topUp));
+	const [monthly, setMonthly] = useState(String(initial.monthly));
+	const [updateAutoTopUp, { isLoading }] = useUpdateProviderCredentialAutoTopUpMutation();
+	useEffect(() => {
+		setEnabled(autoTopUp.enabled);
+		setThreshold(String(dollars(autoTopUp.threshold)));
+		setTopUp(String(dollars(autoTopUp.top_up_amount)));
+		setMonthly(String(dollars(autoTopUp.monthly_limit)));
+	}, [autoTopUp.enabled, autoTopUp.threshold, autoTopUp.top_up_amount, autoTopUp.monthly_limit]);
+	const values = [Number(threshold), Number(topUp), Number(monthly)];
+	const valid = values.every((value) => Number.isSafeInteger(value) && value >= 0) && (!enabled || values.every((value) => value > 0));
+	const dirty =
+		enabled !== autoTopUp.enabled || values[0] !== initial.threshold || values[1] !== initial.topUp || values[2] !== initial.monthly;
+	const save = async () => {
+		if (!valid) return;
+		try {
+			await updateAutoTopUp({
+				provider: "xai",
+				keyId: credentialId,
+				settings: {
+					enabled,
+					threshold_dollars: values[0],
+					top_up_amount_dollars: values[1],
+					monthly_limit_dollars: values[2],
+					expected_enabled: autoTopUp.enabled,
+					expected_threshold_dollars: initial.threshold,
+					expected_top_up_amount_dollars: initial.topUp,
+					expected_monthly_limit_dollars: initial.monthly,
+				},
+			}).unwrap();
+			toast({ title: "Auto Top-Up updated" });
+		} catch (error) {
+			toast({ title: "Could not update Auto Top-Up", description: getErrorMessage(error), variant: "destructive" });
+		}
+	};
+	return (
+		<div className="bg-background min-w-0 rounded-sm border p-3 sm:col-span-2 xl:col-span-3" data-testid="provider-usage-xai-auto-top-up">
+			<div className="flex items-center justify-between gap-2">
+				<div>
+					<p className="text-sm font-medium">Auto Top-Up</p>
+					<p className="text-muted-foreground text-xs">Add credits automatically when the balance runs low.</p>
+				</div>
+				<Badge variant={autoTopUp.enabled ? "success" : "secondary"}>{autoTopUp.enabled ? "Enabled" : "Disabled"}</Badge>
+			</div>
+			{autoTopUp.can_update ? (
+				<div className="mt-3 grid items-end gap-2 border-t pt-3 sm:grid-cols-[auto_repeat(3,minmax(7rem,1fr))_auto]">
+					<label className="flex h-8 items-center gap-2 text-xs font-medium">
+						<Switch checked={enabled} onCheckedChange={setEnabled} data-testid="provider-usage-xai-auto-top-up-toggle" />
+						Allow
+					</label>
+					{[
+						["Balance threshold", threshold, setThreshold, "threshold"],
+						["Top-up amount", topUp, setTopUp, "amount"],
+						["Monthly cap", monthly, setMonthly, "monthly-limit"],
+					].map(([label, value, setter, id]) => (
+						<label className="text-xs font-medium" key={String(id)}>
+							{String(label)}
+							<div className="relative mt-1">
+								<span className="text-muted-foreground absolute top-1/2 left-2 -translate-y-1/2">$</span>
+								<Input
+									type="number"
+									min={enabled ? 1 : 0}
+									step={1}
+									value={String(value)}
+									onChange={(event) => (setter as (value: string) => void)(event.target.value)}
+									className="h-8 pl-5"
+									data-testid={`provider-usage-xai-auto-top-up-${id}`}
+								/>
+							</div>
+						</label>
+					))}
+					<Button
+						size="sm"
+						className="h-8"
+						disabled={!dirty || !valid || isLoading}
+						onClick={save}
+						data-testid="provider-usage-xai-auto-top-up-save"
 					>
 						{isLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Save
 					</Button>
@@ -263,7 +372,7 @@ function CursorUsage({ data, credentialId }: { data: ProviderCredentialUsage; cr
 			{otherModels ? <UsageQuota quota={otherModels} /> : null}
 			{grokBot ? <UsageQuota quota={grokBot} /> : null}
 
-			{data.on_demand ? <CursorOnDemand credentialId={credentialId} onDemand={data.on_demand} /> : null}
+			{data.on_demand ? <EditableOnDemand credentialId={credentialId} onDemand={data.on_demand} provider="cursor" /> : null}
 
 			{extraQuotas.map((quota) => (
 				<UsageQuota key={quota.id} quota={quota} />
@@ -273,24 +382,46 @@ function CursorUsage({ data, credentialId }: { data: ProviderCredentialUsage; cr
 }
 
 function ProviderUsageGrid({ data, credentialId }: { data: ProviderCredentialUsage; credentialId: string }) {
+	const isXAI = data.provider.toLowerCase() === "xai";
 	return (
 		<div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" data-testid={`provider-usage-quotas-${credentialId}`}>
 			<UsagePlan data={data} />
 			{data.quotas.map((quota) => (
 				<UsageQuota key={quota.id} quota={quota} />
 			))}
-			{data.on_demand ? <ReadOnlyOnDemand onDemand={data.on_demand} provider={data.provider === "xai" ? "Grok" : data.provider} /> : null}
+			{data.on_demand ? (
+				isXAI ? (
+					<EditableOnDemand credentialId={credentialId} onDemand={data.on_demand} provider="xai" />
+				) : (
+					<ReadOnlyOnDemand onDemand={data.on_demand} provider={data.provider} />
+				)
+			) : null}
+			{data.auto_top_up && isXAI ? <XAIAutoTopUp credentialId={credentialId} autoTopUp={data.auto_top_up} /> : null}
 			<UsageCredits data={data} credentialId={credentialId} />
 		</div>
 	);
 }
 
 export default function ProviderUsageSummary({ credentialId, provider }: Props) {
+	const { toast } = useToast();
 	const { data, error, isLoading, isFetching, refetch } = useGetProviderCredentialUsageQuery({
 		provider,
 		keyId: credentialId,
 	});
+	const [redeemReset, { isLoading: isRedeemingReset }] = useRedeemProviderCredentialResetMutation();
+	const [redeemingResetId, setRedeemingResetId] = useState<string | null>(null);
 	const fetchedAt = formatTimestamp(data?.fetched_at);
+	const redeem = async (resetId: string) => {
+		setRedeemingResetId(resetId);
+		try {
+			await redeemReset({ provider, keyId: credentialId, resetId }).unwrap();
+			toast({ title: "Usage reset redeemed" });
+		} catch (redeemError) {
+			toast({ title: "Could not redeem usage reset", description: getErrorMessage(redeemError), variant: "destructive" });
+		} finally {
+			setRedeemingResetId(null);
+		}
+	};
 
 	if (isLoading) {
 		return (
@@ -376,7 +507,7 @@ export default function ProviderUsageSummary({ credentialId, provider }: Props) 
 					{data.message ? <p className="text-muted-foreground mt-2 text-xs">{data.message}</p> : null}
 					{isCursor ? (
 						<CursorUsage data={data} credentialId={credentialId} />
-					) : data.quotas.length > 0 || data.plan || data.on_demand || data.credits ? (
+					) : data.quotas.length > 0 || data.plan || data.on_demand || data.auto_top_up || data.credits ? (
 						<ProviderUsageGrid data={data} credentialId={credentialId} />
 					) : null}
 
@@ -399,7 +530,20 @@ export default function ProviderUsageSummary({ credentialId, provider }: Props) 
 											>
 												<div className="flex flex-wrap items-center justify-between gap-2">
 													<span className="text-sm font-medium">{credit.title || credit.reset_type}</span>
-													<Badge variant="secondary">{credit.status}</Badge>
+													{data.reset_credits?.can_redeem ? (
+														<Button
+															size="sm"
+															variant="outline"
+															className="h-7"
+															disabled={isRedeemingReset}
+															onClick={() => redeem(credit.id)}
+															data-testid={`provider-usage-reset-redeem-${safeTestId(credit.id)}`}
+														>
+															{redeemingResetId === credit.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null} Redeem
+														</Button>
+													) : (
+														<Badge variant="secondary">{credit.status}</Badge>
+													)}
 												</div>
 												{credit.description ? <p className="text-muted-foreground mt-1 text-xs">{credit.description}</p> : null}
 												{grantedAt || expiresAt ? (

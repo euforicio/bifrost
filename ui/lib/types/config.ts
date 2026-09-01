@@ -308,6 +308,27 @@ export interface UpdateProviderOnDemandRequest {
 	expected_limit_dollars?: number;
 }
 
+export interface ProviderUsageAutoTopUp {
+	enabled: boolean;
+	can_update: boolean;
+	threshold?: number;
+	top_up_amount?: number;
+	monthly_limit?: number;
+	unit?: string;
+	disabled_reason?: string;
+}
+
+export interface UpdateProviderAutoTopUpRequest {
+	enabled: boolean;
+	threshold_dollars: number;
+	top_up_amount_dollars: number;
+	monthly_limit_dollars: number;
+	expected_enabled?: boolean;
+	expected_threshold_dollars?: number;
+	expected_top_up_amount_dollars?: number;
+	expected_monthly_limit_dollars?: number;
+}
+
 export interface ProviderUsageCredits {
 	has_credits: boolean;
 	unlimited: boolean;
@@ -327,6 +348,7 @@ export interface ProviderUsageResetCredit {
 
 export interface ProviderUsageResetCredits {
 	available_count: number;
+	can_redeem: boolean;
 	credits: ProviderUsageResetCredit[];
 }
 
@@ -340,6 +362,7 @@ export interface ProviderCredentialUsage {
 	quotas: ProviderUsageQuota[];
 	plan?: ProviderUsagePlan;
 	on_demand?: ProviderUsageOnDemand;
+	auto_top_up?: ProviderUsageAutoTopUp;
 	credits?: ProviderUsageCredits;
 	reset_credits?: ProviderUsageResetCredits;
 }

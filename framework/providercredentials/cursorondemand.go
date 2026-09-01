@@ -58,6 +58,9 @@ func (m *Manager) UpdateOnDemand(
 	credentialID string,
 	update UpdateCredentialOnDemandRequest,
 ) (*CredentialOnDemand, error) {
+	if provider == ProviderXAI {
+		return m.updateXAIOnDemand(ctx, credentialID, update)
+	}
 	if provider != ProviderCursor {
 		return nil, ErrOnDemandUnsupportedProvider
 	}

@@ -555,6 +555,8 @@ ProviderCredentialUsage:
       $ref: '#/ProviderCredentialPlan'
     on_demand:
       $ref: '#/ProviderCredentialOnDemand'
+    auto_top_up:
+      $ref: '#/ProviderCredentialAutoTopUp'
     credits:
       $ref: '#/ProviderCredentialCredits'
     reset_credits:
@@ -659,6 +661,31 @@ UpdateProviderCredentialOnDemandRequest:
       minimum: 0
       description: Last observed whole-dollar limit used to prevent overwriting a concurrent change
 
+ProviderCredentialAutoTopUp:
+  type: object
+  required: [enabled, can_update]
+  properties:
+    enabled: { type: boolean }
+    can_update: { type: boolean }
+    threshold: { type: number, format: double }
+    top_up_amount: { type: number, format: double }
+    monthly_limit: { type: number, format: double }
+    unit: { type: string }
+    disabled_reason: { type: string }
+
+UpdateProviderCredentialAutoTopUpRequest:
+  type: object
+  required: [enabled, threshold_dollars, top_up_amount_dollars, monthly_limit_dollars]
+  properties:
+    enabled: { type: boolean }
+    threshold_dollars: { type: integer, format: int32, minimum: 0 }
+    top_up_amount_dollars: { type: integer, format: int32, minimum: 0 }
+    monthly_limit_dollars: { type: integer, format: int32, minimum: 0 }
+    expected_enabled: { type: boolean }
+    expected_threshold_dollars: { type: integer, format: int32, minimum: 0 }
+    expected_top_up_amount_dollars: { type: integer, format: int32, minimum: 0 }
+    expected_monthly_limit_dollars: { type: integer, format: int32, minimum: 0 }
+
 ProviderCredentialCredits:
   type: object
   required: [has_credits, unlimited]
@@ -676,11 +703,13 @@ ProviderCredentialCredits:
 
 ProviderCredentialResetCredits:
   type: object
-  required: [available_count, credits]
+  required: [available_count, can_redeem, credits]
   properties:
     available_count:
       type: integer
       format: int64
+    can_redeem:
+      type: boolean
     credits:
       type: array
       description: Best-effort reset-credit detail rows. An empty array means no rows were returned or the bounded detail read was unavailable.
