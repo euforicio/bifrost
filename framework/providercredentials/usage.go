@@ -491,9 +491,7 @@ func parseCursorUsage(body []byte, credentialID string, fetchedAt time.Time) (Cr
 		usage.Quotas = append(usage.Quotas, cursorQuota("plan", "Plan usage", &period.plan.includedSpend, &period.plan.limit, &period.plan.remaining, usedPercent, period))
 		if period.plan.autoSpend != nil || period.plan.autoLimit != nil || period.plan.autoPercentUsed != nil {
 			quota := cursorQuota("cursor-models", "Cursor Models", period.plan.autoSpend, period.plan.autoLimit, remaining(period.plan.autoLimit, period.plan.autoSpend), period.plan.autoPercentUsed, period)
-			if len(period.autoBucketModels) > 0 {
-				quota.Description = "Includes " + strings.Join(period.autoBucketModels, ", ")
-			}
+			quota.Description = cursorModelsDescription(period.autoBucketModels)
 			usage.Quotas = append(usage.Quotas, quota)
 		}
 		if period.plan.apiSpend != nil || period.plan.apiLimit != nil || period.plan.apiPercentUsed != nil {
@@ -520,6 +518,25 @@ func parseCursorUsage(body []byte, credentialID string, fetchedAt time.Time) (Cr
 		}
 	}
 	return usage, nil
+}
+
+func cursorModelsDescription(models []string) string {
+	var includesGrok, includesComposer bool
+	for _, model := range models {
+		normalized := strings.ToLower(model)
+		includesGrok = includesGrok || strings.Contains(normalized, "grok")
+		includesComposer = includesComposer || strings.Contains(normalized, "composer")
+	}
+	switch {
+	case includesGrok && includesComposer:
+		return "Includes Cursor Grok and Composer"
+	case includesGrok:
+		return "Includes Cursor Grok"
+	case includesComposer:
+		return "Includes Composer"
+	default:
+		return ""
+	}
 }
 
 func cursorQuota(id, name string, used, limit, remainingValue, usedPercent *float64, period cursorPeriodUsage) CredentialQuota {

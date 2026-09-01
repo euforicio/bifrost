@@ -267,6 +267,7 @@ func TestCursorUsageSendsProtocolHeadersDecodesFieldsAndRetriesOnce(t *testing.T
 	require.Equal(t, 25.0, *usage.Quotas[0].UsedPercent)
 	require.Equal(t, "cursor-models", usage.Quotas[1].ID)
 	require.Equal(t, "Cursor Models", usage.Quotas[1].Name)
+	require.Equal(t, "Includes Cursor Grok and Composer", usage.Quotas[1].Description)
 	require.Equal(t, "other-models", usage.Quotas[2].ID)
 	require.Equal(t, "Other Models", usage.Quotas[2].Name)
 	require.Equal(t, "spend-limit:overall", usage.Quotas[4].ID)
@@ -345,6 +346,8 @@ func cursorUsageFixture(t *testing.T) []byte {
 	// Field 100 is intentionally unknown to verify forward-compatible parsing.
 	response, err := hex.DecodeString("0880b0fbd4fb331080f88fd285341a3908e20910e80718fa0120a61d28882740a00648c20350b81758d00f610000000000003440690000000000803640710000000000003940980607222a08bc0510904e18a01f20f02e28882730bc0538cc21420a696e646976696475616c48987550dc2458bc50a2060769676e6f726564")
 	require.NoError(t, err)
+	response = appendProtoString(response, 13, "cursor-grok-4.5")
+	response = appendProtoString(response, 13, "composer-2.5")
 	return response
 }
 
