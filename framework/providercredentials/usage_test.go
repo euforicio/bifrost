@@ -210,6 +210,7 @@ func TestXAIUsageFetchesIdentitySubscriptionQuotaAndBalances(t *testing.T) {
 					"used":{"val":4250},
 					"onDemandCap":{"val":5000},
 					"onDemandUsed":{"val":1200},
+					"onDemandEnabled":true,
 					"prepaidBalance":{"val":2500},
 					"productUsage":[{"product":"Api","usagePercent":40}],
 					"isUnifiedBillingUser":true
@@ -331,6 +332,20 @@ func TestParseXAIUsageCalculatesLegacyCreditPercentage(t *testing.T) {
 	require.Len(t, usage.Quotas, 1)
 	require.Equal(t, 25.0, *usage.Quotas[0].UsedPercent)
 	require.Equal(t, 7500.0, *usage.Quotas[0].Remaining)
+}
+
+func TestParseXAIUsageUsesAuthoritativeOnDemandState(t *testing.T) {
+	usage, err := parseXAIUsage(
+		[]byte(`{"config":{"onDemandCap":{"val":5000},"onDemandEnabled":false}}`),
+		"xai-key",
+		"",
+		time.Date(2026, time.August, 31, 20, 0, 0, 0, time.UTC),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, usage.OnDemand)
+	require.False(t, usage.OnDemand.Enabled)
+	require.False(t, usage.OnDemand.CanUpdate)
+	require.Equal(t, "On-demand spending is disabled in Grok", usage.OnDemand.DisabledReason)
 }
 
 func TestCursorUsageSendsProtocolHeadersDecodesFieldsAndRetriesOnce(t *testing.T) {

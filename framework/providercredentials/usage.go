@@ -174,6 +174,7 @@ type xAIUsagePayload struct {
 		Used               *xAICent          `json:"used"`
 		OnDemandCap        *xAICent          `json:"onDemandCap"`
 		OnDemandUsed       *xAICent          `json:"onDemandUsed"`
+		OnDemandEnabled    *bool             `json:"onDemandEnabled"`
 		PrepaidBalance     *xAICent          `json:"prepaidBalance"`
 		ProductUsage       []xAIProductUsage `json:"productUsage"`
 		UnifiedBilling     *bool             `json:"isUnifiedBillingUser"`
@@ -303,11 +304,14 @@ func parseXAIUsage(body []byte, credentialID, subscriptionTier string, fetchedAt
 	if tier := strings.TrimSpace(subscriptionTier); tier != "" {
 		usage.Plan = &CredentialPlan{Name: tier, BillingCycleEnd: quota.ResetsAt}
 	}
-	if config.OnDemandCap != nil || config.OnDemandUsed != nil {
+	if config.OnDemandCap != nil || config.OnDemandUsed != nil || config.OnDemandEnabled != nil {
 		onDemand := &CredentialOnDemand{CanUpdate: false, Unit: "cent", LimitType: "provider_managed"}
 		if config.OnDemandCap != nil {
 			onDemand.Limit = finiteFloat(&config.OnDemandCap.Val)
 			onDemand.Enabled = config.OnDemandCap.Val > 0
+		}
+		if config.OnDemandEnabled != nil {
+			onDemand.Enabled = *config.OnDemandEnabled
 		}
 		if config.OnDemandUsed != nil {
 			onDemand.Used = finiteFloat(&config.OnDemandUsed.Val)
