@@ -41,17 +41,18 @@ const (
 // CredentialUsage is the provider-neutral quota snapshot returned by the
 // management API. Usage reads never alter credential or inference status.
 type CredentialUsage struct {
-	CredentialID string              `json:"credential_id"`
-	Provider     string              `json:"provider"`
-	Availability string              `json:"availability"`
-	FetchedAt    *time.Time          `json:"fetched_at,omitempty"`
-	Stale        *bool               `json:"stale,omitempty"`
-	Message      string              `json:"message,omitempty"`
-	Quotas       []CredentialQuota   `json:"quotas"`
-	Plan         *CredentialPlan     `json:"plan,omitempty"`
-	OnDemand     *CredentialOnDemand `json:"on_demand,omitempty"`
-	Credits      *CredentialCredits  `json:"credits,omitempty"`
-	ResetCredits *ResetCredits       `json:"reset_credits,omitempty"`
+	CredentialID string               `json:"credential_id"`
+	Provider     string               `json:"provider"`
+	Availability string               `json:"availability"`
+	FetchedAt    *time.Time           `json:"fetched_at,omitempty"`
+	Stale        *bool                `json:"stale,omitempty"`
+	Message      string               `json:"message,omitempty"`
+	Quotas       []CredentialQuota    `json:"quotas"`
+	Plan         *CredentialPlan      `json:"plan,omitempty"`
+	OnDemand     *CredentialOnDemand  `json:"on_demand,omitempty"`
+	AutoTopUp    *CredentialAutoTopUp `json:"auto_top_up,omitempty"`
+	Credits      *CredentialCredits   `json:"credits,omitempty"`
+	ResetCredits *ResetCredits        `json:"reset_credits,omitempty"`
 }
 
 type CredentialQuota struct {
@@ -87,6 +88,16 @@ type CredentialOnDemand struct {
 	DisabledReason string   `json:"disabled_reason,omitempty"`
 }
 
+type CredentialAutoTopUp struct {
+	Enabled        bool     `json:"enabled"`
+	CanUpdate      bool     `json:"can_update"`
+	Threshold      *float64 `json:"threshold,omitempty"`
+	TopUpAmount    *float64 `json:"top_up_amount,omitempty"`
+	MonthlyLimit   *float64 `json:"monthly_limit,omitempty"`
+	Unit           string   `json:"unit,omitempty"`
+	DisabledReason string   `json:"disabled_reason,omitempty"`
+}
+
 type CredentialCredits struct {
 	HasCredits bool     `json:"has_credits"`
 	Unlimited  bool     `json:"unlimited"`
@@ -96,6 +107,7 @@ type CredentialCredits struct {
 
 type ResetCredits struct {
 	AvailableCount int64                `json:"available_count"`
+	CanRedeem      bool                 `json:"can_redeem"`
 	Credits        []ResetCreditDetails `json:"credits"`
 }
 
@@ -240,7 +252,28 @@ func (m *Manager) xAIUsage(ctx context.Context, credentialID string, credential 
 	if resp.status < http.StatusOK || resp.status >= http.StatusMultipleChoices {
 		return CredentialUsage{}, fmt.Errorf("xAI usage returned status %d", resp.status)
 	}
-	return parseXAIUsage(resp.body, credentialID, user.SubscriptionTier, m.now().UTC())
+	usage, err := parseXAIUsage(resp.body, credentialID, user.SubscriptionTier, m.now().UTC())
+	if err != nil {
+		return CredentialUsage{}, err
+	}
+	if isXAIUnifiedBilling(resp.body) {
+		if autoTopUp, autoTopUpErr := m.xAIAutoTopUp(ctx, credentialID); autoTopUpErr == nil {
+			usage.AutoTopUp = autoTopUp
+		}
+	}
+	if resetCredits, resetErr := m.xAIResetCredits(ctx, credentialID); resetErr == nil {
+		usage.ResetCredits = resetCredits
+	}
+	return usage, nil
+}
+
+func isXAIUnifiedBilling(body []byte) bool {
+	payload := struct {
+		Config *struct {
+			UnifiedBilling *bool `json:"isUnifiedBillingUser"`
+		} `json:"config"`
+	}{}
+	return json.Unmarshal(body, &payload) == nil && payload.Config != nil && payload.Config.UnifiedBilling != nil && *payload.Config.UnifiedBilling
 }
 
 func jwtSubject(token string) string {
@@ -304,8 +337,9 @@ func parseXAIUsage(body []byte, credentialID, subscriptionTier string, fetchedAt
 	if tier := strings.TrimSpace(subscriptionTier); tier != "" {
 		usage.Plan = &CredentialPlan{Name: tier, BillingCycleEnd: quota.ResetsAt}
 	}
-	if config.OnDemandCap != nil || config.OnDemandUsed != nil || config.OnDemandEnabled != nil {
-		onDemand := &CredentialOnDemand{CanUpdate: false, Unit: "cent", LimitType: "provider_managed"}
+	unifiedBilling := config.UnifiedBilling != nil && *config.UnifiedBilling
+	if !unifiedBilling && (config.OnDemandCap != nil || config.OnDemandUsed != nil || config.OnDemandEnabled != nil) {
+		onDemand := &CredentialOnDemand{CanUpdate: true, Unit: "cent", LimitType: "personal"}
 		if config.OnDemandCap != nil {
 			onDemand.Limit = finiteFloat(&config.OnDemandCap.Val)
 			onDemand.Enabled = config.OnDemandCap.Val > 0
@@ -329,7 +363,7 @@ func parseXAIUsage(body []byte, credentialID, subscriptionTier string, fetchedAt
 		balance := config.PrepaidBalance.Val
 		usage.Credits = &CredentialCredits{HasCredits: balance > 0, Balance: finiteFloat(&balance), Unit: "cent"}
 	}
-	if config.UnifiedBilling != nil && *config.UnifiedBilling {
+	if unifiedBilling {
 		usage.Message = "Usage is shared across the account's unified Grok billing pool."
 	}
 	return usage, nil

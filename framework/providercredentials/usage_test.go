@@ -2,6 +2,7 @@ package providercredentials
 
 import (
 	"context"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -244,15 +245,78 @@ func TestXAIUsageFetchesIdentitySubscriptionQuotaAndBalances(t *testing.T) {
 	require.Equal(t, "Weekly included usage", usage.Quotas[0].Description)
 	require.Equal(t, "grok-product:api", usage.Quotas[1].ID)
 	require.Equal(t, 40.0, *usage.Quotas[1].UsedPercent)
-	require.True(t, usage.OnDemand.Enabled)
-	require.False(t, usage.OnDemand.CanUpdate)
-	require.Equal(t, 5000.0, *usage.OnDemand.Limit)
-	require.Equal(t, 1200.0, *usage.OnDemand.Used)
-	require.Equal(t, 3800.0, *usage.OnDemand.Remaining)
+	require.Nil(t, usage.OnDemand, "unified billing accounts use auto top-up rather than the legacy on-demand cap")
 	require.True(t, usage.Credits.HasCredits)
 	require.Equal(t, 2500.0, *usage.Credits.Balance)
 	require.Equal(t, "cent", usage.Credits.Unit)
 	require.Contains(t, usage.Message, "unified Grok billing pool")
+}
+
+func TestXAIUsageFetchesUnifiedAutoTopUpAndResetTokens(t *testing.T) {
+	fetchedAt := time.Date(2026, time.September, 1, 7, 0, 0, 0, time.UTC)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "Bearer xai-access", r.Header.Get("Authorization"))
+		switch r.URL.Path {
+		case "/user":
+			_, _ = io.WriteString(w, `{"userId":"grok-user-123","subscriptionTier":"SuperGrok Heavy"}`)
+		case "/billing":
+			_, _ = io.WriteString(w, `{"config":{"isUnifiedBillingUser":true,"prepaidBalance":{"val":2500},"onDemandCap":{"val":5000},"onDemandEnabled":true}}`)
+		case "/auto-topup-rule":
+			_, _ = io.WriteString(w, `{"rule":{"enabled":true,"minBeforeHittingSl":{"val":500},"topupAmount":{"val":2000},"maxAmountPerMonth":{"val":10000}}}`)
+		case "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets":
+			require.Equal(t, "application/grpc-web+proto", r.Header.Get("Content-Type"))
+			response := appendProtoString(nil, 10, "reset-token-1")
+			response = appendProtoMessage(response, 30, timestampProto(time.Date(2026, time.September, 12, 0, 0, 0, 0, time.UTC)))
+			_, _ = w.Write(grpcWebResponse(appendProtoMessage(nil, 10, response)))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	_, db := newTestManager(t, server)
+	manager := NewManager(
+		databaseStore{db: db},
+		WithHTTPClient(server.Client()),
+		WithXAIUsageEndpoint(server.URL),
+		WithXAIWebEndpoint(server.URL),
+		WithNow(func() time.Time { return fetchedAt }),
+	)
+	expiresAt := fetchedAt.Add(time.Hour)
+	require.NoError(t, db.Create(&tables.TableProviderCredential{
+		CredentialID: "xai-key", Provider: string(ProviderXAI), ProviderKeyID: "xai-key", AuthMode: "device_code",
+		AccessToken: "xai-access", RefreshToken: "xai-refresh", AccountID: "grok-user-123", ExpiresAt: &expiresAt, Status: StatusConnected, Version: 1,
+	}).Error)
+
+	usage := manager.Usage(context.Background(), ProviderXAI, "xai-key")
+	require.Equal(t, UsageAvailable, usage.Availability)
+	require.Nil(t, usage.OnDemand, "unified billing must not expose the legacy PAYG control")
+	require.NotNil(t, usage.AutoTopUp)
+	require.True(t, usage.AutoTopUp.Enabled)
+	require.True(t, usage.AutoTopUp.CanUpdate)
+	require.Equal(t, 500.0, *usage.AutoTopUp.Threshold)
+	require.Equal(t, 2000.0, *usage.AutoTopUp.TopUpAmount)
+	require.Equal(t, 10000.0, *usage.AutoTopUp.MonthlyLimit)
+	require.NotNil(t, usage.ResetCredits)
+	require.True(t, usage.ResetCredits.CanRedeem)
+	require.Equal(t, int64(1), usage.ResetCredits.AvailableCount)
+	require.Equal(t, "reset-token-1", usage.ResetCredits.Credits[0].ID)
+	require.Equal(t, time.Date(2026, time.September, 12, 0, 0, 0, 0, time.UTC), *usage.ResetCredits.Credits[0].ExpiresAt)
+}
+
+func timestampProto(value time.Time) []byte {
+	message := protowire.AppendTag(nil, 1, protowire.VarintType)
+	return protowire.AppendVarint(message, uint64(value.Unix()))
+}
+
+func grpcWebResponse(message []byte) []byte {
+	response := make([]byte, 5, 5+len(message))
+	binary.BigEndian.PutUint32(response[1:], uint32(len(message)))
+	response = append(response, message...)
+	trailer := []byte("grpc-status: 0\r\n")
+	frame := make([]byte, 5, 5+len(trailer))
+	frame[0] = 0x80
+	binary.BigEndian.PutUint32(frame[1:], uint32(len(trailer)))
+	return append(response, append(frame, trailer...)...)
 }
 
 func TestXAIUsageRetriesOneUnauthorizedWithForcedRefresh(t *testing.T) {
@@ -344,7 +408,7 @@ func TestParseXAIUsageUsesAuthoritativeOnDemandState(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, usage.OnDemand)
 	require.False(t, usage.OnDemand.Enabled)
-	require.False(t, usage.OnDemand.CanUpdate)
+	require.True(t, usage.OnDemand.CanUpdate)
 	require.Equal(t, "On-demand spending is disabled in Grok", usage.OnDemand.DisabledReason)
 }
 

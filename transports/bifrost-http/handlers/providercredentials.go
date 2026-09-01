@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/providercredentials"
@@ -168,6 +169,61 @@ func (h *ProviderHandler) updateProviderCredentialOnDemand(ctx *fasthttp.Request
 		return
 	}
 	SendJSON(ctx, onDemand)
+}
+
+func (h *ProviderHandler) updateProviderCredentialAutoTopUp(ctx *fasthttp.RequestCtx) {
+	manager, provider, ok := h.providerCredentialRequest(ctx)
+	if !ok {
+		return
+	}
+	credentialID, ok := h.providerCredentialID(ctx, provider)
+	if !ok {
+		return
+	}
+	var request providercredentials.UpdateCredentialAutoTopUpRequest
+	if err := json.Unmarshal(ctx.PostBody(), &request); err != nil {
+		SendError(ctx, fasthttp.StatusBadRequest, "Invalid auto top-up settings")
+		return
+	}
+	autoTopUp, err := manager.UpdateAutoTopUp(ctx, provider, credentialID, request)
+	if err != nil {
+		switch {
+		case errors.Is(err, providercredentials.ErrOnDemandUnsupportedProvider):
+			SendError(ctx, fasthttp.StatusBadRequest, "Provider does not support auto top-up updates")
+		case errors.Is(err, providercredentials.ErrOnDemandConflict):
+			SendError(ctx, fasthttp.StatusConflict, "Auto top-up settings changed; refresh usage and try again")
+		default:
+			SendError(ctx, fasthttp.StatusBadGateway, "Provider auto top-up settings could not be updated")
+		}
+		return
+	}
+	SendJSON(ctx, autoTopUp)
+}
+
+func (h *ProviderHandler) redeemProviderCredentialReset(ctx *fasthttp.RequestCtx) {
+	manager, provider, ok := h.providerCredentialRequest(ctx)
+	if !ok {
+		return
+	}
+	credentialID, ok := h.providerCredentialID(ctx, provider)
+	if !ok {
+		return
+	}
+	resetID, ok := ctx.UserValue("reset_id").(string)
+	if !ok || strings.TrimSpace(resetID) == "" {
+		SendError(ctx, fasthttp.StatusBadRequest, "Reset ID is required")
+		return
+	}
+	credits, err := manager.RedeemReset(ctx, provider, credentialID, resetID)
+	if err != nil {
+		if errors.Is(err, providercredentials.ErrResetUnsupportedProvider) {
+			SendError(ctx, fasthttp.StatusBadRequest, "Provider does not support usage reset redemption")
+		} else {
+			SendError(ctx, fasthttp.StatusBadGateway, "Usage reset could not be redeemed")
+		}
+		return
+	}
+	SendJSON(ctx, credits)
 }
 
 func (h *ProviderHandler) refreshProviderCredential(ctx *fasthttp.RequestCtx) {

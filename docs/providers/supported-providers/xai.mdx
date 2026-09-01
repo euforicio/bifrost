@@ -53,7 +53,9 @@ Configure xAI as a provider.
 Each provider key can be connected to a different xAI account. Add another key and choose **Connect another account** to keep routing, budgets, and model allowlists independent. Account tokens are encrypted in Bifrost's config store and are never returned by the management API.
 
 <Note>
-For connected Grok subscription accounts, `GET /api/providers/xai/credentials/{credential_id}/usage` returns the current included-usage period, reset time, plan, prepaid balance, and on-demand spending state reported by xAI's Grok client service. Usage refreshes are read-only and never disconnect an otherwise usable inference credential when the billing service is unavailable. xAI does not expose a supported write API for subscription spending settings, so the account card opens Grok's usage settings to enable pay-as-you-go or change its cap.
+For connected Grok subscription accounts, `GET /api/providers/xai/credentials/{credential_id}/usage` returns the current included-usage period, reset time, plan, prepaid balance, spending controls, and any redeemable usage resets reported by xAI's Grok services. Usage refreshes never disconnect an otherwise usable inference credential when the billing service is unavailable.
+
+Legacy billing accounts can enable or disable on-demand usage and set a monthly cap. Unified-billing accounts can configure Auto Top-Up, including its balance threshold, top-up amount, and monthly cap. Eligible accounts can also redeem a displayed usage reset from the account card. Bifrost verifies billing changes by reading the provider state again and uses optimistic concurrency fields to avoid overwriting a newer setting. These consumer billing RPCs are provider-internal contracts and may change independently of xAI's public inference API; failures are reported without changing inference connectivity.
 </Note>
 
 </Tab>

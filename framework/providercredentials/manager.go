@@ -54,6 +54,7 @@ type endpoints struct {
 	xAIDeviceURL   string
 	xAITokenURL    string
 	xAIUsageAPI    string
+	xAIWebAPI      string
 	cursorLoginURL string
 	cursorAPIBase  string
 }
@@ -132,6 +133,16 @@ func WithXAIUsageEndpoint(baseURL string) Option {
 	}
 }
 
+// WithXAIWebEndpoint replaces the authenticated Grok web RPC endpoint for
+// local protocol fixtures. An empty value preserves the production default.
+func WithXAIWebEndpoint(baseURL string) Option {
+	return func(m *Manager) {
+		if strings.TrimSpace(baseURL) != "" {
+			m.endpoints.xAIWebAPI = strings.TrimRight(baseURL, "/")
+		}
+	}
+}
+
 // WithNow replaces the manager clock for deterministic local protocol tests.
 func WithNow(now func() time.Time) Option {
 	return func(m *Manager) {
@@ -189,6 +200,7 @@ func NewManager(store Store, opts ...Option) *Manager {
 			xAIDeviceURL:   "https://auth.x.ai/oauth2/device/code",
 			xAITokenURL:    "https://auth.x.ai/oauth2/token",
 			xAIUsageAPI:    "https://cli-chat-proxy.grok.com/v1",
+			xAIWebAPI:      "https://grok.com",
 			cursorLoginURL: "https://cursor.com/loginDeepControl",
 			cursorAPIBase:  "https://api2.cursor.sh",
 		},

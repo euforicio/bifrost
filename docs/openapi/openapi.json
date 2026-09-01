@@ -42883,7 +42883,7 @@
       "get": {
         "operationId": "getProviderCredentialUsage",
         "summary": "Get provider account usage",
-        "description": "Returns a normalized quota snapshot for the account bound to an existing provider key. Upstream usage failures are reported with `availability: unavailable` and do not disable inference. xAI returns `availability: unsupported` because it does not expose a programmatic account quota endpoint. Credential tokens are never returned.",
+        "description": "Returns a normalized quota snapshot for the account bound to an existing provider key. Upstream usage failures are reported with `availability: unavailable` and do not disable inference. Credential tokens are never returned.",
         "tags": [
           "Providers"
         ],
@@ -42951,7 +42951,7 @@
       "put": {
         "operationId": "updateProviderCredentialOnDemand",
         "summary": "Update provider account on-demand spending",
-        "description": "Updates and verifies Cursor personal-account on-demand spending. The expected fields provide optimistic concurrency protection. Organization- managed policies are read-only.",
+        "description": "Updates and verifies Cursor personal-account or legacy xAI subscription on-demand spending. The expected fields provide optimistic concurrency protection. Organization-managed policies are read-only.",
         "tags": [
           "Providers"
         ],
@@ -43093,6 +43093,195 @@
           },
           "502": {
             "description": "Provider settings could not be updated or verified"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/usage/auto-top-up": {
+      "put": {
+        "operationId": "updateProviderCredentialAutoTopUp",
+        "summary": "Update xAI Auto Top-Up settings",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "enabled",
+                  "threshold_dollars",
+                  "top_up_amount_dollars",
+                  "monthly_limit_dollars"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "threshold_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "top_up_amount_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "monthly_limit_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "expected_enabled": {
+                    "type": "boolean"
+                  },
+                  "expected_threshold_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "expected_top_up_amount_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  },
+                  "expected_monthly_limit_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified Auto Top-Up settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "enabled",
+                    "can_update"
+                  ],
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "can_update": {
+                      "type": "boolean"
+                    },
+                    "threshold": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "top_up_amount": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "monthly_limit": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "unit": {
+                      "type": "string"
+                    },
+                    "disabled_reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Provider settings changed since the usage snapshot was read"
+          },
+          "502": {
+            "description": "Provider settings could not be updated or verified"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/usage/resets/{reset_id}/redeem": {
+      "post": {
+        "operationId": "redeemProviderCredentialReset",
+        "summary": "Redeem an xAI usage reset",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          },
+          {
+            "name": "reset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Remaining redeemable resets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialResetCredits"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Provider reset could not be redeemed"
           }
         }
       }
@@ -95613,6 +95802,39 @@
               }
             }
           },
+          "auto_top_up": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "can_update"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "can_update": {
+                "type": "boolean"
+              },
+              "threshold": {
+                "type": "number",
+                "format": "double"
+              },
+              "top_up_amount": {
+                "type": "number",
+                "format": "double"
+              },
+              "monthly_limit": {
+                "type": "number",
+                "format": "double"
+              },
+              "unit": {
+                "type": "string"
+              },
+              "disabled_reason": {
+                "type": "string"
+              }
+            }
+          },
           "credits": {
             "$ref": "#/components/schemas/ProviderCredentialCredits"
           },
@@ -95699,12 +95921,16 @@
         "type": "object",
         "required": [
           "available_count",
+          "can_redeem",
           "credits"
         ],
         "properties": {
           "available_count": {
             "type": "integer",
             "format": "int64"
+          },
+          "can_redeem": {
+            "type": "boolean"
           },
           "credits": {
             "type": "array",

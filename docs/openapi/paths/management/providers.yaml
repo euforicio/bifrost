@@ -625,9 +625,8 @@ provider-credential-usage:
     description: >-
       Returns a normalized quota snapshot for the account bound to an existing
       provider key. Upstream usage failures are reported with `availability:
-      unavailable` and do not disable inference. xAI returns `availability:
-      unsupported` because it does not expose a programmatic account quota
-      endpoint. Credential tokens are never returned.
+      unavailable` and do not disable inference. Credential tokens are never
+      returned.
     tags: [Providers]
     security:
       - ManagementBearerAuth: []
@@ -655,9 +654,9 @@ provider-credential-on-demand:
     operationId: updateProviderCredentialOnDemand
     summary: Update provider account on-demand spending
     description: >-
-      Updates and verifies Cursor personal-account on-demand spending. The
-      expected fields provide optimistic concurrency protection. Organization-
-      managed policies are read-only.
+      Updates and verifies Cursor personal-account or legacy xAI subscription
+      on-demand spending. The expected fields provide optimistic concurrency
+      protection. Organization-managed policies are read-only.
     tags: [Providers]
     security:
       - ManagementBearerAuth: []
@@ -689,6 +688,63 @@ provider-credential-on-demand:
         description: Provider settings changed since the usage snapshot was read
       '502':
         description: Provider settings could not be updated or verified
+
+provider-credential-auto-top-up:
+  put:
+    operationId: updateProviderCredentialAutoTopUp
+    summary: Update xAI Auto Top-Up settings
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../../schemas/management/providers.yaml#/UpdateProviderCredentialAutoTopUpRequest'
+    responses:
+      '200':
+        description: Verified Auto Top-Up settings
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialAutoTopUp'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '409':
+        description: Provider settings changed since the usage snapshot was read
+      '502':
+        description: Provider settings could not be updated or verified
+
+provider-credential-reset-redeem:
+  post:
+    operationId: redeemProviderCredentialReset
+    summary: Redeem an xAI usage reset
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+      - name: reset_id
+        in: path
+        required: true
+        schema:
+          type: string
+    responses:
+      '200':
+        description: Remaining redeemable resets
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialResetCredits'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '502':
+        description: Provider reset could not be redeemed
 
 provider-credential-refresh:
   post:
