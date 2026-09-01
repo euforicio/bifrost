@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { getErrorMessage } from "@/lib/store";
 import { useGetProviderCredentialUsageQuery } from "@/lib/store/apis/providerCredentialsApi";
-import { ProviderUsageQuota } from "@/lib/types/config";
+import { ProviderCredentialUsage, ProviderUsageOnDemand, ProviderUsageQuota } from "@/lib/types/config";
 import { AlertCircle, CircleDollarSign, Gauge, Loader2, RefreshCw, RotateCcw } from "lucide-react";
 
 interface Props {
@@ -67,6 +67,7 @@ function UsageQuota({ quota }: { quota: ProviderUsageQuota }) {
 				</div>
 				{percent !== null ? <span className="shrink-0 text-sm font-medium">{numberFormatter.format(percent)}%</span> : null}
 			</div>
+			{quota.description ? <p className="text-muted-foreground mt-1 text-xs">{quota.description}</p> : null}
 			{percent !== null ? (
 				<Progress
 					value={percent}
@@ -83,6 +84,120 @@ function UsageQuota({ quota }: { quota: ProviderUsageQuota }) {
 					{startsAt && resetAt ? " · " : null}
 					{resetAt ? `Resets ${resetAt}` : null}
 				</p>
+			) : null}
+		</div>
+	);
+}
+
+function CursorQuotaRow({ quota }: { quota: ProviderUsageQuota }) {
+	const resetAt = formatTimestamp(quota.resets_at);
+	const percent = quota.used_percent === undefined ? null : Math.max(0, Math.min(quota.used_percent, 100));
+	const details = quotaDetails(quota);
+	const testId = safeTestId(quota.id);
+
+	return (
+		<div className="py-3 first:pt-0 last:pb-0" data-testid={`provider-usage-quota-${testId}`}>
+			<div className="flex items-start justify-between gap-3">
+				<div>
+					<p className="text-sm font-medium">{quota.name}</p>
+					{quota.description ? <p className="text-muted-foreground mt-0.5 text-xs">{quota.description}</p> : null}
+				</div>
+				{percent !== null ? <span className="shrink-0 text-sm font-medium">{numberFormatter.format(percent)}% used</span> : null}
+			</div>
+			{percent !== null ? (
+				<Progress
+					value={percent}
+					className="mt-2 h-1.5"
+					aria-label={`${quota.name} usage`}
+					aria-valuetext={`${numberFormatter.format(percent)} percent used`}
+					data-testid={`provider-usage-progress-${testId}`}
+				/>
+			) : null}
+			{details || resetAt ? (
+				<p className="text-muted-foreground mt-2 text-xs">
+					{details}
+					{details && resetAt ? " · " : null}
+					{resetAt ? `Resets ${resetAt}` : null}
+				</p>
+			) : null}
+		</div>
+	);
+}
+
+function CursorOnDemand({ onDemand }: { onDemand: ProviderUsageOnDemand }) {
+	const details: string[] = [];
+	if (onDemand.used !== undefined) details.push(`${formatQuotaValue(onDemand.used, onDemand.unit)} spent`);
+	if (onDemand.limit !== undefined) details.push(`${formatQuotaValue(onDemand.limit, onDemand.unit)} monthly limit`);
+	if (onDemand.remaining !== undefined) details.push(`${formatQuotaValue(onDemand.remaining, onDemand.unit)} remaining`);
+
+	return (
+		<div className="mt-4" data-testid="provider-usage-cursor-on-demand">
+			<p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">On-demand usage</p>
+			<div className="bg-background rounded-sm border p-3">
+				<div className="flex flex-wrap items-center justify-between gap-2">
+					<div>
+						<p className="text-sm font-medium">On-Demand Spending</p>
+						<p className="text-muted-foreground mt-0.5 text-xs">
+							{onDemand.enabled ? "Additional usage is enabled" : onDemand.disabled_reason || "On-demand spending is disabled"}
+						</p>
+					</div>
+					<Badge variant={onDemand.enabled ? "success" : "secondary"}>{onDemand.enabled ? "Enabled" : "Disabled"}</Badge>
+				</div>
+				{details.length > 0 ? <p className="text-muted-foreground mt-2 text-xs">{details.join(" · ")}</p> : null}
+			</div>
+		</div>
+	);
+}
+
+function CursorUsage({ data, credentialId }: { data: ProviderCredentialUsage; credentialId: string }) {
+	const cursorModels = data.quotas.find((quota) => quota.id === "cursor-models");
+	const otherModels = data.quotas.find((quota) => quota.id === "other-models");
+	const grokBot = data.quotas.find((quota) => quota.id === "grok-bot");
+	const planReset = formatTimestamp(data.plan?.billing_cycle_end);
+	const extraQuotas = data.quotas.filter(
+		(quota) => !["plan", "cursor-models", "other-models", "grok-bot"].includes(quota.id) && !quota.id.startsWith("spend-limit:"),
+	);
+
+	return (
+		<div data-testid={`provider-usage-cursor-${credentialId}`}>
+			{data.plan ? (
+				<div className="bg-background mt-3 rounded-sm border p-3" data-testid="provider-usage-cursor-plan">
+					<p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">Current plan</p>
+					<div className="mt-1 flex flex-wrap items-baseline gap-2">
+						<p className="text-lg font-semibold">{data.plan.name}</p>
+						{data.plan.price ? <span className="text-muted-foreground text-sm">{data.plan.price}</span> : null}
+					</div>
+					{planReset ? <p className="text-muted-foreground mt-1 text-xs">Usage limits reset {planReset}</p> : null}
+				</div>
+			) : null}
+
+			{cursorModels || otherModels ? (
+				<div className="mt-4">
+					<p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">Included usage</p>
+					<div className="bg-background divide-y rounded-sm border p-3">
+						{cursorModels ? <CursorQuotaRow quota={cursorModels} /> : null}
+						{otherModels ? <CursorQuotaRow quota={otherModels} /> : null}
+					</div>
+				</div>
+			) : null}
+
+			{grokBot ? (
+				<div className="mt-4">
+					<p className="text-muted-foreground mb-2 text-xs font-medium tracking-wide uppercase">Grok Bot</p>
+					<div className="bg-background rounded-sm border p-3">
+						<CursorQuotaRow quota={grokBot} />
+					</div>
+				</div>
+			) : null}
+
+			{data.on_demand ? <CursorOnDemand onDemand={data.on_demand} /> : null}
+
+			{extraQuotas.length > 0 ? (
+				<div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+					{extraQuotas.map((quota) => (
+						<UsageQuota key={quota.id} quota={quota} />
+					))}
+				</div>
 			) : null}
 		</div>
 	);
@@ -133,6 +248,7 @@ export default function ProviderUsageSummary({ credentialId, provider }: Props) 
 
 	const unsupportedMessage = "Provider does not expose account usage through its API";
 	const showCredits = data.credits !== undefined;
+	const isCursor = data.provider.toLowerCase() === "cursor";
 
 	return (
 		<section className="border-t pt-3" aria-label="Provider account usage" data-testid={`provider-usage-summary-${credentialId}`}>
@@ -177,7 +293,9 @@ export default function ProviderUsageSummary({ credentialId, provider }: Props) 
 			) : (
 				<>
 					{data.message ? <p className="text-muted-foreground mt-2 text-xs">{data.message}</p> : null}
-					{data.quotas.length > 0 ? (
+					{isCursor ? (
+						<CursorUsage data={data} credentialId={credentialId} />
+					) : data.quotas.length > 0 ? (
 						<div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-3" data-testid={`provider-usage-quotas-${credentialId}`}>
 							{data.quotas.map((quota) => (
 								<UsageQuota key={quota.id} quota={quota} />
@@ -206,8 +324,8 @@ export default function ProviderUsageSummary({ credentialId, provider }: Props) 
 					{data.reset_credits ? (
 						<div className="bg-background mt-3 rounded-sm border p-3" data-testid={`provider-usage-resets-${credentialId}`}>
 							<div className="flex items-center gap-2 text-sm font-medium">
-								<RotateCcw className="text-muted-foreground h-4 w-4" /> {data.reset_credits.available_count}{" "}
-								{data.reset_credits.available_count === 1 ? "reset" : "resets"} available
+								<RotateCcw className="text-muted-foreground h-4 w-4" /> {isCursor ? "Grok Bot: " : null}
+								{data.reset_credits.available_count} {data.reset_credits.available_count === 1 ? "reset" : "resets"} available
 							</div>
 							{data.reset_credits.credits.length > 0 ? (
 								<div className="mt-2 grid gap-2 sm:grid-cols-2">

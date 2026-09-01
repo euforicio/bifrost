@@ -26,6 +26,9 @@ const (
 	openAIUsagePath              = "/wham/usage"
 	openAIResetCreditsPath       = "/wham/rate-limit-reset-credits"
 	cursorCurrentPeriodUsagePath = "/aiserver.v1.DashboardService/GetCurrentPeriodUsage"
+	cursorPlanInfoPath           = "/aiserver.v1.DashboardService/GetPlanInfo"
+	cursorSandUsageStatusPath    = "/aiserver.v1.DashboardService/GetSandUsageStatus"
+	cursorHardLimitPath          = "/aiserver.v1.DashboardService/GetHardLimit"
 	maxUsageResponseBytes        = 1024 * 1024
 	providerUsageTimeout         = 10 * time.Second
 	resetCreditsTimeout          = 5 * time.Second
@@ -36,20 +39,23 @@ const (
 // CredentialUsage is the provider-neutral quota snapshot returned by the
 // management API. Usage reads never alter credential or inference status.
 type CredentialUsage struct {
-	CredentialID string             `json:"credential_id"`
-	Provider     string             `json:"provider"`
-	Availability string             `json:"availability"`
-	FetchedAt    *time.Time         `json:"fetched_at,omitempty"`
-	Stale        *bool              `json:"stale,omitempty"`
-	Message      string             `json:"message,omitempty"`
-	Quotas       []CredentialQuota  `json:"quotas"`
-	Credits      *CredentialCredits `json:"credits,omitempty"`
-	ResetCredits *ResetCredits      `json:"reset_credits,omitempty"`
+	CredentialID string              `json:"credential_id"`
+	Provider     string              `json:"provider"`
+	Availability string              `json:"availability"`
+	FetchedAt    *time.Time          `json:"fetched_at,omitempty"`
+	Stale        *bool               `json:"stale,omitempty"`
+	Message      string              `json:"message,omitempty"`
+	Quotas       []CredentialQuota   `json:"quotas"`
+	Plan         *CredentialPlan     `json:"plan,omitempty"`
+	OnDemand     *CredentialOnDemand `json:"on_demand,omitempty"`
+	Credits      *CredentialCredits  `json:"credits,omitempty"`
+	ResetCredits *ResetCredits       `json:"reset_credits,omitempty"`
 }
 
 type CredentialQuota struct {
 	ID                    string     `json:"id"`
 	Name                  string     `json:"name"`
+	Description           string     `json:"description,omitempty"`
 	UsedPercent           *float64   `json:"used_percent,omitempty"`
 	Used                  *float64   `json:"used,omitempty"`
 	Limit                 *float64   `json:"limit,omitempty"`
@@ -58,6 +64,24 @@ type CredentialQuota struct {
 	WindowDurationMinutes *int64     `json:"window_duration_minutes,omitempty"`
 	StartsAt              *time.Time `json:"starts_at,omitempty"`
 	ResetsAt              *time.Time `json:"resets_at,omitempty"`
+}
+
+type CredentialPlan struct {
+	Name            string     `json:"name"`
+	Price           string     `json:"price,omitempty"`
+	IncludedAmount  *float64   `json:"included_amount,omitempty"`
+	IncludedUnit    string     `json:"included_unit,omitempty"`
+	BillingCycleEnd *time.Time `json:"billing_cycle_end,omitempty"`
+}
+
+type CredentialOnDemand struct {
+	Enabled        bool     `json:"enabled"`
+	Used           *float64 `json:"used,omitempty"`
+	Limit          *float64 `json:"limit,omitempty"`
+	Remaining      *float64 `json:"remaining,omitempty"`
+	Unit           string   `json:"unit,omitempty"`
+	LimitType      string   `json:"limit_type,omitempty"`
+	DisabledReason string   `json:"disabled_reason,omitempty"`
 }
 
 type CredentialCredits struct {
@@ -179,10 +203,11 @@ func (m *Manager) openAIUsage(ctx context.Context, credentialID string, credenti
 }
 
 func (m *Manager) cursorUsage(ctx context.Context, credentialID string, credential schemas.ResolvedProviderCredential) (CredentialUsage, error) {
-	requestCtx, cancel := context.WithTimeout(ctx, providerUsageTimeout)
-	defer cancel()
-	request := func() (usageHTTPResponse, error) {
-		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, m.endpoints.cursorAPIBase+cursorCurrentPeriodUsagePath, bytes.NewReader(nil))
+	forcedRefresh := false
+	request := func(path string) (usageHTTPResponse, error) {
+		requestCtx, cancel := context.WithTimeout(ctx, providerUsageTimeout)
+		defer cancel()
+		req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, m.endpoints.cursorAPIBase+path, bytes.NewReader(nil))
 		if err != nil {
 			return usageHTTPResponse{}, err
 		}
@@ -195,25 +220,54 @@ func (m *Manager) cursorUsage(ctx context.Context, credentialID string, credenti
 		req.Header.Set("X-Request-ID", uuid.NewString())
 		return m.doUsageRequest(req)
 	}
-	resp, err := request()
+	fetch := func(path string, retryUnauthorized bool) (usageHTTPResponse, error) {
+		resp, err := request(path)
+		if err != nil || (resp.status != http.StatusUnauthorized && resp.status != http.StatusForbidden) || !retryUnauthorized || forcedRefresh {
+			return resp, err
+		}
+		forcedRefresh = true
+		credential, err = m.resolveProviderCredentialForUsage(ctx, ProviderCursor, credentialID, true)
+		if err != nil {
+			return usageHTTPResponse{}, err
+		}
+		return request(path)
+	}
+	resp, err := fetch(cursorCurrentPeriodUsagePath, true)
 	if err != nil {
 		return CredentialUsage{}, err
-	}
-	if resp.status == http.StatusUnauthorized || resp.status == http.StatusForbidden {
-		credential, err = m.resolveProviderCredentialForUsage(requestCtx, ProviderCursor, credentialID, true)
-		if err != nil {
-			return CredentialUsage{}, err
-		}
-		resp, err = request()
-		if err != nil {
-			return CredentialUsage{}, err
-		}
 	}
 	if resp.status < http.StatusOK || resp.status >= http.StatusMultipleChoices {
 		return CredentialUsage{}, fmt.Errorf("cursor usage returned status %d", resp.status)
 	}
 	now := m.now().UTC()
-	return parseCursorUsage(resp.body, credentialID, now)
+	usage, err := parseCursorUsage(resp.body, credentialID, now)
+	if err != nil {
+		return CredentialUsage{}, err
+	}
+	if planResp, planErr := fetch(cursorPlanInfoPath, true); planErr == nil && planResp.status >= http.StatusOK && planResp.status < http.StatusMultipleChoices {
+		if plan, parseErr := parseCursorPlanInfo(planResp.body); parseErr == nil {
+			if plan != nil && plan.BillingCycleEnd == nil && len(usage.Quotas) > 0 {
+				plan.BillingCycleEnd = usage.Quotas[0].ResetsAt
+			}
+			usage.Plan = plan
+		}
+	}
+	if sandResp, sandErr := fetch(cursorSandUsageStatusPath, true); sandErr == nil && sandResp.status >= http.StatusOK && sandResp.status < http.StatusMultipleChoices {
+		if quota, resets, parseErr := parseCursorSandUsage(sandResp.body); parseErr == nil {
+			if quota != nil {
+				usage.Quotas = append(usage.Quotas, *quota)
+			}
+			if resets != nil {
+				usage.ResetCredits = resets
+			}
+		}
+	}
+	if hardLimitResp, hardLimitErr := fetch(cursorHardLimitPath, true); hardLimitErr == nil && hardLimitResp.status >= http.StatusOK && hardLimitResp.status < http.StatusMultipleChoices {
+		if policy, parseErr := parseCursorHardLimit(hardLimitResp.body, usage.OnDemand); parseErr == nil {
+			usage.OnDemand = policy
+		}
+	}
+	return usage, nil
 }
 
 func (m *Manager) doUsageRequest(req *http.Request) (usageHTTPResponse, error) {
@@ -389,10 +443,13 @@ func parseResetCreditDetails(body []byte) (*ResetCredits, error) {
 }
 
 type cursorPeriodUsage struct {
-	billingStart time.Time
-	billingEnd   time.Time
-	plan         *cursorPlanUsage
-	spend        *cursorSpendLimitUsage
+	billingStart     time.Time
+	billingEnd       time.Time
+	enabled          bool
+	displayMessage   string
+	autoBucketModels []string
+	plan             *cursorPlanUsage
+	spend            *cursorSpendLimitUsage
 }
 
 type cursorPlanUsage struct {
@@ -420,7 +477,7 @@ func parseCursorUsage(body []byte, credentialID string, fetchedAt time.Time) (Cr
 		Provider:     string(ProviderCursor),
 		Availability: UsageAvailable,
 		FetchedAt:    &fetchedAt,
-		Quotas:       make([]CredentialQuota, 0, 6),
+		Quotas:       make([]CredentialQuota, 0, 7),
 	}
 	if period.plan == nil {
 		return CredentialUsage{}, errors.New("cursor usage did not include plan usage")
@@ -433,14 +490,28 @@ func parseCursorUsage(body []byte, credentialID string, fetchedAt time.Time) (Cr
 		}
 		usage.Quotas = append(usage.Quotas, cursorQuota("plan", "Plan usage", &period.plan.includedSpend, &period.plan.limit, &period.plan.remaining, usedPercent, period))
 		if period.plan.autoSpend != nil || period.plan.autoLimit != nil || period.plan.autoPercentUsed != nil {
-			usage.Quotas = append(usage.Quotas, cursorQuota("plan:auto", "Auto model usage", period.plan.autoSpend, period.plan.autoLimit, remaining(period.plan.autoLimit, period.plan.autoSpend), period.plan.autoPercentUsed, period))
+			quota := cursorQuota("cursor-models", "Cursor Models", period.plan.autoSpend, period.plan.autoLimit, remaining(period.plan.autoLimit, period.plan.autoSpend), period.plan.autoPercentUsed, period)
+			if len(period.autoBucketModels) > 0 {
+				quota.Description = "Includes " + strings.Join(period.autoBucketModels, ", ")
+			}
+			usage.Quotas = append(usage.Quotas, quota)
 		}
 		if period.plan.apiSpend != nil || period.plan.apiLimit != nil || period.plan.apiPercentUsed != nil {
-			usage.Quotas = append(usage.Quotas, cursorQuota("plan:api", "API usage", period.plan.apiSpend, period.plan.apiLimit, remaining(period.plan.apiLimit, period.plan.apiSpend), period.plan.apiPercentUsed, period))
+			usage.Quotas = append(usage.Quotas, cursorQuota("other-models", "Other Models", period.plan.apiSpend, period.plan.apiLimit, remaining(period.plan.apiLimit, period.plan.apiSpend), period.plan.apiPercentUsed, period))
 		}
 	}
 	if period.spend != nil {
-		usage.Quotas = append(usage.Quotas, cursorQuota("spend-limit:individual", "Individual spend limit", &period.spend.individualUsed, period.spend.individualLimit, &period.spend.individualRemaining, nil, period))
+		usage.OnDemand = &CredentialOnDemand{
+			Enabled:   period.enabled,
+			Used:      &period.spend.individualUsed,
+			Limit:     period.spend.individualLimit,
+			Remaining: &period.spend.individualRemaining,
+			Unit:      "cents",
+			LimitType: period.spend.limitType,
+		}
+		if period.displayMessage != "" {
+			usage.OnDemand.DisabledReason = period.displayMessage
+		}
 		if period.spend.pooledLimit != nil || period.spend.pooledUsed != nil || period.spend.pooledRemaining != nil {
 			usage.Quotas = append(usage.Quotas, cursorQuota("spend-limit:pooled", "Pooled spend limit", period.spend.pooledUsed, period.spend.pooledLimit, period.spend.pooledRemaining, nil, period))
 		}
@@ -510,6 +581,24 @@ func decodeCursorPeriodUsage(data []byte) (cursorPeriodUsage, error) {
 			}
 			if err != nil {
 				return out, err
+			}
+			data = data[consumed:]
+		case 6:
+			value, consumed := protowire.ConsumeVarint(data)
+			if consumed < 0 {
+				return out, protowire.ParseError(consumed)
+			}
+			out.enabled = value != 0
+			data = data[consumed:]
+		case 7, 13:
+			value, consumed := protowire.ConsumeBytes(data)
+			if consumed < 0 {
+				return out, protowire.ParseError(consumed)
+			}
+			if number == 7 {
+				out.displayMessage = string(value)
+			} else {
+				out.autoBucketModels = append(out.autoBucketModels, string(value))
 			}
 			data = data[consumed:]
 		default:
@@ -645,6 +734,265 @@ func decodeCursorSpendLimitUsage(data []byte) (*cursorSpendLimitUsage, error) {
 		data = data[consumed:]
 	}
 	return out, nil
+}
+
+func parseCursorPlanInfo(data []byte) (*CredentialPlan, error) {
+	for len(data) > 0 {
+		number, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		if number == 1 {
+			value, consumed := protowire.ConsumeBytes(data)
+			if consumed < 0 {
+				return nil, protowire.ParseError(consumed)
+			}
+			return decodeCursorPlanInfo(value)
+		}
+		consumed := protowire.ConsumeFieldValue(number, wireType, data)
+		if consumed < 0 {
+			return nil, protowire.ParseError(consumed)
+		}
+		data = data[consumed:]
+	}
+	return nil, nil
+}
+
+func decodeCursorPlanInfo(data []byte) (*CredentialPlan, error) {
+	plan := &CredentialPlan{IncludedUnit: "cents"}
+	for len(data) > 0 {
+		number, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch number {
+		case 1, 3:
+			value, consumed := protowire.ConsumeBytes(data)
+			if consumed < 0 {
+				return nil, protowire.ParseError(consumed)
+			}
+			if number == 1 {
+				plan.Name = string(value)
+			} else {
+				plan.Price = string(value)
+			}
+			data = data[consumed:]
+		case 2, 4:
+			value, consumed := protowire.ConsumeVarint(data)
+			if consumed < 0 {
+				return nil, protowire.ParseError(consumed)
+			}
+			if number == 2 {
+				amount := float64(int32(value))
+				plan.IncludedAmount = &amount
+			} else if value > 0 {
+				cycleEnd := cursorUnixTime(int64(value))
+				plan.BillingCycleEnd = &cycleEnd
+			}
+			data = data[consumed:]
+		default:
+			consumed := protowire.ConsumeFieldValue(number, wireType, data)
+			if consumed < 0 {
+				return nil, protowire.ParseError(consumed)
+			}
+			data = data[consumed:]
+		}
+	}
+	if plan.Name == "" && plan.Price == "" && plan.IncludedAmount == nil && plan.BillingCycleEnd == nil {
+		return nil, nil
+	}
+	return plan, nil
+}
+
+func parseCursorSandUsage(data []byte) (*CredentialQuota, *ResetCredits, error) {
+	quota := CredentialQuota{ID: "grok-bot", Name: "Grok Bot"}
+	var planLabel string
+	var bankedResetCount *int64
+	var includedLimitZero, hasAvailableUsage, hasNonZeroIncludedLimit bool
+	for len(data) > 0 {
+		number, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		switch number {
+		case 1, 2:
+			value, consumed := protowire.ConsumeBytes(data)
+			if consumed < 0 {
+				return nil, nil, protowire.ParseError(consumed)
+			}
+			timestamp, err := decodeProtoTimestamp(value)
+			if err != nil {
+				return nil, nil, err
+			}
+			if number == 1 {
+				quota.StartsAt = timestamp
+			} else {
+				quota.ResetsAt = timestamp
+			}
+			data = data[consumed:]
+		case 3:
+			value, consumed := protowire.ConsumeFixed64(data)
+			if consumed < 0 {
+				return nil, nil, protowire.ParseError(consumed)
+			}
+			percent := math.Float64frombits(value)
+			quota.UsedPercent = finiteFloat(&percent)
+			data = data[consumed:]
+		case 4, 5, 7, 8:
+			value, consumed := protowire.ConsumeVarint(data)
+			if consumed < 0 {
+				return nil, nil, protowire.ParseError(consumed)
+			}
+			switch number {
+			case 4:
+				includedLimitZero = value != 0
+			case 5:
+				count := int64(value)
+				bankedResetCount = &count
+			case 7:
+				hasAvailableUsage = value != 0
+			case 8:
+				hasNonZeroIncludedLimit = value != 0
+			}
+			data = data[consumed:]
+		case 14, 15:
+			value, consumed := protowire.ConsumeBytes(data)
+			if consumed < 0 {
+				return nil, nil, protowire.ParseError(consumed)
+			}
+			if number == 15 {
+				planLabel = string(value)
+			} else if planLabel == "" {
+				planLabel = string(value)
+			}
+			data = data[consumed:]
+		default:
+			consumed := protowire.ConsumeFieldValue(number, wireType, data)
+			if consumed < 0 {
+				return nil, nil, protowire.ParseError(consumed)
+			}
+			data = data[consumed:]
+		}
+	}
+	if quota.StartsAt != nil && quota.ResetsAt != nil && quota.ResetsAt.After(*quota.StartsAt) {
+		minutes := int64(quota.ResetsAt.Sub(*quota.StartsAt) / time.Minute)
+		quota.WindowDurationMinutes = &minutes
+	}
+	descriptions := make([]string, 0, 2)
+	if planLabel != "" {
+		descriptions = append(descriptions, planLabel)
+	}
+	if includedLimitZero {
+		descriptions = append(descriptions, "No included weekly usage")
+	} else if hasNonZeroIncludedLimit && !hasAvailableUsage {
+		descriptions = append(descriptions, "Included weekly usage exhausted")
+	}
+	quota.Description = strings.Join(descriptions, " · ")
+	var resets *ResetCredits
+	if bankedResetCount != nil {
+		resets = &ResetCredits{AvailableCount: *bankedResetCount, Credits: make([]ResetCreditDetails, 0)}
+	}
+	if quota.UsedPercent == nil && quota.StartsAt == nil && quota.ResetsAt == nil && quota.Description == "" {
+		return nil, resets, nil
+	}
+	return &quota, resets, nil
+}
+
+func parseCursorHardLimit(data []byte, current *CredentialOnDemand) (*CredentialOnDemand, error) {
+	policy := &CredentialOnDemand{Enabled: true, Unit: "cents"}
+	if current != nil {
+		*policy = *current
+	}
+	var noUsageBasedAllowed, disabledByOrganization bool
+	var perUserMonthlyLimitDollars *float64
+	for len(data) > 0 {
+		number, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		if number == 1 || number == 2 || number == 3 || number == 4 || number == 10 {
+			value, consumed := protowire.ConsumeVarint(data)
+			if consumed < 0 {
+				return nil, protowire.ParseError(consumed)
+			}
+			switch number {
+			case 2:
+				noUsageBasedAllowed = value != 0
+			case 4:
+				limit := float64(int32(value))
+				perUserMonthlyLimitDollars = &limit
+			case 10:
+				disabledByOrganization = value != 0
+			}
+			data = data[consumed:]
+			continue
+		}
+		consumed := protowire.ConsumeFieldValue(number, wireType, data)
+		if consumed < 0 {
+			return nil, protowire.ParseError(consumed)
+		}
+		data = data[consumed:]
+	}
+	policy.Enabled = !noUsageBasedAllowed && !disabledByOrganization
+	if policy.Limit == nil && perUserMonthlyLimitDollars != nil && *perUserMonthlyLimitDollars > 0 {
+		limit := *perUserMonthlyLimitDollars * 100
+		policy.Limit = &limit
+		policy.Remaining = remaining(policy.Limit, policy.Used)
+	}
+	if disabledByOrganization {
+		policy.DisabledReason = "Disabled by organization policy"
+	} else if noUsageBasedAllowed {
+		policy.DisabledReason = "On-demand spending is disabled"
+	} else if policy.Enabled {
+		policy.DisabledReason = ""
+	}
+	return policy, nil
+}
+
+func decodeProtoTimestamp(data []byte) (*time.Time, error) {
+	var seconds int64
+	var nanos int32
+	for len(data) > 0 {
+		number, wireType, n := protowire.ConsumeTag(data)
+		if n < 0 {
+			return nil, protowire.ParseError(n)
+		}
+		data = data[n:]
+		if number == 1 || number == 2 {
+			value, consumed := protowire.ConsumeVarint(data)
+			if consumed < 0 {
+				return nil, protowire.ParseError(consumed)
+			}
+			if number == 1 {
+				seconds = int64(value)
+			} else {
+				nanos = int32(value)
+			}
+			data = data[consumed:]
+			continue
+		}
+		consumed := protowire.ConsumeFieldValue(number, wireType, data)
+		if consumed < 0 {
+			return nil, protowire.ParseError(consumed)
+		}
+		data = data[consumed:]
+	}
+	if seconds == 0 && nanos == 0 {
+		return nil, nil
+	}
+	timestamp := time.Unix(seconds, int64(nanos)).UTC()
+	return &timestamp, nil
+}
+
+func cursorUnixTime(value int64) time.Time {
+	if value > 10_000_000_000 {
+		return time.UnixMilli(value).UTC()
+	}
+	return time.Unix(value, 0).UTC()
 }
 
 func finiteFloat(value *float64) *float64 {

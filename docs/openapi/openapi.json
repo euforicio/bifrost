@@ -95400,6 +95400,64 @@
               "$ref": "#/components/schemas/ProviderCredentialQuota"
             }
           },
+          "plan": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "price": {
+                "type": "string",
+                "description": "Provider-formatted recurring plan price"
+              },
+              "included_amount": {
+                "type": "number",
+                "format": "double"
+              },
+              "included_unit": {
+                "type": "string"
+              },
+              "billing_cycle_end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "on_demand": {
+            "type": "object",
+            "required": [
+              "enabled"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "used": {
+                "type": "number",
+                "format": "double"
+              },
+              "limit": {
+                "type": "number",
+                "format": "double"
+              },
+              "remaining": {
+                "type": "number",
+                "format": "double"
+              },
+              "unit": {
+                "type": "string"
+              },
+              "limit_type": {
+                "type": "string"
+              },
+              "disabled_reason": {
+                "type": "string"
+              }
+            }
+          },
           "credits": {
             "$ref": "#/components/schemas/ProviderCredentialCredits"
           },
@@ -95420,6 +95478,9 @@
             "description": "Stable provider-scoped quota identifier"
           },
           "name": {
+            "type": "string"
+          },
+          "description": {
             "type": "string"
           },
           "used_percent": {

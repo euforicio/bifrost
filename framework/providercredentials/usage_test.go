@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 func TestOpenAIUsageNormalizesWindowsCreditsAndResetDetails(t *testing.T) {
@@ -203,6 +205,9 @@ func TestCursorUsageSendsProtocolHeadersDecodesFieldsAndRetriesOnce(t *testing.T
 	var usageRequests atomic.Int64
 	var refreshRequests atomic.Int64
 	response := cursorUsageFixture(t)
+	planResponse := cursorPlanInfoFixture()
+	sandResponse := cursorSandUsageFixture()
+	hardLimitResponse := cursorHardLimitFixture()
 	_, parseErr := parseCursorUsage(response, "cursor-key", fetchedAt)
 	require.NoError(t, parseErr)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -225,6 +230,15 @@ func TestCursorUsageSendsProtocolHeadersDecodesFieldsAndRetriesOnce(t *testing.T
 			}
 			require.Equal(t, "Bearer fresh-token", r.Header.Get("Authorization"))
 			_, _ = w.Write(response)
+		case cursorPlanInfoPath:
+			require.Equal(t, "Bearer fresh-token", r.Header.Get("Authorization"))
+			_, _ = w.Write(planResponse)
+		case cursorSandUsageStatusPath:
+			require.Equal(t, "Bearer fresh-token", r.Header.Get("Authorization"))
+			_, _ = w.Write(sandResponse)
+		case cursorHardLimitPath:
+			require.Equal(t, "Bearer fresh-token", r.Header.Get("Authorization"))
+			_, _ = w.Write(hardLimitResponse)
 		case cursorRefreshPath:
 			refreshRequests.Add(1)
 			require.Equal(t, "Bearer cursor-refresh", r.Header.Get("Authorization"))
@@ -251,9 +265,25 @@ func TestCursorUsageSendsProtocolHeadersDecodesFieldsAndRetriesOnce(t *testing.T
 	require.Equal(t, float64(1000), *usage.Quotas[0].Used)
 	require.Equal(t, float64(5000), *usage.Quotas[0].Limit)
 	require.Equal(t, 25.0, *usage.Quotas[0].UsedPercent)
-	require.Equal(t, "spend-limit:overall", usage.Quotas[5].ID)
+	require.Equal(t, "cursor-models", usage.Quotas[1].ID)
+	require.Equal(t, "Cursor Models", usage.Quotas[1].Name)
+	require.Equal(t, "other-models", usage.Quotas[2].ID)
+	require.Equal(t, "Other Models", usage.Quotas[2].Name)
+	require.Equal(t, "spend-limit:overall", usage.Quotas[4].ID)
+	require.Equal(t, "grok-bot", usage.Quotas[5].ID)
+	require.Equal(t, 1.0, *usage.Quotas[5].UsedPercent)
+	require.Equal(t, "Super Grok", usage.Quotas[5].Description)
 	require.NotNil(t, usage.Quotas[0].StartsAt)
 	require.NotNil(t, usage.Quotas[0].ResetsAt)
+	require.NotNil(t, usage.Plan)
+	require.Equal(t, "Ultra", usage.Plan.Name)
+	require.Equal(t, "$200/mo", usage.Plan.Price)
+	require.NotNil(t, usage.Plan.BillingCycleEnd)
+	require.NotNil(t, usage.OnDemand)
+	require.True(t, usage.OnDemand.Enabled)
+	require.Equal(t, float64(5000), *usage.OnDemand.Limit)
+	require.NotNil(t, usage.ResetCredits)
+	require.Equal(t, int64(2), usage.ResetCredits.AvailableCount)
 }
 
 func TestCursorUsageWithoutPlanIsUnavailable(t *testing.T) {
@@ -261,8 +291,11 @@ func TestCursorUsageWithoutPlanIsUnavailable(t *testing.T) {
 	response, err := hex.DecodeString("0880b0fbd4fb331080f88fd28534")
 	require.NoError(t, err)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, cursorCurrentPeriodUsagePath, r.URL.Path)
-		_, _ = w.Write(response)
+		if r.URL.Path == cursorCurrentPeriodUsagePath {
+			_, _ = w.Write(response)
+			return
+		}
+		http.NotFound(w, r)
 	}))
 	defer server.Close()
 	_, db := newTestManager(t, server)
@@ -278,6 +311,31 @@ func TestCursorUsageWithoutPlanIsUnavailable(t *testing.T) {
 	require.Empty(t, usage.Quotas)
 }
 
+func TestCursorUsagePreservesCurrentPeriodWhenAuxiliaryReadsFail(t *testing.T) {
+	response := cursorUsageFixture(t)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == cursorCurrentPeriodUsagePath {
+			_, _ = w.Write(response)
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	_, db := newTestManager(t, server)
+	manager := NewManager(databaseStore{db: db}, WithHTTPClient(server.Client()), WithCursorEndpoints(server.URL, server.URL), WithUsageEndpoints("", server.URL))
+	expiresAt := time.Now().Add(time.Hour)
+	require.NoError(t, db.Create(&tables.TableProviderCredential{
+		CredentialID: "cursor-key", Provider: string(ProviderCursor), ProviderKeyID: "cursor-key", AuthMode: "pkce_browser",
+		AccessToken: "access-token", RefreshToken: "refresh-token", ExpiresAt: &expiresAt, Status: StatusConnected, Version: 1,
+	}).Error)
+
+	usage := manager.Usage(context.Background(), ProviderCursor, "cursor-key")
+	require.Equal(t, UsageAvailable, usage.Availability)
+	require.Len(t, usage.Quotas, 5)
+	require.Nil(t, usage.Plan)
+	require.NotNil(t, usage.OnDemand)
+}
+
 func cursorUsageFixture(t *testing.T) []byte {
 	t.Helper()
 	// Immutable descriptor-backed fixture for GetCurrentPeriodUsageResponse.
@@ -288,4 +346,46 @@ func cursorUsageFixture(t *testing.T) []byte {
 	response, err := hex.DecodeString("0880b0fbd4fb331080f88fd285341a3908e20910e80718fa0120a61d28882740a00648c20350b81758d00f610000000000003440690000000000803640710000000000003940980607222a08bc0510904e18a01f20f02e28882730bc0538cc21420a696e646976696475616c48987550dc2458bc50a2060769676e6f726564")
 	require.NoError(t, err)
 	return response
+}
+
+func cursorPlanInfoFixture() []byte {
+	plan := appendProtoString(nil, 1, "Ultra")
+	plan = appendProtoVarint(plan, 2, 40000)
+	plan = appendProtoString(plan, 3, "$200/mo")
+	plan = appendProtoVarint(plan, 4, uint64(time.Date(2026, 9, 16, 0, 0, 0, 0, time.UTC).UnixMilli()))
+	return appendProtoMessage(nil, 1, plan)
+}
+
+func cursorSandUsageFixture() []byte {
+	start := appendProtoVarint(nil, 1, uint64(time.Date(2026, 8, 30, 0, 0, 0, 0, time.UTC).Unix()))
+	reset := appendProtoVarint(nil, 1, uint64(time.Date(2026, 9, 6, 0, 0, 0, 0, time.UTC).Unix()))
+	response := appendProtoMessage(nil, 1, start)
+	response = appendProtoMessage(response, 2, reset)
+	response = protowire.AppendTag(response, 3, protowire.Fixed64Type)
+	response = protowire.AppendFixed64(response, math.Float64bits(1))
+	response = appendProtoVarint(response, 5, 2)
+	response = appendProtoString(response, 14, "Super Grok")
+	response = appendProtoString(response, 15, "Super Grok")
+	return response
+}
+
+func cursorHardLimitFixture() []byte {
+	response := appendProtoVarint(nil, 2, 0)
+	response = appendProtoVarint(response, 4, 100)
+	response = appendProtoVarint(response, 10, 0)
+	return response
+}
+
+func appendProtoVarint(dst []byte, number protowire.Number, value uint64) []byte {
+	dst = protowire.AppendTag(dst, number, protowire.VarintType)
+	return protowire.AppendVarint(dst, value)
+}
+
+func appendProtoString(dst []byte, number protowire.Number, value string) []byte {
+	return appendProtoMessage(dst, number, []byte(value))
+}
+
+func appendProtoMessage(dst []byte, number protowire.Number, value []byte) []byte {
+	dst = protowire.AppendTag(dst, number, protowire.BytesType)
+	return protowire.AppendBytes(dst, value)
 }

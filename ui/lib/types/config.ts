@@ -271,6 +271,7 @@ export type ProviderUsageAvailability = "available" | "unsupported" | "unavailab
 export interface ProviderUsageQuota {
 	id: string;
 	name: string;
+	description?: string;
 	used_percent?: number;
 	used?: number;
 	limit?: number;
@@ -279,6 +280,24 @@ export interface ProviderUsageQuota {
 	window_duration_minutes?: number;
 	starts_at?: string;
 	resets_at?: string;
+}
+
+export interface ProviderUsagePlan {
+	name: string;
+	price?: string;
+	included_amount?: number;
+	included_unit?: string;
+	billing_cycle_end?: string;
+}
+
+export interface ProviderUsageOnDemand {
+	enabled: boolean;
+	used?: number;
+	limit?: number;
+	remaining?: number;
+	unit?: string;
+	limit_type?: string;
+	disabled_reason?: string;
 }
 
 export interface ProviderUsageCredits {
@@ -310,6 +329,8 @@ export interface ProviderCredentialUsage {
 	stale?: boolean;
 	message?: string;
 	quotas: ProviderUsageQuota[];
+	plan?: ProviderUsagePlan;
+	on_demand?: ProviderUsageOnDemand;
 	credits?: ProviderUsageCredits;
 	reset_credits?: ProviderUsageResetCredits;
 }
