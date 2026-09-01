@@ -394,6 +394,25 @@ func TestCursorOnDemandUpdateWritesAndVerifiesHardLimit(t *testing.T) {
 	require.Equal(t, int64(1), setCalls.Load())
 }
 
+func TestCursorHardLimitAllowsVerifiedPersonalLimitTypesOnly(t *testing.T) {
+	for _, test := range []struct {
+		limitType string
+		canUpdate bool
+	}{
+		{limitType: "individual", canUpdate: true},
+		{limitType: "user", canUpdate: true},
+		{limitType: "team", canUpdate: false},
+		{limitType: "", canUpdate: false},
+	} {
+		t.Run(test.limitType, func(t *testing.T) {
+			current := &CredentialOnDemand{LimitType: test.limitType}
+			updated, err := parseCursorHardLimit(cursorHardLimitFixture(), current)
+			require.NoError(t, err)
+			require.Equal(t, test.canUpdate, updated.CanUpdate)
+		})
+	}
+}
+
 func TestCursorOnDemandUpdateRejectsStaleAndOrganizationManagedSettings(t *testing.T) {
 	for _, test := range []struct {
 		name       string

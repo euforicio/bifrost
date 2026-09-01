@@ -124,7 +124,7 @@ func (m *Manager) UpdateOnDemand(
 	if err != nil {
 		return nil, err
 	}
-	if period.spend == nil || !strings.EqualFold(strings.TrimSpace(period.spend.limitType), "individual") {
+	if period.spend == nil || !isIndividualLimitType(period.spend.limitType) {
 		return nil, ErrOnDemandManagedByOrg
 	}
 	currentEnabled := !current.noUsageBasedAllowed
@@ -180,13 +180,22 @@ func (policy cursorHardLimitPolicy) isManagedPolicy() bool {
 	return policy.disabledByOrganization || policy.isDynamicTeamLimit || policy.hardLimitPerUser != nil
 }
 
+func isIndividualLimitType(limitType string) bool {
+	switch strings.ToLower(strings.TrimSpace(limitType)) {
+	case "individual", "user":
+		return true
+	default:
+		return false
+	}
+}
+
 func (policy cursorHardLimitPolicy) normalized(current *CredentialOnDemand) *CredentialOnDemand {
 	out := &CredentialOnDemand{Enabled: true, Unit: "cents"}
 	if current != nil {
 		*out = *current
 	}
 	out.Enabled = !policy.noUsageBasedAllowed && !policy.disabledByOrganization
-	out.CanUpdate = !policy.isManagedPolicy() && current != nil && strings.EqualFold(strings.TrimSpace(current.LimitType), "individual")
+	out.CanUpdate = !policy.isManagedPolicy() && current != nil && isIndividualLimitType(current.LimitType)
 	limitDollars := policy.effectiveLimitDollars()
 	if limitDollars > 0 && limitDollars < maxCursorHardLimitDollars {
 		limit := float64(limitDollars) * 100
