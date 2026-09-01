@@ -38,7 +38,7 @@ func ToOpenAIChatRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.Bifros
 
 	// Canonical model for capability gating only; wire model (openaiReq.Model) is untouched.
 	capModel := schemas.ResolveCanonicalModel(ctx, bifrostReq.Model)
-	caps := schemas.ResolveModelCaps(bifrostReq.Provider, capModel)
+	caps := schemas.ResolveRequestModelCaps(ctx, bifrostReq.Provider, capModel)
 
 	if bifrostReq.Params != nil {
 		openaiReq.ChatParameters = *bifrostReq.Params

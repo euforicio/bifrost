@@ -46,9 +46,15 @@ Configure xAI as a provider.
 1. Navigate to **Models** > **Model Providers**. Look for **xAI** under **Configured Providers**. If it is missing, click on **Add New Provider** and select **xAI**.
 2. Click **Add Key** or edit an existing key.
 3. Set a name for your key.
-4. Paste your API key directly or use an environment variable (for example, `env.XAI_API_KEY`).
+4. Either paste an API key (or use an environment variable such as `env.XAI_API_KEY`) or choose **Connect xAI account** and finish the device login in your browser.
 5. Set **Allowed Models** to **All Models** (default) or the specific model allowlist you want this key to serve.
 6. Save the provider configuration.
+
+Each provider key can be connected to a different xAI account. Add another key and choose **Connect another account** to keep routing, budgets, and model allowlists independent. Account tokens are encrypted in Bifrost's config store and are never returned by the management API.
+
+<Note>
+For connected Grok subscription accounts, `GET /api/providers/xai/credentials/{credential_id}/usage` returns the current included-usage period, reset time, plan, prepaid balance, and on-demand spending state reported by xAI's Grok client service. Usage refreshes are read-only and never disconnect an otherwise usable inference credential when the billing service is unavailable.
+</Note>
 
 </Tab>
 <Tab title="config.json">

@@ -95,11 +95,56 @@ func (s *RDBConfigStore) EncryptPlaintextRows(ctx context.Context) error {
 	}
 	totalEncrypted += count
 
+	// provider_credentials
+	count, err = s.encryptPlaintextProviderCredentials(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt provider credentials: %w", err)
+	}
+	totalEncrypted += count
+
 	if totalEncrypted > 0 && s.logger != nil {
 		s.logger.Info(fmt.Sprintf("encrypted %d plaintext rows across all tables", totalEncrypted))
 	}
 
 	return nil
+}
+
+// encryptPlaintextProviderCredentials finds provider credential rows whose
+// token fields have not yet been encrypted and re-saves them in batches. The
+// TableProviderCredential.BeforeSave hook performs the encryption.
+func (s *RDBConfigStore) encryptPlaintextProviderCredentials(ctx context.Context) (int, error) {
+	// The startup pass can also be exercised against intentionally partial
+	// databases (for example, focused tests and operational repair tooling).
+	// Treat an absent newly introduced table as having no rows to upgrade.
+	if !s.DB().WithContext(ctx).Migrator().HasTable(&tables.TableProviderCredential{}) {
+		return 0, nil
+	}
+
+	var count int
+	for {
+		var credentials []tables.TableProviderCredential
+		if err := s.DB().WithContext(ctx).
+			Where("encryption_status = ? OR encryption_status IS NULL OR encryption_status = ''", encryptionStatusPlainText).
+			Limit(encryptionBatchSize).
+			Find(&credentials).Error; err != nil {
+			return count, err
+		}
+		if len(credentials) == 0 {
+			break
+		}
+		if err := s.DB().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			for i := range credentials {
+				if err := tx.Save(&credentials[i]).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return count, err
+		}
+		count += len(credentials)
+	}
+	return count, nil
 }
 
 // encryptPlaintextKeys finds all config_keys rows with plaintext encryption status and

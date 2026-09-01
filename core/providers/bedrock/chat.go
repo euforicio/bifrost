@@ -26,7 +26,7 @@ func ToBedrockChatCompletionRequest(ctx *schemas.BifrostContext, bifrostReq *sch
 
 	// capModel is the canonical model used for capability gating (resolves aliases).
 	capModel := schemas.ResolveCanonicalModel(ctx, bifrostReq.Model)
-	caps := schemas.ResolveModelCaps(bifrostReq.Provider, capModel)
+	caps := schemas.ResolveRequestModelCaps(ctx, bifrostReq.Provider, capModel)
 
 	input := bifrostReq.Input
 	if schemas.IsAnthropicModelFamily(ctx, bifrostReq.Model) &&

@@ -307,6 +307,9 @@ func TestValidateProviderKeyRequiredNestedFields(t *testing.T) {
 		{"vllm missing url", schemas.VLLM, schemas.Key{VLLMKeyConfig: &schemas.VLLMKeyConfig{ModelName: "m"}}, "vllm_key_config.url"},
 		{"vllm missing model_name", schemas.VLLM, schemas.Key{VLLMKeyConfig: &schemas.VLLMKeyConfig{URL: *schemas.NewSecretVar("http://vllm:8000")}}, "vllm_key_config.model_name"},
 		{"vllm ok", schemas.VLLM, schemas.Key{VLLMKeyConfig: &schemas.VLLMKeyConfig{URL: *schemas.NewSecretVar("http://vllm:8000"), ModelName: "m"}}, ""},
+		{"ollama local no key", schemas.Ollama, schemas.Key{OllamaKeyConfig: &schemas.OllamaKeyConfig{URL: *schemas.NewSecretVar("http://localhost:11434")}}, ""},
+		{"ollama cloud missing key", schemas.Ollama, schemas.Key{OllamaKeyConfig: &schemas.OllamaKeyConfig{URL: *schemas.NewSecretVar("https://ollama.com")}}, "API key"},
+		{"ollama cloud ok", schemas.Ollama, schemas.Key{Value: *schemas.NewSecretVar("ollama-test-key"), OllamaKeyConfig: &schemas.OllamaKeyConfig{URL: *schemas.NewSecretVar("https://ollama.com/")}}, ""},
 		{"openai unaffected", schemas.OpenAI, schemas.Key{}, ""},
 	}
 	for _, tc := range cases {

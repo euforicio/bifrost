@@ -771,6 +771,24 @@ paths:
     $ref: "./paths/management/providers.yaml#/provider-keys"
   /api/providers/{provider}/keys/{key_id}:
     $ref: "./paths/management/providers.yaml#/provider-key-by-id"
+  /api/providers/{provider}/credentials:
+    $ref: "./paths/management/providers.yaml#/provider-credentials"
+  /api/providers/{provider}/credentials/{credential_id}:
+    $ref: "./paths/management/providers.yaml#/provider-credential-by-id"
+  /api/providers/{provider}/credentials/{credential_id}/status:
+    $ref: "./paths/management/providers.yaml#/provider-credential-status"
+  /api/providers/{provider}/credentials/{credential_id}/usage:
+    $ref: "./paths/management/providers.yaml#/provider-credential-usage"
+  /api/providers/{provider}/credentials/{credential_id}/usage/on-demand:
+    $ref: "./paths/management/providers.yaml#/provider-credential-on-demand"
+  /api/providers/{provider}/credentials/{credential_id}/refresh:
+    $ref: "./paths/management/providers.yaml#/provider-credential-refresh"
+  /api/providers/{provider}/credentials/{credential_id}/login/device:
+    $ref: "./paths/management/providers.yaml#/provider-credential-device-login"
+  /api/providers/{provider}/credentials/{credential_id}/login/browser:
+    $ref: "./paths/management/providers.yaml#/provider-credential-browser-login"
+  /api/providers/{provider}/credentials/{credential_id}/login/{login_id}:
+    $ref: "./paths/management/providers.yaml#/provider-credential-login-status"
   /api/keys:
     $ref: "./paths/management/providers.yaml#/keys"
   /api/models:
@@ -847,6 +865,8 @@ paths:
     $ref: "./paths/management/governance.yaml#/virtual-keys-quota"
   /api/governance/virtual-keys/{vk_id}:
     $ref: "./paths/management/governance.yaml#/virtual-keys-by-id"
+  /api/governance/virtual-keys/{vk_id}/rotate:
+    $ref: "./paths/management/governance.yaml#/virtual-keys-rotate-by-id"
   /api/governance/virtual-keys/{vk_id}/budgets/{budget_id}/override:
     $ref: "./paths/management/governance.yaml#/virtual-keys-budget-override"
   /api/governance/virtual-keys/{vk_id}/users:
@@ -1148,6 +1168,8 @@ paths:
     $ref: "./paths/management/logging.yaml#/logs-recalculate-cost"
   /api/logs/recalculate-cost/status:
     $ref: "./paths/management/logging.yaml#/logs-recalculate-cost-status"
+  /api/logs/recalculate-cost/cancel:
+    $ref: "./paths/management/logging.yaml#/logs-recalculate-cost-cancel"
 
   # MCP Logs
   /api/mcp-logs:
@@ -1301,6 +1323,12 @@ components:
       $ref: "./paths/inference/async.yaml#/components/parameters/AsyncWebhookEndpoint"
     WebhookEndpointId:
       $ref: "./paths/management/webhooks.yaml#/components/parameters/WebhookEndpointId"
+    ProviderName:
+      $ref: "./paths/management/providers.yaml#/provider-name-parameter"
+    ProviderCredentialId:
+      $ref: "./paths/management/providers.yaml#/provider-credential-id-parameter"
+    ProviderLoginId:
+      $ref: "./paths/management/providers.yaml#/provider-login-id-parameter"
 
   responses:
     BadRequest:
@@ -1617,6 +1645,22 @@ components:
       $ref: "./schemas/management/providers.yaml#/Key"
     ListProviderKeysResponse:
       $ref: "./schemas/management/providers.yaml#/ListProviderKeysResponse"
+    ProviderCredentialStatus:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialStatus"
+    ProviderCredentialUsage:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialUsage"
+    ProviderCredentialQuota:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialQuota"
+    ProviderCredentialCredits:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialCredits"
+    ProviderCredentialResetCredits:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialResetCredits"
+    ProviderCredentialResetCredit:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialResetCredit"
+    ListProviderCredentialsResponse:
+      $ref: "./schemas/management/providers.yaml#/ListProviderCredentialsResponse"
+    ProviderCredentialLoginStatus:
+      $ref: "./schemas/management/providers.yaml#/ProviderCredentialLoginStatus"
     NetworkConfig:
       $ref: "./schemas/management/providers.yaml#/NetworkConfig"
     ConcurrencyAndBufferSize:

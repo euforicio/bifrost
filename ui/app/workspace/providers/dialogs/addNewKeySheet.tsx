@@ -16,8 +16,22 @@ export default function AddNewKeySheet({ show, onCancel, provider, keyId, provid
 	const isEditing = keyId !== null;
 	const resolvedProviderName = (providerName ?? provider.name).toLowerCase();
 	const isVLLM = resolvedProviderName === "vllm";
-	const isOllamaOrSGL = resolvedProviderName === "ollama" || resolvedProviderName === "sgl";
-	const entityLabel = isVLLM ? "model" : isOllamaOrSGL ? "server" : "key";
+	const isOllama = resolvedProviderName === "ollama";
+	const isSGL = resolvedProviderName === "sgl";
+	const isOpenAICodex = resolvedProviderName === "openai-codex";
+	const isXAI = resolvedProviderName === "xai";
+	const isCursor = resolvedProviderName === "cursor";
+	const entityLabel = isVLLM
+		? "model"
+		: isOllama
+			? "connection"
+			: isSGL
+				? "server"
+				: isOpenAICodex || isCursor
+					? "account"
+					: isXAI
+						? "credential"
+						: "key";
 	const EntityLabel = entityLabel.charAt(0).toUpperCase() + entityLabel.slice(1);
 	const dialogTitle = isEditing ? `Edit ${entityLabel}` : `Add new ${entityLabel}`;
 	const successMessage = isEditing ? `${EntityLabel} updated successfully` : `${EntityLabel} added successfully`;

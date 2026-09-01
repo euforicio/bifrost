@@ -154,6 +154,18 @@ func (h *ProviderHandler) RegisterRoutes(r *router.Router, middlewares ...schema
 	// newly served model (or re-check a failing key) without waiting.
 	r.POST("/api/providers/{provider}/refresh-models", lib.ChainMiddlewares(h.refreshProviderModels, middlewares...))
 	r.POST("/api/providers/{provider}/keys/{key_id}/refresh-models", lib.ChainMiddlewares(h.refreshProviderKeyModels, middlewares...))
+	// Subscription-backed, multi-account provider credentials. Credential IDs
+	// are provider key IDs, preserving existing governance and key selection.
+	r.GET("/api/providers/{provider}/credentials", lib.ChainMiddlewares(h.listProviderCredentials, middlewares...))
+	r.POST("/api/providers/{provider}/credentials/{credential_id}/login/device", lib.ChainMiddlewares(h.startProviderCredentialLogin, middlewares...))
+	r.POST("/api/providers/{provider}/credentials/{credential_id}/login/browser", lib.ChainMiddlewares(h.startProviderCredentialBrowserLogin, middlewares...))
+	r.GET("/api/providers/{provider}/credentials/{credential_id}/login/{login_id}", lib.ChainMiddlewares(h.getProviderCredentialLogin, middlewares...))
+	r.DELETE("/api/providers/{provider}/credentials/{credential_id}/login/{login_id}", lib.ChainMiddlewares(h.cancelProviderCredentialLogin, middlewares...))
+	r.GET("/api/providers/{provider}/credentials/{credential_id}/status", lib.ChainMiddlewares(h.getProviderCredentialStatus, middlewares...))
+	r.GET("/api/providers/{provider}/credentials/{credential_id}/usage", lib.ChainMiddlewares(h.getProviderCredentialUsage, middlewares...))
+	r.PUT("/api/providers/{provider}/credentials/{credential_id}/usage/on-demand", lib.ChainMiddlewares(h.updateProviderCredentialOnDemand, middlewares...))
+	r.POST("/api/providers/{provider}/credentials/{credential_id}/refresh", lib.ChainMiddlewares(h.refreshProviderCredential, middlewares...))
+	r.DELETE("/api/providers/{provider}/credentials/{credential_id}", lib.ChainMiddlewares(h.deleteProviderCredential, middlewares...))
 	r.GET("/api/keys", lib.ChainMiddlewares(h.listKeys, middlewares...))
 	r.GET("/api/models", lib.ChainMiddlewares(h.listModels, middlewares...))
 	r.GET("/api/models/details", lib.ChainMiddlewares(h.listModelDetails, middlewares...))
@@ -820,7 +832,7 @@ func (h *ProviderHandler) listModelDetails(ctx *fasthttp.RequestCtx) {
 		if len(model.AccessibleByKeys) > 0 {
 			details.AccessibleByKeys = model.AccessibleByKeys
 		}
-		capabilities := modelCatalog.GetModelCapabilityEntryForModel(model.Name, model.Provider)
+		capabilities := modelCatalog.GetModelCapabilityEntryForModel(model.Name, h.capabilityProvider(model.Provider))
 		if capabilities != nil {
 			details.ContextLength = capabilities.ContextLength
 			details.MaxInputTokens = capabilities.MaxInputTokens
@@ -932,8 +944,22 @@ func (h *ProviderHandler) isModelDeprecated(model string, provider schemas.Model
 	if modelCatalog == nil {
 		return false
 	}
-	capabilities := modelCatalog.GetModelCapabilityEntryForModel(model, provider)
+	capabilities := modelCatalog.GetModelCapabilityEntryForModel(model, h.capabilityProvider(provider))
 	return capabilities != nil && capabilities.IsDeprecated
+}
+
+// capabilityProvider returns the built-in provider implementation backing a custom
+// provider. Catalog capabilities belong to that implementation, while routing,
+// access control, and pricing overrides remain scoped to the custom provider name.
+func (h *ProviderHandler) capabilityProvider(provider schemas.ModelProvider) schemas.ModelProvider {
+	if h == nil || h.inMemoryStore == nil {
+		return provider
+	}
+	config, err := h.inMemoryStore.GetProviderConfigRaw(provider)
+	if err != nil || config == nil || config.CustomProviderConfig == nil || config.CustomProviderConfig.BaseProviderType == "" {
+		return provider
+	}
+	return config.CustomProviderConfig.BaseProviderType
 }
 
 // parseModelListQuery normalizes the management model-list query string and resolves

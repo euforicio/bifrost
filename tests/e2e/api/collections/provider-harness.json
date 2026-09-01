@@ -137204,6 +137204,104 @@
           }
         }
       ]
+    },
+    {
+      "name": "61. OpenAI Codex account-backed Responses (openai-codex)",
+      "description": "Pins the OpenAI Codex provider's only inference surface through the native Responses route. The provider resolves the selected key's account credential at runtime and sends the request to the ChatGPT Codex endpoint.",
+      "item": [
+        {
+          "name": "openai-codex/gpt-5.6-sol native Responses account auth",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('OpenAI Codex Responses succeeds', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.be.below(400);",
+                  "  var body = pm.response.json();",
+                  "  pm.expect(body.id, 'response id').to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.output, 'Responses output').to.be.an('array');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"openai-codex/gpt-5.6-sol\",\n  \"input\": \"Reply with exactly: codex account ready\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/responses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "responses"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "62. Cursor account-backed Responses (cursor)",
+      "description": "Pins Cursor's HTTP/2 Connect/protobuf AgentService through Bifrost's native Responses route. The selected key ID resolves one Cursor account credential at runtime and the provider discovers usable models from that account.",
+      "item": [
+        {
+          "name": "cursor/auto native Responses account auth",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if ([401, 403, 429, 500, 502, 503, 504].indexOf(pm.response.code) !== -1) { return; }",
+                  "pm.test('Cursor Responses succeeds', function () {",
+                  "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.be.below(400);",
+                  "  var body = pm.response.json();",
+                  "  pm.expect(body.id, 'response id').to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.output, 'Responses output').to.be.an('array').that.is.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"model\": \"cursor/auto\",\n  \"input\": \"Reply with exactly: cursor account ready\",\n  \"max_output_tokens\": 32\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/responses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "responses"
+              ]
+            }
+          }
+        }
+      ]
     }
   ]
 }

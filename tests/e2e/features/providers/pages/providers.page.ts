@@ -31,6 +31,7 @@ export class ProvidersPage extends BasePage {
   readonly keysTable: Locator
   /** Provider-level "Refresh model list" button in the keys table header */
   readonly refreshProviderModelsBtn: Locator
+  readonly providerAccountsCard: Locator
 
   // Custom provider sheet
   readonly customProviderSheet: Locator
@@ -60,6 +61,7 @@ export class ProvidersPage extends BasePage {
     this.addKeyBtn = page.getByTestId('add-key-btn')
     this.keysTable = page.getByTestId('keys-table')
     this.refreshProviderModelsBtn = page.getByTestId('provider-refresh-models')
+    this.providerAccountsCard = page.getByTestId('provider-accounts-card')
 
     // Custom provider sheet
     this.customProviderSheet = page.getByTestId('custom-provider-sheet')
@@ -146,6 +148,22 @@ export class ProvidersPage extends BasePage {
     // Wait for form to close and table to refresh
     await expect(this.keyForm).not.toBeVisible({ timeout: 5000 })
     await waitForNetworkIdle(this.page)
+  }
+
+  /** Add a provider account slot whose credential is supplied by device login. */
+  async addAccountSlot(name: string): Promise<void> {
+    await this.dismissToasts()
+    await this.addKeyBtn.click()
+    await expect(this.keyForm).toBeVisible()
+    await this.page.getByLabel('Name').fill(name)
+    await this.keySaveBtn.click()
+    await this.waitForSuccessToast()
+    await expect(this.keyForm).not.toBeVisible({ timeout: 5000 })
+    await waitForNetworkIdle(this.page)
+  }
+
+  getAccountRow(name: string): Locator {
+    return this.providerAccountsCard.locator('[data-testid^="provider-account-row-"]').filter({ hasText: name })
   }
 
   /**
@@ -512,7 +530,6 @@ export class ProvidersPage extends BasePage {
     await this.waitForSuccessToast()
   }
 
-
   /**
    * Save network configuration and wait for success toast
    */
@@ -741,5 +758,4 @@ export class ProvidersPage extends BasePage {
     const tab = this.page.getByTestId('provider-tab-governance')
     return await tab.isVisible().catch(() => false)
   }
-
 }

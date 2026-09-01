@@ -554,3 +554,273 @@ models-base:
               additionalProperties: true
       '500':
         $ref: '../../openapi.yaml#/components/responses/InternalError'
+
+provider-credentials:
+  get:
+    operationId: listProviderCredentials
+    summary: List connected provider accounts
+    description: Lists sanitized account status for every credential bound to a provider key. Token values are never returned.
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+    responses:
+      '200':
+        description: Provider account statuses
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ListProviderCredentialsResponse'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+
+provider-credential-by-id:
+  delete:
+    operationId: disconnectProviderCredential
+    summary: Disconnect a provider account
+    description: Deletes the encrypted credential bound to a provider key without deleting the provider key itself.
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    responses:
+      '204':
+        description: Provider account disconnected
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+
+provider-credential-status:
+  get:
+    operationId: getProviderCredentialStatus
+    summary: Get provider account status
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    responses:
+      '200':
+        description: Provider account status
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialStatus'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+
+provider-credential-usage:
+  get:
+    operationId: getProviderCredentialUsage
+    summary: Get provider account usage
+    description: >-
+      Returns a normalized quota snapshot for the account bound to an existing
+      provider key. Upstream usage failures are reported with `availability:
+      unavailable` and do not disable inference. xAI returns `availability:
+      unsupported` because it does not expose a programmatic account quota
+      endpoint. Credential tokens are never returned.
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    responses:
+      '200':
+        description: Normalized provider account usage or an explicit unsupported/unavailable state
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialUsage'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+      '503':
+        description: Provider credential storage is unavailable
+
+provider-credential-on-demand:
+  put:
+    operationId: updateProviderCredentialOnDemand
+    summary: Update provider account on-demand spending
+    description: >-
+      Updates and verifies Cursor personal-account on-demand spending. The
+      expected fields provide optimistic concurrency protection. Organization-
+      managed policies are read-only.
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '../../schemas/management/providers.yaml#/UpdateProviderCredentialOnDemandRequest'
+    responses:
+      '200':
+        description: Verified provider on-demand settings
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialOnDemand'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '403':
+        $ref: '../../openapi.yaml#/components/responses/Forbidden'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+      '409':
+        description: Provider settings changed since the usage snapshot was read
+      '502':
+        description: Provider settings could not be updated or verified
+
+provider-credential-refresh:
+  post:
+    operationId: refreshProviderCredential
+    summary: Refresh a provider account credential
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    responses:
+      '200':
+        description: Refreshed provider account status
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialStatus'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+
+provider-credential-device-login:
+  post:
+    operationId: startProviderCredentialDeviceLogin
+    summary: Start provider device authorization
+    description: Starts an OpenAI Codex or xAI device login for an existing provider key.
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    responses:
+      '202':
+        description: Device authorization started
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialLoginStatus'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+      '502':
+        description: Provider authorization service unavailable
+
+provider-credential-browser-login:
+  post:
+    operationId: startProviderCredentialBrowserLogin
+    summary: Start provider browser authorization
+    description: Starts a Cursor PKCE browser login for an existing provider key. The returned verification URL contains no credential material.
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+    responses:
+      '202':
+        description: Browser authorization started
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialLoginStatus'
+      '400':
+        $ref: '../../openapi.yaml#/components/responses/BadRequest'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+      '502':
+        description: Provider authorization service unavailable
+
+provider-credential-login-status:
+  get:
+    operationId: getProviderCredentialLoginStatus
+    summary: Poll provider authorization
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderLoginId'
+    responses:
+      '200':
+        description: Provider authorization status
+        content:
+          application/json:
+            schema:
+              $ref: '../../schemas/management/providers.yaml#/ProviderCredentialLoginStatus'
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+  delete:
+    operationId: cancelProviderCredentialLogin
+    summary: Cancel provider authorization
+    tags: [Providers]
+    security:
+      - ManagementBearerAuth: []
+    parameters:
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderName'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderCredentialId'
+      - $ref: '../../openapi.yaml#/components/parameters/ProviderLoginId'
+    responses:
+      '204':
+        description: Provider authorization cancelled
+      '401':
+        $ref: '../../openapi.yaml#/components/responses/Unauthorized'
+      '404':
+        $ref: '../../openapi.yaml#/components/responses/NotFound'
+
+provider-name-parameter:
+  name: provider
+  in: path
+  required: true
+  schema:
+    type: string
+    enum: [openai-codex, xai, cursor]
+
+provider-credential-id-parameter:
+  name: credential_id
+  in: path
+  required: true
+  description: Existing provider key ID that owns this account binding
+  schema:
+    type: string
+
+provider-login-id-parameter:
+  name: login_id
+  in: path
+  required: true
+  schema:
+    type: string

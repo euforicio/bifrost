@@ -3181,7 +3181,7 @@
         },
         {
           "id": "catwiring-openai-model-details-gating-03-assert-model-details",
-          "name": "03. details list gated to key models [openai-model-details-gating]",
+          "name": "03. details list is gated and inherits base-provider capabilities [openai-model-details-gating]",
           "event": [
             {
               "listen": "prerequest",
@@ -3230,12 +3230,20 @@
                   "  expectAbsent.forEach(function (m) {",
                   "    if (names.indexOf(m) >= 0) { throw new Error('expected model ' + m + ' absent but found in ' + JSON.stringify(names)); }",
                   "  });",
+                  "  var capabilityModel = \"gpt-4o\";",
+                  "  var inputModality = \"image\";",
+                  "  var detail = (body.models || []).find(function (m) { return m.provider === providerName && m.name === capabilityModel; });",
+                  "  if (!detail) { throw new Error('missing model details for ' + providerName + '/' + capabilityModel); }",
+                  "  var modalities = detail.architecture && detail.architecture.input_modalities;",
+                  "  if (!Array.isArray(modalities) || modalities.indexOf(inputModality) < 0) {",
+                  "    throw new Error('expected inherited ' + inputModality + ' capability for ' + providerName + '/' + capabilityModel + ' but got ' + JSON.stringify(detail.architecture));",
+                  "  }",
                   "}",
                   "var ok = true, errMsg = '';",
                   "try { assertNow(); } catch (e) { ok = false; errMsg = e.message; }",
                   "if (ok) {",
                   "  pm.collectionVariables.set(pollKey, '0');",
-                  "  pm.test(\"03. details list gated to key models [openai-model-details-gating]\", function () { pm.expect(true, 'assertion satisfied').to.be.true; });",
+                  "  pm.test(\"03. details list is gated and inherits base-provider capabilities [openai-model-details-gating]\", function () { pm.expect(true, 'assertion satisfied').to.be.true; });",
                   "} else if (attempt < maxAttempts) {",
                   "  pm.collectionVariables.set(pollKey, String(attempt + 1));",
                   "  var sleepMs = Math.min(250 * Math.pow(2, attempt), 4000);",
@@ -3243,7 +3251,7 @@
                   "  pm.execution.setNextRequest(pm.info.requestName);",
                   "} else {",
                   "  pm.collectionVariables.set(pollKey, '0');",
-                  "  pm.test(\"03. details list gated to key models [openai-model-details-gating]\", function () { throw new Error(errMsg); });",
+                  "  pm.test(\"03. details list is gated and inherits base-provider capabilities [openai-model-details-gating]\", function () { throw new Error(errMsg); });",
                   "  pm.execution.setNextRequest(cleanupReq);",
                   "}"
                 ]
@@ -6735,7 +6743,7 @@
         },
         {
           "id": "catwiring-anthropic-model-details-gating-03-assert-model-details",
-          "name": "03. details list gated to key models [anthropic-model-details-gating]",
+          "name": "03. details list is gated and inherits base-provider capabilities [anthropic-model-details-gating]",
           "event": [
             {
               "listen": "prerequest",
@@ -6784,12 +6792,20 @@
                   "  expectAbsent.forEach(function (m) {",
                   "    if (names.indexOf(m) >= 0) { throw new Error('expected model ' + m + ' absent but found in ' + JSON.stringify(names)); }",
                   "  });",
+                  "  var capabilityModel = \"claude-sonnet-4-5\";",
+                  "  var inputModality = \"image\";",
+                  "  var detail = (body.models || []).find(function (m) { return m.provider === providerName && m.name === capabilityModel; });",
+                  "  if (!detail) { throw new Error('missing model details for ' + providerName + '/' + capabilityModel); }",
+                  "  var modalities = detail.architecture && detail.architecture.input_modalities;",
+                  "  if (!Array.isArray(modalities) || modalities.indexOf(inputModality) < 0) {",
+                  "    throw new Error('expected inherited ' + inputModality + ' capability for ' + providerName + '/' + capabilityModel + ' but got ' + JSON.stringify(detail.architecture));",
+                  "  }",
                   "}",
                   "var ok = true, errMsg = '';",
                   "try { assertNow(); } catch (e) { ok = false; errMsg = e.message; }",
                   "if (ok) {",
                   "  pm.collectionVariables.set(pollKey, '0');",
-                  "  pm.test(\"03. details list gated to key models [anthropic-model-details-gating]\", function () { pm.expect(true, 'assertion satisfied').to.be.true; });",
+                  "  pm.test(\"03. details list is gated and inherits base-provider capabilities [anthropic-model-details-gating]\", function () { pm.expect(true, 'assertion satisfied').to.be.true; });",
                   "} else if (attempt < maxAttempts) {",
                   "  pm.collectionVariables.set(pollKey, String(attempt + 1));",
                   "  var sleepMs = Math.min(250 * Math.pow(2, attempt), 4000);",
@@ -6797,7 +6813,7 @@
                   "  pm.execution.setNextRequest(pm.info.requestName);",
                   "} else {",
                   "  pm.collectionVariables.set(pollKey, '0');",
-                  "  pm.test(\"03. details list gated to key models [anthropic-model-details-gating]\", function () { throw new Error(errMsg); });",
+                  "  pm.test(\"03. details list is gated and inherits base-provider capabilities [anthropic-model-details-gating]\", function () { throw new Error(errMsg); });",
                   "  pm.execution.setNextRequest(cleanupReq);",
                   "}"
                 ]
@@ -10289,7 +10305,7 @@
         },
         {
           "id": "catwiring-gemini-model-details-gating-03-assert-model-details",
-          "name": "03. details list gated to key models [gemini-model-details-gating]",
+          "name": "03. details list is gated and inherits base-provider capabilities [gemini-model-details-gating]",
           "event": [
             {
               "listen": "prerequest",
@@ -10338,12 +10354,20 @@
                   "  expectAbsent.forEach(function (m) {",
                   "    if (names.indexOf(m) >= 0) { throw new Error('expected model ' + m + ' absent but found in ' + JSON.stringify(names)); }",
                   "  });",
+                  "  var capabilityModel = \"gemini-2.5-flash\";",
+                  "  var inputModality = \"image\";",
+                  "  var detail = (body.models || []).find(function (m) { return m.provider === providerName && m.name === capabilityModel; });",
+                  "  if (!detail) { throw new Error('missing model details for ' + providerName + '/' + capabilityModel); }",
+                  "  var modalities = detail.architecture && detail.architecture.input_modalities;",
+                  "  if (!Array.isArray(modalities) || modalities.indexOf(inputModality) < 0) {",
+                  "    throw new Error('expected inherited ' + inputModality + ' capability for ' + providerName + '/' + capabilityModel + ' but got ' + JSON.stringify(detail.architecture));",
+                  "  }",
                   "}",
                   "var ok = true, errMsg = '';",
                   "try { assertNow(); } catch (e) { ok = false; errMsg = e.message; }",
                   "if (ok) {",
                   "  pm.collectionVariables.set(pollKey, '0');",
-                  "  pm.test(\"03. details list gated to key models [gemini-model-details-gating]\", function () { pm.expect(true, 'assertion satisfied').to.be.true; });",
+                  "  pm.test(\"03. details list is gated and inherits base-provider capabilities [gemini-model-details-gating]\", function () { pm.expect(true, 'assertion satisfied').to.be.true; });",
                   "} else if (attempt < maxAttempts) {",
                   "  pm.collectionVariables.set(pollKey, String(attempt + 1));",
                   "  var sleepMs = Math.min(250 * Math.pow(2, attempt), 4000);",
@@ -10351,7 +10375,7 @@
                   "  pm.execution.setNextRequest(pm.info.requestName);",
                   "} else {",
                   "  pm.collectionVariables.set(pollKey, '0');",
-                  "  pm.test(\"03. details list gated to key models [gemini-model-details-gating]\", function () { throw new Error(errMsg); });",
+                  "  pm.test(\"03. details list is gated and inherits base-provider capabilities [gemini-model-details-gating]\", function () { throw new Error(errMsg); });",
                   "  pm.execution.setNextRequest(cleanupReq);",
                   "}"
                 ]

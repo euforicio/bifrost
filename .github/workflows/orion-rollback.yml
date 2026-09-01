@@ -1,0 +1,91 @@
+name: Roll back Orion
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: Previous ghcr.io/euforicio/bifrost sha256 digest
+        required: true
+        type: string
+
+concurrency:
+  group: bifrost-orion-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    environment:
+      name: orion-production
+      url: https://bifrost.riftlabs.app
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+            proxy.golang.org:443
+            sum.golang.org:443
+
+      - name: Check out Orion GitOps repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: euforicio/orion-infra
+          ref: main
+          token: ${{ secrets.ORION_INFRA_TOKEN }}
+          persist-credentials: true
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.x"
+          cache: false
+
+      - name: Install pinned Kustomize
+        run: go install sigs.k8s.io/kustomize/kustomize/v5@v5.7.1
+
+      - name: Pin rollback image digest
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo "digest must be sha256 followed by 64 lowercase hexadecimal characters" >&2
+            exit 1
+          }
+          cd apps/bifrost
+          kustomize edit set image \
+            "ghcr.io/euforicio/bifrost=ghcr.io/euforicio/bifrost@${DIGEST}"
+          kustomize build . >/dev/null
+
+      - name: Commit and push rollback
+        env:
+          DIGEST: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          git config user.name "Bifrost deployment"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/bifrost/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Orion already pins the requested Bifrost digest."
+            exit 0
+          fi
+          git commit -m "Roll back Bifrost to ${DIGEST}"
+
+          for attempt in 1 2 3; do
+            git pull --rebase origin main
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 3 ]]; then
+              sleep $((attempt * 2))
+            fi
+          done
+          echo "Failed to push Orion rollback after 3 attempts." >&2
+          exit 1

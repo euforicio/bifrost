@@ -239,6 +239,9 @@ type LookupScopes struct {
 	VirtualKeyID  string
 	SelectedKeyID string
 	Provider      string
+	// CatalogProvider is the built-in provider used only for base pricing
+	// lookup. Provider retains the custom provider identity for scoped overrides.
+	CatalogProvider string
 }
 
 // LookupScopesFromContext builds a LookupScopes from a BifrostContext. Reads
@@ -258,11 +261,13 @@ func LookupScopesFromContext(ctx *schemas.BifrostContext, provider string) *Look
 	userID, _ := ctx.Value(schemas.BifrostContextKeyUserID).(string)
 	virtualKeyID, _ := ctx.Value(schemas.BifrostContextKeyGovernanceVirtualKeyID).(string)
 	selectedKeyID, _ := ctx.Value(schemas.BifrostContextKeySelectedKeyID).(string)
+	baseProvider, _ := ctx.Value(schemas.BifrostContextKeyBaseProviderType).(schemas.ModelProvider)
 	return &LookupScopes{
-		UserID:        userID,
-		VirtualKeyID:  virtualKeyID,
-		SelectedKeyID: selectedKeyID,
-		Provider:      provider,
+		UserID:          userID,
+		VirtualKeyID:    virtualKeyID,
+		SelectedKeyID:   selectedKeyID,
+		Provider:        provider,
+		CatalogProvider: string(baseProvider),
 	}
 }
 

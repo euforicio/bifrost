@@ -79,6 +79,19 @@ func ResolveModelCaps(provider ModelProvider, model string) ModelCaps {
 	}
 }
 
+// ResolveRequestModelCaps resolves capabilities against the provider implementation
+// serving the request. Custom providers keep their own provider key for routing and
+// response metadata, but execute through BaseProviderType; capability lookup must use
+// that base provider or model-specific fields and server-tool versions are lost.
+func ResolveRequestModelCaps(ctx *BifrostContext, provider ModelProvider, model string) ModelCaps {
+	if ctx != nil {
+		if baseProvider, ok := ctx.Value(BifrostContextKeyBaseProviderType).(ModelProvider); ok && baseProvider != "" {
+			provider = baseProvider
+		}
+	}
+	return ResolveModelCaps(provider, model)
+}
+
 // Provider returns the provider the capabilities were resolved for.
 func (c ModelCaps) Provider() ModelProvider { return c.provider }
 

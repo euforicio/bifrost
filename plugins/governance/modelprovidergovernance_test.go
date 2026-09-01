@@ -84,6 +84,32 @@ func TestStore_CheckProviderBudget_WithBaseline(t *testing.T) {
 	assert.Contains(t, err.Error(), "budget exceeded")
 }
 
+func TestSubscriptionPricingGateRejectsOnlyDollarBudgetedUnpricedRequests(t *testing.T) {
+	logger := NewMockLogger()
+	budget := buildBudget("cursor-budget", 100.0, "1h")
+	provider := buildProviderWithGovernance(string(schemas.CursorProvider), budget, nil)
+	store, err := NewLocalGovernanceStore(context.Background(), logger, nil, &configstore.GovernanceConfig{
+		Providers: []configstoreTables.TableProvider{*provider},
+		Budgets:   []configstoreTables.TableBudget{*budget},
+	}, nil)
+	require.NoError(t, err)
+	plugin := &GovernancePlugin{store: store}
+	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+
+	pricingErr := plugin.validateSubscriptionPricing(ctx, &EvaluationRequest{Provider: schemas.CursorProvider, Model: "auto"}, schemas.ResponsesRequest)
+	require.NotNil(t, pricingErr)
+	assert.Equal(t, "pricing_unavailable", *pricingErr.Type)
+	assert.Equal(t, 402, *pricingErr.StatusCode)
+
+	// xAI can return provider-reported USD cost, so it does not require a
+	// catalog quote before dispatch.
+	assert.Nil(t, plugin.validateSubscriptionPricing(ctx, &EvaluationRequest{Provider: schemas.XAI, Model: "grok-4"}, schemas.ResponsesRequest))
+
+	emptyStore, err := NewLocalGovernanceStore(context.Background(), logger, nil, &configstore.GovernanceConfig{}, nil)
+	require.NoError(t, err)
+	assert.Nil(t, (&GovernancePlugin{store: emptyStore}).validateSubscriptionPricing(ctx, &EvaluationRequest{Provider: schemas.CursorProvider, Model: "auto"}, schemas.ResponsesRequest))
+}
+
 // ============================================================================
 // Store Tests - Provider Rate Limit
 // ============================================================================

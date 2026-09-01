@@ -42725,6 +42725,653 @@
         }
       }
     },
+    "/api/providers/{provider}/credentials": {
+      "get": {
+        "operationId": "listProviderCredentials",
+        "summary": "List connected provider accounts",
+        "description": "Lists sanitized account status for every credential bound to a provider key. Token values are never returned.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider account statuses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListProviderCredentialsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}": {
+      "delete": {
+        "operationId": "disconnectProviderCredential",
+        "summary": "Disconnect a provider account",
+        "description": "Deletes the encrypted credential bound to a provider key without deleting the provider key itself.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Provider account disconnected"
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/status": {
+      "get": {
+        "operationId": "getProviderCredentialStatus",
+        "summary": "Get provider account status",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider account status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/usage": {
+      "get": {
+        "operationId": "getProviderCredentialUsage",
+        "summary": "Get provider account usage",
+        "description": "Returns a normalized quota snapshot for the account bound to an existing provider key. Upstream usage failures are reported with `availability: unavailable` and do not disable inference. xAI returns `availability: unsupported` because it does not expose a programmatic account quota endpoint. Credential tokens are never returned.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Normalized provider account usage or an explicit unsupported/unavailable state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialUsage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider credential storage is unavailable"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/usage/on-demand": {
+      "put": {
+        "operationId": "updateProviderCredentialOnDemand",
+        "summary": "Update provider account on-demand spending",
+        "description": "Updates and verifies Cursor personal-account on-demand spending. The expected fields provide optimistic concurrency protection. Organization- managed policies are read-only.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "enabled",
+                  "limit_dollars"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "limit_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0,
+                    "description": "Monthly on-demand spending limit in whole US dollars; must be positive when enabled"
+                  },
+                  "expected_enabled": {
+                    "type": "boolean",
+                    "description": "Last observed enabled state used to prevent overwriting a concurrent change"
+                  },
+                  "expected_limit_dollars": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0,
+                    "description": "Last observed whole-dollar limit used to prevent overwriting a concurrent change"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Verified provider on-demand settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "enabled",
+                    "can_update"
+                  ],
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "can_update": {
+                      "type": "boolean",
+                      "description": "Whether this account permits personal on-demand settings to be updated"
+                    },
+                    "used": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "limit": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "remaining": {
+                      "type": "number",
+                      "format": "double"
+                    },
+                    "unit": {
+                      "type": "string"
+                    },
+                    "limit_type": {
+                      "type": "string"
+                    },
+                    "disabled_reason": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden — authenticated, but not permitted to perform this action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Provider settings changed since the usage snapshot was read"
+          },
+          "502": {
+            "description": "Provider settings could not be updated or verified"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/refresh": {
+      "post": {
+        "operationId": "refreshProviderCredential",
+        "summary": "Refresh a provider account credential",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Refreshed provider account status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/login/device": {
+      "post": {
+        "operationId": "startProviderCredentialDeviceLogin",
+        "summary": "Start provider device authorization",
+        "description": "Starts an OpenAI Codex or xAI device login for an existing provider key.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Device authorization started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialLoginStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Provider authorization service unavailable"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/login/browser": {
+      "post": {
+        "operationId": "startProviderCredentialBrowserLogin",
+        "summary": "Start provider browser authorization",
+        "description": "Starts a Cursor PKCE browser login for an existing provider key. The returned verification URL contains no credential material.",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Browser authorization started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialLoginStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Provider authorization service unavailable"
+          }
+        }
+      }
+    },
+    "/api/providers/{provider}/credentials/{credential_id}/login/{login_id}": {
+      "get": {
+        "operationId": "getProviderCredentialLoginStatus",
+        "summary": "Poll provider authorization",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderLoginId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Provider authorization status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderCredentialLoginStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "cancelProviderCredentialLogin",
+        "summary": "Cancel provider authorization",
+        "tags": [
+          "Providers"
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProviderName"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderCredentialId"
+          },
+          {
+            "$ref": "#/components/parameters/ProviderLoginId"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Provider authorization cancelled"
+          },
+          "401": {
+            "description": "Unauthorized — missing or invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/keys": {
       "get": {
         "operationId": "listKeys",
@@ -47277,6 +47924,64 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Virtual key not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/governance/virtual-keys/{vk_id}/rotate": {
+      "post": {
+        "operationId": "rotateVirtualKey",
+        "summary": "Rotate virtual key",
+        "description": "Generates a new credential value for the virtual key while leaving its configuration,\nassignments, budgets, and rate limits unchanged. On the node handling the request, the\nprevious credential value is invalidated before a successful response is returned.\n\nIn a clustered deployment, peer invalidation is asynchronous. Until each peer processes the\ncluster update and reloads the virtual key, that peer may continue to accept the previous\nvalue. There is no fixed upper bound when a peer is unavailable, so wait for cluster\nconvergence before treating the previous credential as revoked cluster-wide.\n\nThe new credential is returned in `virtual_key.value`. Store it securely and update clients\nthat use the previous value.\n",
+        "tags": [
+          "Governance"
+        ],
+        "parameters": [
+          {
+            "name": "vk_id",
+            "in": "path",
+            "required": true,
+            "description": "Virtual key ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Virtual key rotated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VirtualKeyResponse"
                 }
               }
             }
@@ -74711,7 +75416,7 @@
       "post": {
         "operationId": "recalculateLogCosts",
         "summary": "Recalculate log costs",
-        "description": "Starts an asynchronous background job that recalculates log costs in batches.\nThe returned payload is a job status object that can be polled via the status endpoint.\n",
+        "description": "Starts an asynchronous background job that recalculates log costs in batches.\nThe returned payload is a job status object that can be polled via the status endpoint.\n\nRecalculation updates the cost fields on matching log records only. It does not\nretroactively debit, credit, or otherwise adjust governance budget usage. Governance\nbudgets retain the usage recorded when each request was originally processed.\n",
         "tags": [
           "Logging"
         ],
@@ -74820,6 +75525,83 @@
           },
           "404": {
             "description": "Recalculation job not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Background job runner is not available",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/logs/recalculate-cost/cancel": {
+      "post": {
+        "operationId": "cancelRecalculateCost",
+        "summary": "Cancel log cost recalculation",
+        "description": "Cancels the recalculation job selected by `id`, or the current in-flight recalculation\nwhen `id` is omitted. Cancellation stops further batches; cost updates already committed\nto log records are retained and are not rolled back. Logs that the job has not processed\nremain unchanged.\n\nThe response uses the same job-status shape as the status endpoint and includes the\npartial progress recorded at the time of the response. The worker may still be unwinding,\nso poll the status endpoint with the returned `id` to obtain its final counters. If the\nselected job has already reached a terminal state, the endpoint returns it unchanged.\n",
+        "tags": [
+          "Logging"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "description": "Optional recalculation job ID. Omit to cancel the current in-flight recalculation.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "ManagementBearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Recalculation cancellation accepted, or the selected job was already terminal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecalculateCostResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The supplied job ID belongs to a different background-job type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagementErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested job was not found, or there is no in-flight recalculation to cancel",
             "content": {
               "application/json": {
                 "schema": {
@@ -81211,6 +81993,36 @@
         "schema": {
           "type": "string"
         }
+      },
+      "ProviderName": {
+        "name": "provider",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "openai-codex",
+            "xai",
+            "cursor"
+          ]
+        }
+      },
+      "ProviderCredentialId": {
+        "name": "credential_id",
+        "in": "path",
+        "required": true,
+        "description": "Existing provider key ID that owns this account binding",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ProviderLoginId": {
+        "name": "login_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "responses": {
@@ -81312,6 +82124,8 @@
           "huggingface",
           "nebius",
           "xai",
+          "openai-codex",
+          "cursor",
           "runway",
           "fireworks"
         ]
@@ -94640,6 +95454,369 @@
           }
         }
       },
+      "ProviderCredentialStatus": {
+        "type": "object",
+        "required": [
+          "credential_id",
+          "provider",
+          "status",
+          "version"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": "string",
+            "description": "Provider key ID that owns this account binding"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai-codex",
+              "xai",
+              "cursor"
+            ]
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "connected",
+              "connecting",
+              "expired",
+              "disconnected",
+              "error"
+            ]
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_refresh": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "uint64"
+          }
+        }
+      },
+      "ProviderCredentialUsage": {
+        "type": "object",
+        "required": [
+          "credential_id",
+          "provider",
+          "availability",
+          "quotas"
+        ],
+        "properties": {
+          "credential_id": {
+            "type": "string",
+            "description": "Provider key ID that owns the account binding"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai-codex",
+              "xai",
+              "cursor"
+            ]
+          },
+          "availability": {
+            "type": "string",
+            "enum": [
+              "available",
+              "unsupported",
+              "unavailable"
+            ]
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time the provider snapshot was successfully fetched"
+          },
+          "stale": {
+            "type": "boolean",
+            "description": "Whether the returned provider snapshot is known to be stale"
+          },
+          "message": {
+            "type": "string",
+            "description": "Safe provider-neutral explanation for unsupported or unavailable usage"
+          },
+          "quotas": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCredentialQuota"
+            }
+          },
+          "plan": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "price": {
+                "type": "string",
+                "description": "Provider-formatted recurring plan price"
+              },
+              "included_amount": {
+                "type": "number",
+                "format": "double"
+              },
+              "included_unit": {
+                "type": "string"
+              },
+              "billing_cycle_end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "on_demand": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "can_update"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "can_update": {
+                "type": "boolean",
+                "description": "Whether this account permits personal on-demand settings to be updated"
+              },
+              "used": {
+                "type": "number",
+                "format": "double"
+              },
+              "limit": {
+                "type": "number",
+                "format": "double"
+              },
+              "remaining": {
+                "type": "number",
+                "format": "double"
+              },
+              "unit": {
+                "type": "string"
+              },
+              "limit_type": {
+                "type": "string"
+              },
+              "disabled_reason": {
+                "type": "string"
+              }
+            }
+          },
+          "credits": {
+            "$ref": "#/components/schemas/ProviderCredentialCredits"
+          },
+          "reset_credits": {
+            "$ref": "#/components/schemas/ProviderCredentialResetCredits"
+          }
+        }
+      },
+      "ProviderCredentialQuota": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable provider-scoped quota identifier"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "used_percent": {
+            "type": "number",
+            "format": "double"
+          },
+          "used": {
+            "type": "number",
+            "format": "double"
+          },
+          "limit": {
+            "type": "number",
+            "format": "double"
+          },
+          "remaining": {
+            "type": "number",
+            "format": "double"
+          },
+          "unit": {
+            "type": "string",
+            "description": "Unit for used, limit, and remaining values; Cursor monetary quotas use `cents`"
+          },
+          "window_duration_minutes": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resets_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProviderCredentialCredits": {
+        "type": "object",
+        "required": [
+          "has_credits",
+          "unlimited"
+        ],
+        "properties": {
+          "has_credits": {
+            "type": "boolean"
+          },
+          "unlimited": {
+            "type": "boolean"
+          },
+          "balance": {
+            "type": "number",
+            "format": "double"
+          },
+          "unit": {
+            "type": "string",
+            "description": "Unit for the balance value; Grok prepaid balances use `cent`"
+          }
+        }
+      },
+      "ProviderCredentialResetCredits": {
+        "type": "object",
+        "required": [
+          "available_count",
+          "credits"
+        ],
+        "properties": {
+          "available_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "credits": {
+            "type": "array",
+            "description": "Best-effort reset-credit detail rows. An empty array means no rows were returned or the bounded detail read was unavailable.",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCredentialResetCredit"
+            }
+          }
+        }
+      },
+      "ProviderCredentialResetCredit": {
+        "type": "object",
+        "required": [
+          "id",
+          "reset_type",
+          "status"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reset_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "granted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "ListProviderCredentialsResponse": {
+        "type": "object",
+        "required": [
+          "credentials",
+          "total"
+        ],
+        "properties": {
+          "credentials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderCredentialStatus"
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "ProviderCredentialLoginStatus": {
+        "type": "object",
+        "required": [
+          "login_id",
+          "credential_id",
+          "provider",
+          "status"
+        ],
+        "properties": {
+          "login_id": {
+            "type": "string"
+          },
+          "credential_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "openai-codex",
+              "xai",
+              "cursor"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "connecting",
+              "connected",
+              "disconnected",
+              "error"
+            ]
+          },
+          "verification_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "user_code": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "poll_interval_seconds": {
+            "type": "integer"
+          },
+          "error_code": {
+            "type": "string"
+          }
+        }
+      },
       "NetworkConfig": {
         "type": "object",
         "description": "Network configuration for provider connections",
@@ -100764,95 +101941,111 @@
         "description": "Recalculate cost request",
         "properties": {
           "filters": {
-            "type": "object",
-            "description": "Log search filters",
-            "properties": {
-              "providers": {
-                "type": "array",
-                "items": {
-                  "type": "string"
+            "allOf": [
+              {
+                "type": "object",
+                "description": "Log search filters",
+                "properties": {
+                  "providers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "models": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "status": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "objects": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "selected_key_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "virtual_key_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "routing_rule_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "routing_engine_used": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Filter by routing engine (routing-rule, governance, or loadbalancing)"
+                  },
+                  "start_time": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end_time": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "min_latency": {
+                    "type": "number"
+                  },
+                  "max_latency": {
+                    "type": "number"
+                  },
+                  "min_tokens": {
+                    "type": "integer"
+                  },
+                  "max_tokens": {
+                    "type": "integer"
+                  },
+                  "min_cost": {
+                    "type": "number"
+                  },
+                  "max_cost": {
+                    "type": "number"
+                  },
+                  "missing_cost_only": {
+                    "type": "boolean"
+                  },
+                  "content_search": {
+                    "type": "string"
+                  }
                 }
               },
-              "models": {
-                "type": "array",
-                "items": {
-                  "type": "string"
+              {
+                "type": "object",
+                "properties": {
+                  "period": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "6h",
+                      "24h",
+                      "7d",
+                      "30d"
+                    ],
+                    "description": "Relative time window resolved when the job is created. When recognized, it takes precedence over start_time and end_time."
+                  }
                 }
-              },
-              "status": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "objects": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "selected_key_ids": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "virtual_key_ids": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "routing_rule_ids": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "routing_engine_used": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "description": "Filter by routing engine (routing-rule, governance, or loadbalancing)"
-              },
-              "start_time": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "end_time": {
-                "type": "string",
-                "format": "date-time"
-              },
-              "min_latency": {
-                "type": "number"
-              },
-              "max_latency": {
-                "type": "number"
-              },
-              "min_tokens": {
-                "type": "integer"
-              },
-              "max_tokens": {
-                "type": "integer"
-              },
-              "min_cost": {
-                "type": "number"
-              },
-              "max_cost": {
-                "type": "number"
-              },
-              "missing_cost_only": {
-                "type": "boolean"
-              },
-              "content_search": {
-                "type": "string"
               }
-            }
-          },
-          "limit": {
-            "type": "integer",
-            "description": "Maximum number of logs to process (default 200, max 1000)"
+            ]
           }
         }
       },
@@ -100866,7 +102059,15 @@
           },
           "status": {
             "type": "string",
-            "description": "Current job status"
+            "description": "Current job status",
+            "enum": [
+              "pending",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "idle"
+            ]
           },
           "total": {
             "type": "integer",
@@ -100887,6 +102088,11 @@
             "type": "integer",
             "format": "int64",
             "description": "Logs skipped during processing"
+          },
+          "unpriceable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Subset of skipped logs whose pricing inputs could not be recovered, so their existing cost was left unchanged."
           },
           "message": {
             "type": "string",

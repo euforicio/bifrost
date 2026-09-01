@@ -4616,6 +4616,65 @@ func TestCalculateCost_NoServerSideFallback_UsesRoutingModel(t *testing.T) {
 		"without a recorded handoff, pricing must stay on the requested model")
 }
 
+func TestCalculateCost_CustomProviderUsesBasePricingAndCustomOverrideScope(t *testing.T) {
+	s := newTestStore()
+	s.pricingData[makeKey("gpt-4.1-mini", "openai", "chat")] = configstoreTables.TableModelPricing{
+		Model: "gpt-4.1-mini", Provider: "openai", Mode: "chat",
+		InputCostPerToken:           bifrost.Ptr(1e-6),
+		OutputCostPerToken:          bifrost.Ptr(2e-6),
+		CacheReadInputTokenCost:     bifrost.Ptr(0.5e-6),
+		CacheCreationInputTokenCost: bifrost.Ptr(0.8e-6),
+	}
+	customProviderID := "company-openai"
+	require.NoError(t, s.SetOverrides([]configstoreTables.TablePricingOverride{{
+		ID:               "company-openai-cache-rate",
+		ScopeKind:        string(ScopeKindProvider),
+		ProviderID:       &customProviderID,
+		MatchType:        string(MatchTypeExact),
+		Pattern:          "gpt-4.1-mini",
+		RequestTypes:     []schemas.RequestType{schemas.ChatCompletionRequest},
+		PricingPatchJSON: `{"cache_read_input_token_cost":0.00000025}`,
+	}}))
+
+	resp := makeChatResponse(schemas.ModelProvider("company-openai"), "gpt-4.1-mini", &schemas.BifrostLLMUsage{
+		PromptTokens:     100,
+		CompletionTokens: 20,
+		TotalTokens:      120,
+		PromptTokensDetails: &schemas.ChatPromptTokensDetails{
+			CachedReadTokens:  30,
+			CachedWriteTokens: 20,
+		},
+	})
+	resp.ChatResponse.ExtraFields.RoutingInfo.BaseProvider = schemas.OpenAI
+
+	breakdown := s.CalculateCostBreakdown(resp, &LookupScopes{Provider: "company-openai"})
+	require.NotNil(t, breakdown)
+	require.InDelta(t, 73.5e-6, breakdown.InputCost, 1e-12)
+	require.NotNil(t, breakdown.InputCostDetails)
+	require.InDelta(t, 50e-6, breakdown.InputCostDetails.TextCost, 1e-12)
+	require.InDelta(t, 7.5e-6, breakdown.InputCostDetails.CachedReadCost, 1e-12)
+	require.InDelta(t, 16e-6, breakdown.InputCostDetails.CachedWriteCost, 1e-12)
+	require.InDelta(t, 40e-6, breakdown.OutputCost, 1e-12)
+	require.InDelta(t, 113.5e-6, breakdown.TotalCost, 1e-12)
+}
+
+func TestCalculateCostForUsage_CustomProviderUsesCatalogProviderScope(t *testing.T) {
+	s := newTestStore()
+	s.pricingData[makeKey("gpt-4.1-mini", "openai", "chat")] = configstoreTables.TableModelPricing{
+		Model: "gpt-4.1-mini", Provider: "openai", Mode: "chat",
+		InputCostPerToken:  bifrost.Ptr(1e-6),
+		OutputCostPerToken: bifrost.Ptr(2e-6),
+	}
+
+	cost := s.CalculateCostForUsage(&schemas.BifrostLLMUsage{
+		PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15,
+	}, schemas.ModelProvider("company-openai"), "gpt-4.1-mini", schemas.ChatCompletionRequest, &LookupScopes{
+		Provider:        "company-openai",
+		CatalogProvider: "openai",
+	})
+	require.InDelta(t, 20e-6, cost, 1e-12)
+}
+
 // An unpriceable serving model falls through the candidate chain to the
 // requested model rather than collapsing the cost to zero.
 func TestCalculateCost_ServerSideFallback_UnknownServingModelFallsThrough(t *testing.T) {

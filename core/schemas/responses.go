@@ -1666,6 +1666,17 @@ func (m ResponsesMessage) MarshalJSON() ([]byte, error) {
 		return MarshalSorted(aux)
 	}
 
+	// Decoded additional_tools items use rawPreserved above. Providers that
+	// construct one need the raw tool array emitted explicitly because
+	// AdditionalTools is intentionally excluded from the public schema.
+	if m.Type != nil && *m.Type == ResponsesMessageTypeAdditionalTools {
+		aux := &struct {
+			Tools json.RawMessage `json:"tools"`
+			*Alias
+		}{Tools: m.AdditionalTools, Alias: (*Alias)(&m)}
+		return MarshalSorted(aux)
+	}
+
 	aux := &struct {
 		Arguments json.RawMessage `json:"arguments,omitempty"`
 		*Alias

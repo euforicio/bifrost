@@ -132,6 +132,7 @@
                   "providers/supported-providers/bedrock-mantle",
                   "providers/supported-providers/cerebras",
                   "providers/supported-providers/cohere",
+                  "providers/supported-providers/cursor",
                   "providers/supported-providers/databricks",
                   "providers/supported-providers/deepseek",
                   "providers/supported-providers/elevenlabs",
@@ -144,6 +145,7 @@
                   "providers/supported-providers/ollama",
                   "providers/supported-providers/opencode",
                   "providers/supported-providers/openai",
+                  "providers/supported-providers/openai-codex",
                   "providers/supported-providers/openrouter",
                   "providers/supported-providers/parasail",
                   "providers/supported-providers/perplexity",
@@ -293,6 +295,7 @@
             "icon": "bolt",
             "pages": [
               "enterprise/user-provisioning",
+              "enterprise/how-identity-sync-works",
               "enterprise/access-profiles",
               "enterprise/rbac",
               "enterprise/data-access-control",
@@ -372,6 +375,18 @@
             "group": "Deployment",
             "icon": "cloud-arrow-up",
             "pages": ["edge/deployment-mdm"]
+          },
+          {
+            "group": "Onboarding Instructions",
+            "pages": [
+              "edge/setup",
+              "edge/setup-bifrost",
+              "edge/setup-edge-control",
+              "edge/install-direct",
+              "edge/install-mdm",
+              "edge/sign-in-and-verify",
+              "edge/troubleshooting"
+            ]
           },
           {
             "group": "Reference",
@@ -1198,6 +1213,7 @@
                   "GET /api/logs/dashboard",
                   "POST /api/logs/recalculate-cost",
                   "GET /api/logs/recalculate-cost/status",
+                  "POST /api/logs/recalculate-cost/cancel",
                   "GET /api/mcp-logs",
                   "DELETE /api/mcp-logs",
                   "GET /api/mcp-logs/{id}",
@@ -1333,6 +1349,7 @@
                   "GET /api/governance/virtual-keys/{vk_id}",
                   "PUT /api/governance/virtual-keys/{vk_id}",
                   "DELETE /api/governance/virtual-keys/{vk_id}",
+                  "POST /api/governance/virtual-keys/{vk_id}/rotate",
                   "GET /api/governance/virtual-keys/{vk_id}/users",
                   "POST /api/governance/virtual-keys/{vk_id}/users",
                   "DELETE /api/governance/virtual-keys/{vk_id}/users/{user_id}",
@@ -1887,6 +1904,7 @@
             "item": "Enterprise",
             "icon": "building",
             "pages": [
+              "changelogs/ent-v1.5.13",
               "changelogs/ent-v2.0.0",
               "changelogs/ent-v1.5.12",
               "changelogs/ent-v1.5.11",

@@ -366,6 +366,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	bifrost "github.com/maximhq/bifrost/core"
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework"
 	"github.com/maximhq/bifrost/framework/configstore"
@@ -375,6 +376,7 @@ import (
 	"github.com/maximhq/bifrost/framework/logstore"
 	"github.com/maximhq/bifrost/framework/modelcatalog"
 	"github.com/maximhq/bifrost/framework/objectstore"
+	"github.com/maximhq/bifrost/framework/providercredentials"
 	"github.com/maximhq/bifrost/framework/vectorstore"
 	otelPlugin "github.com/maximhq/bifrost/plugins/otel"
 	"github.com/maximhq/bifrost/plugins/routing/complexity"
@@ -19826,6 +19828,139 @@ func TestRemoveProvider_SkipDBUpdate(t *testing.T) {
 	if _, exists := cfg.Providers["test-provider"]; exists {
 		t.Fatal("provider should be removed from memory when skipDBUpdate is true")
 	}
+}
+
+func TestRemoveProviderKey_RoutingDeleteFailureRollsBackCredentialDelete(t *testing.T) {
+	initTestLogger()
+	ctx := context.Background()
+	store := createTestSQLiteConfigStore(t, t.TempDir())
+	provider := providercredentials.ProviderCursor
+	key := schemas.Key{ID: "key-1", Value: *schemas.NewSecretVar("test-key")}
+	require.NoError(t, store.AddProvider(ctx, provider, configstore.ProviderConfig{Keys: []schemas.Key{key}}))
+	require.NoError(t, store.DB().WithContext(ctx).Create(&tables.TableProviderCredential{
+		CredentialID: "key-1", Provider: string(provider), ProviderKeyID: "key-1",
+		AuthMode: "device_code", AccessToken: "token", Status: providercredentials.StatusConnected,
+	}).Error)
+	require.NoError(t, store.DB().Exec(`
+		CREATE TRIGGER fail_atomic_key_delete
+		BEFORE DELETE ON config_keys
+		WHEN OLD.key_id = 'key-1'
+		BEGIN SELECT RAISE(ABORT, 'forced key delete failure'); END;
+	`).Error)
+	manager := providercredentials.NewManager(store, providercredentials.WithCursorPollInterval(time.Hour))
+	login, err := manager.StartLogin(ctx, provider, key.ID)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.CancelLogin(login.LoginID) })
+
+	cfg := &Config{
+		Providers:                 map[schemas.ModelProvider]configstore.ProviderConfig{provider: {Keys: []schemas.Key{key}}},
+		ConfigStore:               store,
+		ProviderCredentialManager: manager,
+	}
+	err = cfg.RemoveProviderKey(ctx, provider, key.ID)
+	require.ErrorContains(t, err, "forced key delete failure")
+
+	_, err = store.GetProviderKey(ctx, provider, key.ID)
+	require.NoError(t, err, "routing key must survive the failed transaction")
+	var credentialCount int64
+	require.NoError(t, store.DB().WithContext(ctx).Model(&tables.TableProviderCredential{}).
+		Where("provider = ? AND credential_id = ?", string(provider), key.ID).
+		Count(&credentialCount).Error)
+	require.Equal(t, int64(1), credentialCount, "credential must roll back with the routing key")
+	loginStatus, err := manager.LoginStatus(login.LoginID)
+	require.NoError(t, err)
+	require.Equal(t, providercredentials.StatusConnecting, loginStatus.Status, "login must not be cancelled before commit")
+}
+
+func TestRemoveProvider_RoutingDeleteFailureRollsBackCredentialDelete(t *testing.T) {
+	initTestLogger()
+	ctx := context.Background()
+	store := createTestSQLiteConfigStore(t, t.TempDir())
+	provider := providercredentials.ProviderCursor
+	key := schemas.Key{ID: "key-1", Value: *schemas.NewSecretVar("test-key")}
+	require.NoError(t, store.AddProvider(ctx, provider, configstore.ProviderConfig{Keys: []schemas.Key{key}}))
+	require.NoError(t, store.DB().WithContext(ctx).Create(&tables.TableProviderCredential{
+		CredentialID: "key-1", Provider: string(provider), ProviderKeyID: "key-1",
+		AuthMode: "device_code", AccessToken: "token", Status: providercredentials.StatusConnected,
+	}).Error)
+	require.NoError(t, store.DB().Exec(`
+		CREATE TRIGGER fail_atomic_provider_delete
+		BEFORE DELETE ON config_providers
+		WHEN OLD.name = 'cursor'
+		BEGIN SELECT RAISE(ABORT, 'forced provider delete failure'); END;
+	`).Error)
+	manager := providercredentials.NewManager(store, providercredentials.WithCursorPollInterval(time.Hour))
+	login, err := manager.StartLogin(ctx, provider, key.ID)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.CancelLogin(login.LoginID) })
+
+	cfg := &Config{
+		Providers:                 map[schemas.ModelProvider]configstore.ProviderConfig{provider: {Keys: []schemas.Key{key}}},
+		ConfigStore:               store,
+		ProviderCredentialManager: manager,
+	}
+	err = cfg.RemoveProvider(ctx, provider)
+	require.ErrorContains(t, err, "forced provider delete failure")
+
+	_, err = store.GetProviderConfig(ctx, provider)
+	require.NoError(t, err, "provider route must survive the failed transaction")
+	var credentialCount int64
+	require.NoError(t, store.DB().WithContext(ctx).Model(&tables.TableProviderCredential{}).
+		Where("provider = ?", string(provider)).Count(&credentialCount).Error)
+	require.Equal(t, int64(1), credentialCount, "credential must roll back with the provider")
+	loginStatus, err := manager.LoginStatus(login.LoginID)
+	require.NoError(t, err)
+	require.Equal(t, providercredentials.StatusConnecting, loginStatus.Status, "login must not be cancelled before commit")
+}
+
+func TestRemoveProviderKey_ReloadFailureCompensatesDurableKeyAndCredential(t *testing.T) {
+	initTestLogger()
+	ctx := context.Background()
+	store := createTestSQLiteConfigStore(t, t.TempDir())
+	provider := providercredentials.ProviderCursor
+	key := schemas.Key{ID: "key-1", Name: "cursor-account", Value: *schemas.NewSecretVar("")}
+	providerConfig := configstore.ProviderConfig{Keys: []schemas.Key{key}}
+	require.NoError(t, store.AddProvider(ctx, provider, providerConfig))
+	require.NoError(t, store.DB().WithContext(ctx).Create(&tables.TableProviderCredential{
+		CredentialID: "key-1", Provider: string(provider), ProviderKeyID: "key-1",
+		AuthMode: "pkce_browser", AccessToken: "durable-token", Status: providercredentials.StatusConnected,
+	}).Error)
+
+	manager := providercredentials.NewManager(store)
+	cfg := &Config{
+		Providers:                 map[schemas.ModelProvider]configstore.ProviderConfig{provider: providerConfig},
+		ConfigStore:               store,
+		ProviderCredentialManager: manager,
+	}
+	client, err := bifrost.Init(ctx, schemas.BifrostConfig{Account: NewBaseAccount(cfg), Logger: &testLogger{}})
+	require.NoError(t, err)
+	t.Cleanup(client.Shutdown)
+	cfg.SetBifrostClient(client)
+
+	// The real Cursor provider rejects an invalid CA certificate while staging
+	// its replacement, giving this test a deterministic runtime reload failure.
+	invalidNetworkConfig := schemas.DefaultNetworkConfig
+	invalidNetworkConfig.CACertPEM = schemas.NewSecretVar("not-a-certificate")
+	providerConfig.NetworkConfig = &invalidNetworkConfig
+	cfg.Providers[provider] = providerConfig
+
+	err = cfg.RemoveProviderKey(ctx, provider, key.ID)
+	require.ErrorContains(t, err, "invalid cursor CA certificate")
+
+	durableKey, err := store.GetProviderKey(ctx, provider, key.ID)
+	require.NoError(t, err)
+	require.Equal(t, key.ID, durableKey.ID)
+	require.Equal(t, key.Name, durableKey.Name)
+	var durableCredential tables.TableProviderCredential
+	require.NoError(t, store.DB().WithContext(ctx).
+		Where("provider = ? AND credential_id = ?", string(provider), key.ID).
+		First(&durableCredential).Error)
+	require.Equal(t, "durable-token", durableCredential.AccessToken)
+	require.Equal(t, key.ID, durableCredential.ProviderKeyID)
+
+	inMemoryKey, err := cfg.GetProviderKeyRaw(provider, key.ID)
+	require.NoError(t, err)
+	require.Equal(t, key.ID, inMemoryKey.ID)
 }
 
 // =============================================================================
