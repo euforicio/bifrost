@@ -45,6 +45,10 @@ func (m *mockRoutingManager) GetComplexityLLMStatus(_ context.Context) (complexi
 	return complexity.LLMStatusInfo{State: complexity.LLMStatusDisabled}, nil
 }
 
+func (m *mockRoutingManager) GetComplexityJevStatus(_ context.Context) (complexity.JevStatusInfo, error) {
+	return complexity.JevStatusInfo{State: complexity.JevStatusDisabled}, nil
+}
+
 func (m *mockRoutingManager) ReloadComplexityAnalyzerConfig(_ context.Context, config *complexity.AnalyzerConfig) error {
 	m.reloadCalls++
 	m.reloadedConfig = config

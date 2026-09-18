@@ -14,7 +14,7 @@ export type SemanticVectorStore = "embedded" | "vector_store";
 // Mirrors ComplexitySemanticFallback* in framework/configstore: what answers
 // when semantic classification produces no tier. An absent field on the wire
 // means "none".
-export type SemanticFallback = "none" | "llm";
+export type SemanticFallback = "none" | "llm" | "jev";
 
 export interface LLMConfig {
 	provider: string;
@@ -27,6 +27,17 @@ export interface LLMConfig {
 	prompt?: string;
 	// How many of the most recent user messages are given to the classifier.
 	// 1 (the default) sends only the latest message.
+	message_history_count?: number;
+	count_toward_budgets?: boolean;
+}
+
+export interface JevConfig {
+	provider: string;
+	model: string;
+	timeout?: string;
+	// Choice.confidence floor. Below it no complexity_tier is published.
+	min_confidence?: number;
+	// Jev always evaluates the latest user message only. Must be 1.
 	message_history_count?: number;
 	count_toward_budgets?: boolean;
 }
@@ -54,6 +65,10 @@ export interface SessionConfig {
 // provider call on the first classified request, so it is simply ready the
 // moment its block is saved.
 export interface LLMStatusInfo {
+	state: "disabled" | "ready";
+}
+
+export interface JevStatusInfo {
 	state: "disabled" | "ready";
 }
 
@@ -87,6 +102,7 @@ export interface SemanticStatusInfo {
 	// owns there. Absent while nothing is serving.
 	namespace?: string;
 	llm?: LLMStatusInfo;
+	jev?: JevStatusInfo;
 	// The shipped classification guidance, served so the prompt editor can
 	// seed itself and offer a reset without holding a copy that drifts from
 	// the gateway's. The fixed reinforcement is never exposed.
@@ -100,6 +116,9 @@ export interface AnalyzerConfig {
 	// "llm". May be present while the fallback says "none": the block is
 	// retained so toggling the fallback never loses settings.
 	llm?: LLMConfig;
+	// TypeSafe/Jev System One classifier. Primary when semantic is absent;
+	// otherwise engaged only when semantic.fallback selects "jev".
+	jev?: JevConfig;
 	// When enabled, one scoped session retains its highest observed tier for a
 	// fixed 24-hour inactivity window. The gateway owns that policy; there are no
 	// client-tunable thresholds or downgrade controls.
@@ -121,7 +140,7 @@ export const LEGACY_COMPLEXITY_TIER_VALUES = ["REASONING"] as const;
 // LEGACY_COMPLEXITY_TIER_VALUES): the complexity_mechanism column ships with the
 // semantic classifier, so no row was ever written with the retired "lexical"
 // mechanism and filtering on it could only ever return nothing.
-export const COMPLEXITY_MECHANISM_VALUES = ["semantic", "llm", "session", "skipped"] as const;
+export const COMPLEXITY_MECHANISM_VALUES = ["semantic", "llm", "jev", "session", "skipped"] as const;
 
 // Labels cover "lexical" even though nothing filters on it. Rows predating the
 // structured columns record their decision only in the prose routing log, and
@@ -131,6 +150,7 @@ export const COMPLEXITY_MECHANISM_LABELS: Record<string, string> = {
 	lexical: "Lexical",
 	semantic: "Semantic",
 	llm: "LLM",
+	jev: "Jev",
 	session: "Session",
 	skipped: "Skipped",
 };
@@ -283,14 +303,48 @@ export const SEMANTIC_FALLBACK_OPTIONS: Array<{ value: SemanticFallback; label: 
 		label: "LLM classifier",
 		description: "A chat model names the tier instead. Slower and costlier than an embedding, but only unmatched requests pay for it.",
 	},
+	{
+		value: "jev",
+		label: "Jev classifier",
+		description: "TypeSafe System One names SIMPLE, MEDIUM, or COMPLEX from the latest user message. Only unmatched requests pay for it.",
+	},
 ];
 
 export const SEMANTIC_FALLBACK_LABELS: Record<SemanticFallback, string> = {
 	none: "None",
 	llm: "LLM classifier",
+	jev: "Jev classifier",
 };
 
 // Same duration round-trip as parseSemanticTimeoutMs, with the llm default.
+// Mirrors DefaultComplexityJevTimeout in framework/configstore.
+export const DEFAULT_JEV_TIMEOUT_MS = 1500;
+export const DEFAULT_JEV_MIN_CONFIDENCE = 0.6;
+export const MIN_JEV_MESSAGE_HISTORY = 1;
+export const MAX_JEV_MESSAGE_HISTORY = 1;
+
+export const DEFAULT_JEV_CONFIG: JevConfig = {
+	provider: "",
+	model: "jev-latest",
+	timeout: `${DEFAULT_JEV_TIMEOUT_MS}ms`,
+	min_confidence: DEFAULT_JEV_MIN_CONFIDENCE,
+	message_history_count: 1,
+	count_toward_budgets: false,
+};
+
+export function parseJevTimeoutMs(timeout: string | undefined): number {
+	if (!timeout) return DEFAULT_JEV_TIMEOUT_MS;
+	const match = timeout.trim().match(/^([0-9]*\.?[0-9]+)(ns|us|µs|ms|s|m|h)$/);
+	if (!match) {
+		const numeric = Number(timeout);
+		return Number.isFinite(numeric) && numeric > 0 ? numeric : DEFAULT_JEV_TIMEOUT_MS;
+	}
+	const value = Number(match[1]);
+	const unitToMs: Record<string, number> = { ns: 1e-6, us: 1e-3, µs: 1e-3, ms: 1, s: 1000, m: 60000, h: 3600000 };
+	const milliseconds = value * unitToMs[match[2]];
+	return Number.isFinite(milliseconds) && milliseconds > 0 ? milliseconds : DEFAULT_JEV_TIMEOUT_MS;
+}
+
 export function parseLLMTimeoutMs(timeout: string | undefined): number {
 	if (!timeout) return DEFAULT_LLM_TIMEOUT_MS;
 	const match = timeout.trim().match(/^([0-9]*\.?[0-9]+)(ns|us|µs|ms|s|m|h)$/);

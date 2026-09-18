@@ -859,6 +859,23 @@ export const ProviderIcons = {
 	//
 	// The viewBox is 256x208, not square. preserveAspectRatio is left at its default
 	// (xMidYMid meet) so equal width and height letterbox the mark rather than stretch it.
+	typesafe: ({ size = "md", className = "" }: IconProps) => {
+		const resolvedSize = resolveSize(size);
+		return (
+			<svg
+				width={resolvedSize}
+				height={resolvedSize}
+				viewBox="0 0 28 28"
+				fill="none"
+				xmlns="http://www.w3.org/2000/svg"
+				className={className}
+			>
+				<title>TypeSafe</title>
+				<rect x="3" y="3" width="22" height="22" rx="6" stroke="currentColor" strokeWidth="2" />
+				<path d="M8 14h12M14 8v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+			</svg>
+		);
+	},
 	"github-copilot": ({ size = "md", className = "" }: IconProps) => {
 		const resolvedSize = resolveSize(size);
 		return (

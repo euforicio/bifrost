@@ -3,6 +3,7 @@ package routing
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/plugins/routing/complexity"
@@ -20,9 +21,36 @@ type complexityProposal struct {
 	MatchedExemplar string
 	LogLevel        schemas.LogLevel
 	LogMessage      string
+	FailClosed      error
+}
+
+type complexityOnceKey struct{}
+
+type complexityOnceState struct {
+	once   sync.Once
+	result *complexity.ComplexityResult
 }
 
 func (p *RoutingPlugin) computeComplexity(
+	ctx *schemas.BifrostContext,
+	req *schemas.BifrostRequest,
+	virtualKeyID string,
+) *complexity.ComplexityResult {
+	if ctx == nil {
+		return p.computeComplexityUncached(ctx, req, virtualKeyID)
+	}
+	state, _ := ctx.Value(complexityOnceKey{}).(*complexityOnceState)
+	if state == nil {
+		state = &complexityOnceState{}
+		ctx.SetValue(complexityOnceKey{}, state)
+	}
+	state.once.Do(func() {
+		state.result = p.computeComplexityUncached(ctx, req, virtualKeyID)
+	})
+	return state.result
+}
+
+func (p *RoutingPlugin) computeComplexityUncached(
 	ctx *schemas.BifrostContext,
 	req *schemas.BifrostRequest,
 	virtualKeyID string,
@@ -70,6 +98,7 @@ func (p *RoutingPlugin) computeComplexity(
 
 	if !sessionActive {
 		proposal := p.classifyComplexityInput(ctx, input)
+		rememberJevFailClosed(ctx, proposal.FailClosed)
 		publishComplexityProposal(ctx, proposal)
 		return proposal.Result
 	}
@@ -79,6 +108,7 @@ func (p *RoutingPlugin) computeComplexity(
 	if loadErr != nil {
 		p.logComplexitySessionStoreError("inspect", loadErr)
 		proposal := p.classifyComplexityInput(ctx, input)
+		rememberJevFailClosed(ctx, proposal.FailClosed)
 		publishComplexityProposal(ctx, proposal)
 		return proposal.Result
 	}
@@ -103,6 +133,7 @@ func (p *RoutingPlugin) computeComplexity(
 	}
 
 	proposal := p.classifyComplexityInput(ctx, input)
+	rememberJevFailClosed(ctx, proposal.FailClosed)
 	proposedTier := ""
 	if proposal.Result != nil {
 		proposedTier = proposal.Result.Tier
@@ -161,6 +192,9 @@ func (p *RoutingPlugin) computeComplexity(
 
 func (p *RoutingPlugin) classifyComplexityInput(ctx *schemas.BifrostContext, input complexity.ComplexityInput) complexityProposal {
 	if p.semanticClassifier == nil || !p.semanticClassifier.IsConfigured() {
+		if p.jevClassifier != nil && p.jevClassifier.PrimaryEnabled() {
+			return p.classifyJevComplexity(ctx, input)
+		}
 		if p.logger != nil {
 			p.logger.Debug("[Routing] %s", noSemanticClassifierLog)
 		}
@@ -228,6 +262,14 @@ func (p *RoutingPlugin) classifyComplexityInput(ctx *schemas.BifrostContext, inp
 		)
 	}
 
+	if p.jevClassifier != nil && p.jevClassifier.FallbackEnabled() {
+		ctx.AppendRoutingEngineLog(
+			schemas.RoutingEngineRoutingRule,
+			schemas.LogLevelInfo,
+			unavailableCause+"; falling back to the Jev classifier",
+		)
+		return p.classifyJevComplexity(ctx, input)
+	}
 	if p.llmClassifier != nil && p.llmClassifier.FallbackEnabled() {
 		ctx.AppendRoutingEngineLog(
 			schemas.RoutingEngineRoutingRule,
@@ -284,6 +326,23 @@ func (p *RoutingPlugin) logComplexitySessionStoreError(operation string, err err
 	}
 }
 
+type jevFailClosedKey struct{}
+
+func rememberJevFailClosed(ctx *schemas.BifrostContext, err error) {
+	if ctx == nil || err == nil {
+		return
+	}
+	ctx.SetValue(jevFailClosedKey{}, err)
+}
+
+func jevFailClosedFromContext(ctx *schemas.BifrostContext) error {
+	if ctx == nil {
+		return nil
+	}
+	err, _ := ctx.Value(jevFailClosedKey{}).(error)
+	return err
+}
+
 func publishComplexityProposal(ctx *schemas.BifrostContext, proposal complexityProposal) {
 	publishComplexityDecision(ctx, proposal.Result, proposal.Mechanism, proposal.Score)
 	if proposal.LogMessage != "" {
@@ -321,7 +380,11 @@ func formatSessionProposalLog(event, effectiveTier, previousTier string, proposa
 	}
 	message += fmt.Sprintf(" proposed=%s source=%s", proposal.Result.Tier, proposal.Mechanism)
 	if proposal.Score != nil {
-		message += fmt.Sprintf(" proposed_similarity=%.2f", *proposal.Score)
+		if proposal.Mechanism == complexity.MechanismJev {
+			message += fmt.Sprintf(" proposed_confidence=%.3f", *proposal.Score)
+		} else {
+			message += fmt.Sprintf(" proposed_similarity=%.2f", *proposal.Score)
+		}
 	}
 	if matched := truncateExemplarForLog(proposal.MatchedExemplar); matched != "" {
 		message += fmt.Sprintf(" proposed_matched=%q", matched)

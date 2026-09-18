@@ -415,6 +415,16 @@ export default function EmbeddingConfigSheet({
 								/>
 							</div>
 
+							{(semantic?.fallback ?? "none") === "jev" && (
+								<Alert variant="info" data-testid="complexity-router-jev-fallback-callout">
+									<Info className="h-4 w-4" />
+									<AlertDescription>
+										The Jev classifier is configured on the Complexity Router page. It evaluates only the latest user message via TypeSafe
+										System One and leaves the tier unpublished when Choice confidence is below the threshold.
+									</AlertDescription>
+								</Alert>
+							)}
+
 							{/* Fallback classifier fields. Rendered inline rather than in a
 							    sheet of their own, and only while "LLM classifier" is the
 							    selected fallback — a dormant llm block still keeps its saved

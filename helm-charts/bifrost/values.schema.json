@@ -2276,7 +2276,7 @@
             },
             "complexityAnalyzerConfig": {
               "type": ["object", "null"],
-              "description": "Runtime configuration for complexity_tier CEL routing. Renders into governance.complexity_analyzer_config in config.json. Semantic (embedding-based) classification is the primary mechanism — without the semantic block no complexity_tier is published. The optional llm block is a chat-completion fallback engaged only when semantic.fallback is 'llm'. The optional session block retains the highest tier observed for a session.",
+              "description": "Runtime configuration for complexity_tier CEL routing. Renders into governance.complexity_analyzer_config in config.json. Semantic (embedding-based) classification is the primary mechanism when configured. The optional llm block is a chat-completion fallback engaged only when semantic.fallback is 'llm'. The optional jev block is a TypeSafe System One classifier: primary when semantic is omitted, or fallback when semantic.fallback is 'jev'. The optional session block retains the highest tier observed for a session.",
               "properties": {
                 "session": {
                   "type": "object",
@@ -2284,7 +2284,7 @@
                   "properties": {
                     "enabled": {
                       "type": "boolean",
-                      "description": "Enable monotonic session tier retention. Requires semantic complexity classification; default: false."
+                      "description": "Enable monotonic session tier retention. Requires semantic or jev complexity classification; default: false."
                     }
                   },
                   "required": ["enabled"],
@@ -2340,8 +2340,8 @@
                     },
                     "fallback": {
                       "type": "string",
-                      "enum": ["none", "llm"],
-                      "description": "What answers when semantic classification produces no tier (a match below min_similarity, a timeout, an unfinished warmup): 'none' (default) records the request as skipped; 'llm' asks the chat model configured in the sibling llm block, which is required when this is set."
+                      "enum": ["none", "llm", "jev"],
+                      "description": "What answers when semantic classification produces no tier (a match below min_similarity, a timeout, an unfinished warmup): 'none' (default) records the request as skipped; 'llm' asks the chat model configured in the sibling llm block; 'jev' asks TypeSafe System One using the sibling jev block. The matching block is required when this is set."
                     }
                   },
                   "required": ["provider", "embedding_model"],
@@ -2388,6 +2388,53 @@
                     "count_toward_budgets": {
                       "type": "boolean",
                       "description": "Record classification completion cost against governance budgets (record-only, never enforced; default: false)"
+                    }
+                  },
+                  "required": ["provider", "model"],
+                  "additionalProperties": false
+                },
+                "jev": {
+                  "type": "object",
+                  "description": "TypeSafe/Jev System One classifier settings. Primary when no semantic block is present; otherwise used when semantic.fallback selects 'jev'. State is always the latest user message. Choice.confidence below min_confidence leaves complexity_tier unpublished.",
+                  "properties": {
+                    "provider": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Provider used to run the System One classification request (typically typesafe; must have an enabled key)"
+                    },
+                    "model": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Jev model (jev-latest or a versioned id such as jev-1.13.0)"
+                    },
+                    "timeout": {
+                      "description": "Per-request classification timeout (duration string like '1.5s', or milliseconds as a number; default: 1.5s). On timeout no complexity tier is published.",
+                      "oneOf": [
+                        {
+                          "type": "string",
+                          "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+                        },
+                        {
+                          "type": "number",
+                          "exclusiveMinimum": 0
+                        }
+                      ]
+                    },
+                    "min_confidence": {
+                      "type": "number",
+                      "exclusiveMinimum": 0,
+                      "exclusiveMaximum": 1,
+                      "description": "Choice.confidence floor (default: 0.6). Below it no complexity_tier is published."
+                    },
+                    "message_history_count": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1,
+                      "description": "Jev always evaluates the latest user message only. Must be 1."
+                    },
+                    "count_toward_budgets": {
+                      "type": "boolean",
+                      "description": "Record classification cost against governance budgets (record-only, never enforced; default: false)"
                     }
                   },
                   "required": ["provider", "model"],
@@ -2524,7 +2571,10 @@
                     "required": ["session"]
                   },
                   "then": {
-                    "required": ["semantic"]
+                    "anyOf": [
+                      { "required": ["semantic"] },
+                      { "required": ["jev"] }
+                    ]
                   }
                 },
                 {
@@ -2543,6 +2593,24 @@
                   },
                   "then": {
                     "required": ["llm"]
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "semantic": {
+                        "properties": {
+                          "fallback": {
+                            "const": "jev"
+                          }
+                        },
+                        "required": ["fallback"]
+                      }
+                    },
+                    "required": ["semantic"]
+                  },
+                  "then": {
+                    "required": ["jev"]
                   }
                 }
               ],

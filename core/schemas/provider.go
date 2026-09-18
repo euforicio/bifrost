@@ -350,6 +350,7 @@ type AllowedRequests struct {
 	Embedding             bool `json:"embedding"`
 	Rerank                bool `json:"rerank"`
 	OCR                   bool `json:"ocr"`
+	SystemOne             bool `json:"system_one"`
 	Speech                bool `json:"speech"`
 	SpeechStream          bool `json:"speech_stream"`
 	Transcription         bool `json:"transcription"`
@@ -436,6 +437,8 @@ func (ar *AllowedRequests) IsOperationAllowed(operation RequestType) bool {
 		return ar.Rerank
 	case OCRRequest:
 		return ar.OCR
+	case SystemOneRequest:
+		return ar.SystemOne
 	case SpeechRequest:
 		return ar.Speech
 	case SpeechStreamRequest:
@@ -820,6 +823,13 @@ type ResponsesLifecycleProvider interface {
 // not implement it fall back to a per-provider default in core/providers/utils.
 type ResponsesNamespaceToolProvider interface {
 	SupportsResponsesNamespaceTools(ctx *BifrostContext, key Key, model string) bool
+}
+
+// SystemOneProvider is an optional interface for TypeSafe System One evaluate
+// requests (POST /v1/systemone). Checked via type assertion in core dispatch;
+// providers that do not implement it return unsupported_operation.
+type SystemOneProvider interface {
+	SystemOne(ctx *BifrostContext, key Key, request *BifrostSystemOneRequest) (*BifrostSystemOneResponse, *BifrostError)
 }
 
 // WebSocketCapableProvider is an optional interface that providers can implement

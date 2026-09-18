@@ -50,6 +50,7 @@ import (
 	"github.com/maximhq/bifrost/core/providers/runway"
 	"github.com/maximhq/bifrost/core/providers/sarvam"
 	"github.com/maximhq/bifrost/core/providers/sgl"
+	"github.com/maximhq/bifrost/core/providers/typesafe"
 	providerUtils "github.com/maximhq/bifrost/core/providers/utils"
 	"github.com/maximhq/bifrost/core/providers/vertex"
 	"github.com/maximhq/bifrost/core/providers/vllm"
@@ -1505,6 +1506,48 @@ func (bifrost *Bifrost) OCRRequest(ctx *schemas.BifrostContext, req *schemas.Bif
 		return nil, err
 	}
 	return response.OCRResponse, nil
+}
+
+// SystemOneRequest sends a native TypeSafe System One evaluate request.
+func (bifrost *Bifrost) SystemOneRequest(ctx *schemas.BifrostContext, req *schemas.BifrostSystemOneRequest) (*schemas.BifrostSystemOneResponse, *schemas.BifrostError) {
+	if ctx == nil {
+		ctx = bifrost.ctx
+	}
+	if req == nil {
+		return nil, &schemas.BifrostError{
+			IsBifrostError: false,
+			Error: &schemas.ErrorField{
+				Message: "system one request is nil",
+			},
+			ExtraFields: schemas.BifrostErrorExtraFields{
+				RequestType: schemas.SystemOneRequest,
+			},
+		}
+	}
+	if len(req.Questions) == 0 {
+		return nil, &schemas.BifrostError{
+			IsBifrostError: false,
+			Error: &schemas.ErrorField{
+				Message: "questions not provided for system one request",
+			},
+			ExtraFields: schemas.BifrostErrorExtraFields{
+				RequestType:            schemas.SystemOneRequest,
+				Provider:               req.Provider,
+				OriginalModelRequested: req.Model,
+				ResolvedModelUsed:      req.Model,
+			},
+		}
+	}
+
+	bifrostReq := bifrost.getBifrostRequest()
+	bifrostReq.RequestType = schemas.SystemOneRequest
+	bifrostReq.SystemOneRequest = req
+
+	response, err := bifrost.handleRequest(ctx, bifrostReq)
+	if err != nil {
+		return nil, err
+	}
+	return response.SystemOneResponse, nil
 }
 
 // SpeechRequest sends a speech request to the specified provider.
@@ -4587,6 +4630,8 @@ func (bifrost *Bifrost) createBaseProvider(providerKey schemas.ModelProvider, co
 		return sarvam.NewSarvamProvider(config, bifrost.logger)
 	case schemas.Databricks:
 		return databricks.NewDatabricksProvider(config, bifrost.logger)
+	case schemas.TypeSafe:
+		return typesafe.NewTypeSafeProvider(config, bifrost.logger), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider: %s", targetProviderKey)
 	}
@@ -7790,6 +7835,16 @@ func (bifrost *Bifrost) handleProviderRequest(provider schemas.Provider, config 
 			return nil, bifrostError
 		}
 		response.OCRResponse = ocrResponse
+	case schemas.SystemOneRequest:
+		systemOne, ok := provider.(schemas.SystemOneProvider)
+		if !ok {
+			return nil, providerUtils.NewUnsupportedOperationError(schemas.SystemOneRequest, provider.GetProviderKey())
+		}
+		systemOneResponse, bifrostError := systemOne.SystemOne(req.Context, key, req.BifrostRequest.SystemOneRequest)
+		if bifrostError != nil {
+			return nil, bifrostError
+		}
+		response.SystemOneResponse = systemOneResponse
 	case schemas.SpeechRequest:
 		speechResponse, bifrostError := provider.Speech(req.Context, key, req.BifrostRequest.SpeechRequest)
 		if bifrostError != nil {
@@ -8968,6 +9023,7 @@ func resetBifrostRequest(req *schemas.BifrostRequest) {
 	req.EmbeddingRequest = nil
 	req.RerankRequest = nil
 	req.OCRRequest = nil
+	req.SystemOneRequest = nil
 	req.SpeechRequest = nil
 	req.TranscriptionRequest = nil
 	req.ImageGenerationRequest = nil

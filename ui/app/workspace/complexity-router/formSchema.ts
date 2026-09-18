@@ -1,16 +1,21 @@
 import {
 	AnalyzerConfig,
+	DEFAULT_JEV_CONFIG,
+	DEFAULT_JEV_MIN_CONFIDENCE,
 	DEFAULT_LLM_CONFIG,
 	DEFAULT_SEMANTIC_CONFIG,
 	KeywordListKey,
+	MAX_JEV_MESSAGE_HISTORY,
 	MAX_LLM_PROMPT_CHARACTERS,
 	MAX_LLM_MESSAGE_HISTORY,
 	MAX_SEMANTIC_MESSAGE_HISTORY,
 	MAX_SEMANTIC_PHRASE_CHARACTERS,
 	MAX_SEMANTIC_PHRASES,
 	MAX_SEMANTIC_TIMEOUT_MS,
+	MIN_JEV_MESSAGE_HISTORY,
 	MIN_LLM_MESSAGE_HISTORY,
 	MIN_SEMANTIC_MESSAGE_HISTORY,
+	parseJevTimeoutMs,
 	parseLLMTimeoutMs,
 	parseSemanticTimeoutMs,
 } from "@/lib/types/complexityRouter";
@@ -58,7 +63,7 @@ const semanticSchema = z.object({
 		.max(MAX_SEMANTIC_MESSAGE_HISTORY, `Must be at most ${MAX_SEMANTIC_MESSAGE_HISTORY}`),
 	count_toward_budgets: z.boolean().optional(),
 	vector_store: z.enum(["embedded", "vector_store"]).optional(),
-	fallback: z.enum(["none", "llm"]),
+	fallback: z.enum(["none", "llm", "jev"]),
 });
 
 const llmSchema = z.object({
@@ -81,6 +86,28 @@ const llmSchema = z.object({
 	count_toward_budgets: z.boolean().optional(),
 });
 
+const jevSchema = z.object({
+	provider: z.string(),
+	model: z.string(),
+	timeout: z
+		.string()
+		.min(1, "Enter a classification timeout")
+		.refine((value) => isPositiveDurationString(value), "Enter a timeout greater than 0")
+		.optional(),
+	min_confidence: z
+		.number({ error: "Enter a number between 0 and 1" })
+		.gt(0, "Must be greater than 0")
+		.lt(1, "Must be less than 1"),
+	message_history_count: z
+		.number({
+			error: `Jev always uses the latest user message only (${MIN_JEV_MESSAGE_HISTORY})`,
+		})
+		.int("Must be a whole number")
+		.min(MIN_JEV_MESSAGE_HISTORY, "Jev always evaluates the latest user message only")
+		.max(MAX_JEV_MESSAGE_HISTORY, "Jev always evaluates the latest user message only"),
+	count_toward_budgets: z.boolean().optional(),
+});
+
 export const analyzerConfigSchema = z
 	.object({
 		keywords: z.object({
@@ -90,6 +117,7 @@ export const analyzerConfigSchema = z
 		}),
 		semantic: semanticSchema,
 		llm: llmSchema,
+		jev: jevSchema,
 		session: z.object({ enabled: z.boolean() }),
 	})
 	.superRefine((data, ctx) => {
@@ -114,10 +142,12 @@ export const analyzerConfigSchema = z
 				});
 			}
 		}
-		if (data.session.enabled && (!hasProvider || !hasModel)) {
+		const hasJevProvider = data.jev.provider.trim() !== "";
+		const hasJevModel = data.jev.model.trim() !== "";
+		if (data.session.enabled && !((hasProvider && hasModel) || (hasJevProvider && hasJevModel))) {
 			ctx.addIssue({
 				code: "custom",
-				message: "Configure the semantic classifier before enabling session routing",
+				message: "Configure the semantic or Jev classifier before enabling session routing",
 				path: ["session", "enabled"],
 			});
 		}
@@ -140,6 +170,23 @@ export const analyzerConfigSchema = z
 					code: "custom",
 					message: "Select a fallback model",
 					path: ["llm", "model"],
+				});
+			}
+		}
+
+		if (hasJevProvider || hasJevModel || data.semantic.fallback === "jev") {
+			if (!hasJevProvider) {
+				ctx.addIssue({
+					code: "custom",
+					message: "Select a Jev provider",
+					path: ["jev", "provider"],
+				});
+			}
+			if (!hasJevModel) {
+				ctx.addIssue({
+					code: "custom",
+					message: "Select a Jev model",
+					path: ["jev", "model"],
 				});
 			}
 		}
@@ -195,6 +242,7 @@ export const analyzerConfigSchema = z
 export type AnalyzerFormValues = z.infer<typeof analyzerConfigSchema>;
 export type SemanticFormValues = AnalyzerFormValues["semantic"];
 export type LLMFormValues = AnalyzerFormValues["llm"];
+export type JevFormValues = AnalyzerFormValues["jev"];
 
 export const DEFAULT_LLM_FORM_VALUES: LLMFormValues = {
 	provider: DEFAULT_LLM_CONFIG.provider,
@@ -203,6 +251,15 @@ export const DEFAULT_LLM_FORM_VALUES: LLMFormValues = {
 	prompt: DEFAULT_LLM_CONFIG.prompt ?? "",
 	message_history_count: DEFAULT_LLM_CONFIG.message_history_count ?? MIN_LLM_MESSAGE_HISTORY,
 	count_toward_budgets: DEFAULT_LLM_CONFIG.count_toward_budgets ?? false,
+};
+
+export const DEFAULT_JEV_FORM_VALUES: JevFormValues = {
+	provider: DEFAULT_JEV_CONFIG.provider,
+	model: DEFAULT_JEV_CONFIG.model,
+	timeout: DEFAULT_JEV_CONFIG.timeout,
+	min_confidence: DEFAULT_JEV_CONFIG.min_confidence ?? DEFAULT_JEV_MIN_CONFIDENCE,
+	message_history_count: DEFAULT_JEV_CONFIG.message_history_count ?? MIN_JEV_MESSAGE_HISTORY,
+	count_toward_budgets: DEFAULT_JEV_CONFIG.count_toward_budgets ?? false,
 };
 
 export const DEFAULT_SEMANTIC_FORM_VALUES: SemanticFormValues = {
@@ -221,6 +278,7 @@ export const DEFAULT_FORM_VALUES: AnalyzerFormValues = {
 	},
 	semantic: DEFAULT_SEMANTIC_FORM_VALUES,
 	llm: DEFAULT_LLM_FORM_VALUES,
+	jev: DEFAULT_JEV_FORM_VALUES,
 	session: { enabled: false },
 };
 
@@ -228,6 +286,7 @@ export const DEFAULT_FORM_VALUES: AnalyzerFormValues = {
 export function toFormValues(config: AnalyzerConfig): AnalyzerFormValues {
 	const saved = config.semantic;
 	const savedLLM = config.llm;
+	const savedJev = config.jev;
 	return {
 		keywords: config.keywords,
 		session: config.session ?? { enabled: false },
@@ -241,6 +300,16 @@ export function toFormValues(config: AnalyzerConfig): AnalyzerFormValues {
 					count_toward_budgets: savedLLM.count_toward_budgets ?? false,
 				}
 			: DEFAULT_LLM_FORM_VALUES,
+		jev: savedJev
+			? {
+					...DEFAULT_JEV_FORM_VALUES,
+					...savedJev,
+					timeout: savedJev.timeout ?? DEFAULT_JEV_FORM_VALUES.timeout,
+					min_confidence: savedJev.min_confidence ?? DEFAULT_JEV_MIN_CONFIDENCE,
+					message_history_count: savedJev.message_history_count ?? MIN_JEV_MESSAGE_HISTORY,
+					count_toward_budgets: savedJev.count_toward_budgets ?? false,
+				}
+			: DEFAULT_JEV_FORM_VALUES,
 		semantic: saved
 			? {
 					...DEFAULT_SEMANTIC_FORM_VALUES,
@@ -261,12 +330,14 @@ export function toFormValues(config: AnalyzerConfig): AnalyzerFormValues {
 export function toAnalyzerPayload(values: AnalyzerFormValues, saved?: AnalyzerConfig): AnalyzerConfig {
 	const semantic = values.semantic.provider && values.semantic.embedding_model ? values.semantic : (saved?.semantic ?? undefined);
 	const llm = values.llm.provider && values.llm.model ? values.llm : (saved?.llm ?? undefined);
+	const jev = values.jev.provider && values.jev.model ? values.jev : (saved?.jev ?? undefined);
 
 	return {
 		keywords: values.keywords,
 		...(values.session.enabled ? { session: values.session } : {}),
 		...(semantic ? { semantic } : {}),
 		...(llm ? { llm } : {}),
+		...(jev ? { jev } : {}),
 	};
 }
 
@@ -286,6 +357,12 @@ export function llmTimeoutFieldValue(timeout: string | undefined): string | numb
 	if (timeout === "") return "";
 	const millis = timeout?.trim().match(/^([0-9]*\.?[0-9]+)ms$/);
 	return millis ? millis[1] : parseLLMTimeoutMs(timeout);
+}
+
+export function jevTimeoutFieldValue(timeout: string | undefined): string | number {
+	if (timeout === "") return "";
+	const millis = timeout?.trim().match(/^([0-9]*\.?[0-9]+)ms$/);
+	return millis ? millis[1] : parseJevTimeoutMs(timeout);
 }
 // shouldSeedLLMPrompt decides whether the shipped guidance may initialize the draft.
 export function shouldSeedLLMPrompt(enabled: boolean, defaultPrompt: string, prompt: string, edited: boolean): boolean {

@@ -366,10 +366,10 @@ func (c *ComplexitySemanticConfig) Validate() error {
 			ComplexitySemanticVectorStoreEmbedded, ComplexitySemanticVectorStoreConfigured, c.VectorStore)
 	}
 	switch c.Fallback {
-	case ComplexitySemanticFallbackNone, ComplexitySemanticFallbackLLM:
+	case ComplexitySemanticFallbackNone, ComplexitySemanticFallbackLLM, ComplexitySemanticFallbackJev:
 	default:
-		return fmt.Errorf("semantic fallback must be %q or %q, got %q",
-			ComplexitySemanticFallbackNone, ComplexitySemanticFallbackLLM, c.Fallback)
+		return fmt.Errorf("semantic fallback must be %q, %q, or %q, got %q",
+			ComplexitySemanticFallbackNone, ComplexitySemanticFallbackLLM, ComplexitySemanticFallbackJev, c.Fallback)
 	}
 	return nil
 }
@@ -383,6 +383,7 @@ func (c *ComplexitySemanticConfig) Validate() error {
 const (
 	ComplexitySemanticFallbackNone = "none"
 	ComplexitySemanticFallbackLLM  = "llm"
+	ComplexitySemanticFallbackJev  = "jev"
 )
 
 // DefaultComplexityLLMTimeout bounds one LLM classification call. It is
@@ -554,6 +555,169 @@ func (c *ComplexityLLMConfig) Validate() error {
 	return nil
 }
 
+// DefaultComplexityJevTimeout bounds one System One classification call.
+// Jev's public latency target is ~70–500ms; 1.5s matches the semantic default
+// and the implementation brief.
+const DefaultComplexityJevTimeout = 1500 * time.Millisecond
+
+// DefaultComplexityJevMinConfidence is the Choice.confidence floor. Below it
+// the classifier leaves complexity_tier unpublished (same degrade as a
+// semantic miss). Official TypeSafe docs treat confidence as a second axis
+// distinct from probability.
+const DefaultComplexityJevMinConfidence = 0.6
+
+// DefaultComplexityJevModel is the TypeSafe alias used when jev.model is omitted.
+const DefaultComplexityJevModel = "jev-latest"
+
+// DefaultComplexityJevFrontierNoul is the needs_frontier noul threshold used
+// when composing Choice + Noul in code. A MEDIUM Choice with middling
+// confidence and a high noul escalates to COMPLEX.
+const DefaultComplexityJevFrontierNoul = 0.75
+
+// Jev always sends the latest user message only (jaggedness: large irrelevant
+// state hurts). The config field exists so the block mirrors the llm shape.
+const (
+	DefaultComplexityJevMessageHistoryCount = 1
+	MaxComplexityJevMessageHistoryCount     = 1
+)
+
+// ComplexityJevConfig configures the TypeSafe/Jev System One classifier.
+// It can be the primary classifier when semantic is absent, or the semantic
+// fallback when semantic.fallback is "jev".
+type ComplexityJevConfig struct {
+	Provider schemas.ModelProvider `json:"provider"`
+	Model    string                `json:"model"`
+	Timeout  time.Duration         `json:"timeout,omitempty"`
+	// MinConfidence is the Choice.confidence floor. Zero means the default
+	// (0.6). Below the floor no tier is published.
+	MinConfidence float64 `json:"min_confidence,omitempty"`
+	// MessageHistoryCount is accepted for shape-matching with the llm block.
+	// Jev always evaluates the latest user message only; values other than 1
+	// are rejected.
+	MessageHistoryCount int  `json:"message_history_count,omitempty"`
+	CountTowardBudgets  bool `json:"count_toward_budgets,omitempty"`
+}
+
+func (c *ComplexityJevConfig) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	allowed := map[string]struct{}{
+		"provider":              {},
+		"model":                 {},
+		"timeout":               {},
+		"min_confidence":        {},
+		"message_history_count": {},
+		"count_toward_budgets":  {},
+	}
+	for field := range fields {
+		if _, ok := allowed[field]; !ok {
+			return fmt.Errorf("unknown jev complexity field %q", field)
+		}
+	}
+
+	type alias ComplexityJevConfig
+	aux := &struct {
+		Timeout json.RawMessage `json:"timeout,omitempty"`
+		*alias
+	}{alias: (*alias)(c)}
+	if err := json.Unmarshal(data, aux); err != nil {
+		return err
+	}
+
+	if len(aux.Timeout) == 0 || string(aux.Timeout) == "null" {
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(aux.Timeout, &s); err == nil {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("failed to parse jev timeout duration string %q: %w", s, err)
+		}
+		c.Timeout = d
+	} else {
+		var ms float64
+		if err := json.Unmarshal(aux.Timeout, &ms); err != nil {
+			return fmt.Errorf("unsupported jev timeout value: %s", string(aux.Timeout))
+		}
+		c.Timeout = time.Duration(ms * float64(time.Millisecond))
+	}
+	if c.Timeout < 0 {
+		return fmt.Errorf("jev timeout must be non-negative, got %v", c.Timeout)
+	}
+	return nil
+}
+
+func (c ComplexityJevConfig) MarshalJSON() ([]byte, error) {
+	type alias ComplexityJevConfig
+	var timeout string
+	if c.Timeout != 0 {
+		timeout = c.Timeout.String()
+	}
+	return json.Marshal(struct {
+		Timeout string `json:"timeout,omitempty"`
+		alias
+	}{
+		Timeout: timeout,
+		alias:   alias(c),
+	})
+}
+
+func (c *ComplexityJevConfig) normalized() *ComplexityJevConfig {
+	if c == nil {
+		return nil
+	}
+	out := &ComplexityJevConfig{
+		Provider:            schemas.ModelProvider(strings.ToLower(strings.TrimSpace(string(c.Provider)))),
+		Model:               strings.TrimSpace(c.Model),
+		Timeout:             c.Timeout,
+		MinConfidence:       c.MinConfidence,
+		MessageHistoryCount: c.MessageHistoryCount,
+		CountTowardBudgets:  c.CountTowardBudgets,
+	}
+	if out.Model == "" {
+		out.Model = DefaultComplexityJevModel
+	}
+	if out.Timeout == 0 {
+		out.Timeout = DefaultComplexityJevTimeout
+	}
+	if out.MinConfidence == 0 {
+		out.MinConfidence = DefaultComplexityJevMinConfidence
+	}
+	if out.MessageHistoryCount == 0 {
+		out.MessageHistoryCount = DefaultComplexityJevMessageHistoryCount
+	}
+	return out
+}
+
+func (c *ComplexityJevConfig) Validate() error {
+	if c == nil {
+		return nil
+	}
+	if strings.TrimSpace(string(c.Provider)) == "" {
+		return fmt.Errorf("jev config requires a provider")
+	}
+	if strings.TrimSpace(c.Model) == "" {
+		return fmt.Errorf("jev config requires a model")
+	}
+	if c.Timeout <= 0 {
+		return fmt.Errorf("jev timeout must be positive, got %v", c.Timeout)
+	}
+	if math.IsNaN(c.MinConfidence) || c.MinConfidence <= 0 || c.MinConfidence >= 1 {
+		return fmt.Errorf("jev min_confidence must be greater than 0 and less than 1, got %v", c.MinConfidence)
+	}
+	if c.MessageHistoryCount < 1 || c.MessageHistoryCount > MaxComplexityJevMessageHistoryCount {
+		return fmt.Errorf(
+			"jev message_history_count must be %d (latest user message only), got %d",
+			MaxComplexityJevMessageHistoryCount,
+			c.MessageHistoryCount,
+		)
+	}
+	return nil
+}
+
 // ComplexitySessionConfig controls monotonic complexity-tier retention across
 // requests belonging to the same session.
 //
@@ -615,6 +779,7 @@ type ComplexityAnalyzerConfigHashes struct {
 	// history window, budgets flag). The fallback selector rides the
 	// SemanticSettings hash: it is a field of the semantic block.
 	LLMSettings     string `json:"llm_settings,omitempty"`
+	JevSettings     string `json:"jev_settings,omitempty"`
 	SessionSettings string `json:"session_settings,omitempty"`
 }
 
@@ -686,6 +851,10 @@ type ComplexityAnalyzerConfig struct {
 	// fallback says "none": the block is retained so toggling the fallback
 	// never loses settings.
 	LLM *ComplexityLLMConfig `json:"llm,omitempty"`
+	// Jev configures the TypeSafe System One classifier. It is the primary
+	// classifier when Semantic is absent, and the semantic fallback when
+	// Semantic.Fallback selects "jev".
+	Jev *ComplexityJevConfig `json:"jev,omitempty"`
 	// Session enables the built-in monotonic session tier. It is separate from
 	// semantic message_history_count: no message or turn history is persisted.
 	Session      *ComplexitySessionConfig       `json:"session,omitempty"`
@@ -743,6 +912,7 @@ type complexitySemanticConfigRecord struct {
 	Keywords             ComplexityEditableKeywordConfig `json:"keywords"`
 	Semantic             *ComplexitySemanticConfig       `json:"semantic,omitempty"`
 	LLM                  *ComplexityLLMConfig            `json:"llm,omitempty"`
+	Jev                  *ComplexityJevConfig            `json:"jev,omitempty"`
 	Session              *ComplexitySessionConfig        `json:"session,omitempty"`
 	ConfigHashes         complexitySemanticRowHashes     `json:"_config_hashes,omitempty"`
 	EmbeddingFingerprint string                          `json:"_embedding_fingerprint,omitempty"`
@@ -756,6 +926,7 @@ type complexitySemanticRowHashes struct {
 	ComplexKeywords  string `json:"complex_keywords,omitempty"`
 	SemanticSettings string `json:"semantic_settings,omitempty"`
 	LLMSettings      string `json:"llm_settings,omitempty"`
+	JevSettings      string `json:"jev_settings,omitempty"`
 	SessionSettings  string `json:"session_settings,omitempty"`
 }
 
@@ -767,6 +938,20 @@ func (c *ComplexityAnalyzerConfig) LLMFallbackEnabled() bool {
 	return c != nil && c.Semantic != nil &&
 		c.Semantic.Fallback == ComplexitySemanticFallbackLLM &&
 		c.LLM != nil
+}
+
+// JevFallbackEnabled reports whether a semantic non-answer should be retried
+// through the jev block.
+func (c *ComplexityAnalyzerConfig) JevFallbackEnabled() bool {
+	return c != nil && c.Semantic != nil &&
+		c.Semantic.Fallback == ComplexitySemanticFallbackJev &&
+		c.Jev != nil
+}
+
+// JevPrimaryEnabled reports whether Jev is the primary classifier (configured
+// without a semantic block).
+func (c *ComplexityAnalyzerConfig) JevPrimaryEnabled() bool {
+	return c != nil && c.Jev != nil && c.Semantic == nil
 }
 
 // SessionRoutingEnabled reports whether monotonic session-tier retention is enabled.
@@ -807,11 +992,17 @@ func (c *ComplexityAnalyzerConfig) Validate() error {
 	if err := c.LLM.Validate(); err != nil {
 		return err
 	}
+	if err := c.Jev.Validate(); err != nil {
+		return err
+	}
 	if c.Semantic != nil && c.Semantic.Fallback == ComplexitySemanticFallbackLLM && c.LLM == nil {
 		return fmt.Errorf("semantic fallback %q requires an llm config block", ComplexitySemanticFallbackLLM)
 	}
-	if c.SessionRoutingEnabled() && c.Semantic == nil {
-		return fmt.Errorf("complexity session routing requires a semantic config block")
+	if c.Semantic != nil && c.Semantic.Fallback == ComplexitySemanticFallbackJev && c.Jev == nil {
+		return fmt.Errorf("semantic fallback %q requires a jev config block", ComplexitySemanticFallbackJev)
+	}
+	if c.SessionRoutingEnabled() && c.Semantic == nil && c.Jev == nil {
+		return fmt.Errorf("complexity session routing requires a semantic or jev config block")
 	}
 	return nil
 }
@@ -834,6 +1025,7 @@ func (c *ComplexityAnalyzerConfig) Normalized() ComplexityAnalyzerConfig {
 		},
 		Semantic:             c.Semantic.normalized(),
 		LLM:                  c.LLM.normalized(),
+		Jev:                  c.Jev.normalized(),
 		Session:              c.Session.normalized(),
 		ConfigHashes:         c.ConfigHashes,
 		EmbeddingFingerprint: c.EmbeddingFingerprint,
@@ -928,6 +1120,7 @@ func MergeComplexityAnalyzerConfig(base, file *ComplexityAnalyzerConfig) (*Compl
 		},
 		Semantic:             mergeComplexitySemanticConfig(normalizedBase.Semantic, normalizedFile.Semantic),
 		LLM:                  mergeComplexityLLMConfig(normalizedBase.LLM, normalizedFile.LLM),
+		Jev:                  mergeComplexityJevConfig(normalizedBase.Jev, normalizedFile.Jev),
 		Session:              mergeComplexitySessionConfig(normalizedBase.Session, normalizedFile.Session),
 		ConfigHashes:         normalizedFile.ConfigHashes,
 		EmbeddingFingerprint: normalizedBase.EmbeddingFingerprint,
@@ -951,6 +1144,13 @@ func mergeComplexitySemanticConfig(base, file *ComplexitySemanticConfig) *Comple
 // mergeComplexityLLMConfig overlays the file llm settings. A nil file section
 // keeps the base untouched.
 func mergeComplexityLLMConfig(base, file *ComplexityLLMConfig) *ComplexityLLMConfig {
+	if file == nil {
+		return base.normalized()
+	}
+	return file.normalized()
+}
+
+func mergeComplexityJevConfig(base, file *ComplexityJevConfig) *ComplexityJevConfig {
 	if file == nil {
 		return base.normalized()
 	}
@@ -1018,6 +1218,12 @@ func MergeComplexityAnalyzerConfigByHashes(base, file *ComplexityAnalyzerConfig)
 		if merged.LLM == nil || merged.ConfigHashes.LLMSettings != normalizedFile.ConfigHashes.LLMSettings {
 			merged.LLM = normalizedFile.LLM.normalized()
 			merged.ConfigHashes.LLMSettings = normalizedFile.ConfigHashes.LLMSettings
+		}
+	}
+	if normalizedFile.Jev != nil {
+		if merged.Jev == nil || merged.ConfigHashes.JevSettings != normalizedFile.ConfigHashes.JevSettings {
+			merged.Jev = normalizedFile.Jev.normalized()
+			merged.ConfigHashes.JevSettings = normalizedFile.ConfigHashes.JevSettings
 		}
 	}
 	// Session follows the same optional-section rule: omission means no file
@@ -1111,6 +1317,7 @@ func encodeComplexitySemanticConfigRow(config ComplexityAnalyzerConfig) ([]byte,
 		Keywords: config.Keywords,
 		Semantic: config.Semantic,
 		LLM:      config.LLM,
+		Jev:      config.Jev,
 		Session:  config.Session,
 		ConfigHashes: complexitySemanticRowHashes{
 			SimpleKeywords:   config.ConfigHashes.SimpleKeywords,
@@ -1118,6 +1325,7 @@ func encodeComplexitySemanticConfigRow(config ComplexityAnalyzerConfig) ([]byte,
 			ComplexKeywords:  config.ConfigHashes.ComplexKeywords,
 			SemanticSettings: config.ConfigHashes.SemanticSettings,
 			LLMSettings:      config.ConfigHashes.LLMSettings,
+			JevSettings:      config.ConfigHashes.JevSettings,
 			SessionSettings:  config.ConfigHashes.SessionSettings,
 		},
 		EmbeddingFingerprint: config.EmbeddingFingerprint,
@@ -1139,12 +1347,14 @@ func applyComplexitySemanticConfigRow(base *ComplexityAnalyzerConfig, row *compl
 	combined.Keywords = row.Keywords
 	combined.Semantic = row.Semantic
 	combined.LLM = row.LLM
+	combined.Jev = row.Jev
 	combined.Session = row.Session
 	combined.ConfigHashes.SimpleKeywords = row.ConfigHashes.SimpleKeywords
 	combined.ConfigHashes.MediumKeywords = row.ConfigHashes.MediumKeywords
 	combined.ConfigHashes.ComplexKeywords = row.ConfigHashes.ComplexKeywords
 	combined.ConfigHashes.SemanticSettings = row.ConfigHashes.SemanticSettings
 	combined.ConfigHashes.LLMSettings = row.ConfigHashes.LLMSettings
+	combined.ConfigHashes.JevSettings = row.ConfigHashes.JevSettings
 	combined.ConfigHashes.SessionSettings = row.ConfigHashes.SessionSettings
 	combined.EmbeddingFingerprint = row.EmbeddingFingerprint
 	return &combined

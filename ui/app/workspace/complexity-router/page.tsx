@@ -16,7 +16,11 @@ import { ScrollArea } from "@/components/ui/scrollArea";
 import { TagInput } from "@/components/ui/tagInput";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { EmbeddingSupportedProviders } from "@/lib/constants/logs";
+import { EmbeddingSupportedProviders, getProviderLabel } from "@/lib/constants/logs";
+import { ProviderIconType, RenderProviderIcon } from "@/lib/constants/icons";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ModelMultiselect } from "@/components/ui/modelMultiselect";
 import { getErrorMessage, useGetCoreConfigQuery, useGetProvidersQuery } from "@/lib/store";
 import { useGetAllKeysQuery } from "@/lib/store/apis/providersApi";
 import {
@@ -32,7 +36,7 @@ import {
 	MAX_SEMANTIC_PHRASES,
 	TIER_PHRASE_LIST_DEFINITIONS,
 } from "@/lib/types/complexityRouter";
-import { ModelProvider } from "@/lib/types/config";
+import { ModelProvider, ModelProviderName } from "@/lib/types/config";
 import { DBKey } from "@/lib/types/governance";
 import { cn } from "@/lib/utils";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
@@ -46,6 +50,7 @@ import {
 	analyzerConfigSchema,
 	countCanonicalSemanticPhrases,
 	DEFAULT_FORM_VALUES,
+	jevTimeoutFieldValue,
 	toAnalyzerPayload,
 	toFormValues,
 	shouldSeedLLMPrompt,
@@ -88,6 +93,17 @@ const supportsChat = (provider: ModelProvider): boolean => {
 	return true;
 };
 
+// TypeSafe is the only built-in System One provider. Custom providers declare
+// support through allowed_requests.system_one; a missing allowed_requests block
+// is unrestricted, matching the Go nil AllowedRequests rule.
+const supportsSystemOne = (provider: ModelProvider): boolean => {
+	if (provider.custom_provider_config) {
+		const allowed = provider.custom_provider_config.allowed_requests;
+		return !allowed || allowed.system_one === true;
+	}
+	return provider.name === "typesafe";
+};
+
 // The three tier lists sit side by side, so each is a fixed-height scroll
 // container rather than a fixed number of phrases: phrases wrap to different
 // numbers of lines, and equal counts would leave the columns visibly uneven.
@@ -127,6 +143,10 @@ export default function ComplexityRouterPage() {
 		() => (providersData || []).filter((provider) => supportsChat(provider) && hasEnabledKey(provider, allKeys || [])),
 		[providersData, allKeys],
 	);
+	const systemOneProviders = useMemo(
+		() => (providersData || []).filter((provider) => supportsSystemOne(provider) && hasEnabledKey(provider, allKeys || [])),
+		[providersData, allKeys],
+	);
 
 	const { data: coreConfig } = useGetCoreConfigQuery({ fromDB: true });
 	const isVectorStoreConnected = coreConfig?.is_cache_connected ?? false;
@@ -153,6 +173,7 @@ export default function ComplexityRouterPage() {
 
 	const liveSemantic = watch("semantic");
 	const liveLLM = watch("llm");
+	const liveJev = watch("jev");
 	const liveSession = watch("session");
 	const liveKeywords = watch("keywords");
 
@@ -169,9 +190,15 @@ export default function ComplexityRouterPage() {
 		() => (allKeys || []).filter((key) => key.provider === liveLLM?.provider && key.enabled !== false).map((key) => key.key_id),
 		[allKeys, liveLLM?.provider],
 	);
+	const enabledKeyIdsForJevProvider = useMemo(
+		() => (allKeys || []).filter((key) => key.provider === liveJev?.provider && key.enabled !== false).map((key) => key.key_id),
+		[allKeys, liveJev?.provider],
+	);
 
 	const isClassifierConfigured = Boolean(liveSemantic?.provider && liveSemantic?.embedding_model);
 	const isLLMFallbackEnabled = liveSemantic?.fallback === "llm";
+	const isJevFallbackEnabled = liveSemantic?.fallback === "jev";
+	const isJevConfigured = Boolean(liveJev?.provider && liveJev?.model);
 
 	// Only the unsettled states are polled. Ready and disabled are steady until
 	// the next save, which refetches through the cache tag anyway.
@@ -194,7 +221,7 @@ export default function ComplexityRouterPage() {
 		isError: statusIsError,
 		refetch: refetchStatus,
 	} = useGetComplexitySemanticStatusQuery(undefined, {
-		skip: !data?.semantic && !data?.llm && !isLLMFallbackEnabled,
+		skip: !data?.semantic && !data?.llm && !data?.jev && !isLLMFallbackEnabled && !isJevFallbackEnabled && !isJevConfigured,
 		pollingInterval: statusPollInterval,
 	});
 	useEffect(() => {
@@ -413,7 +440,7 @@ export default function ComplexityRouterPage() {
 	}
 
 	const keywordErrors = errors.keywords;
-	const hasErrors = Boolean(keywordErrors || errors.semantic || errors.llm || errors.session);
+	const hasErrors = Boolean(keywordErrors || errors.semantic || errors.llm || errors.jev || errors.session);
 	const canSave = canUpdate && isDirty && !isResetting && !(isSubmitted && hasErrors);
 
 	// Rendered on the page and again inside the sheet: the re-embed cost is a
@@ -467,6 +494,10 @@ export default function ComplexityRouterPage() {
 								Each request is embedded and takes the tier of the nearest reference phrase, filling the{" "}
 								<code className="bg-muted rounded-sm px-1 py-0.5 font-mono text-xs">complexity_tier</code> field that routing rules target.
 								{isLLMFallbackEnabled ? " Requests matching no phrase confidently fall back to the LLM classifier." : ""}
+								{isJevFallbackEnabled ? " Requests matching no phrase confidently fall back to the Jev classifier." : ""}
+								{!isClassifierConfigured && isJevConfigured
+									? " With no embedding classifier, Jev classifies the latest user message as SIMPLE, MEDIUM, or COMPLEX."
+									: ""}
 								{liveSession.enabled ? " Session-aware routing keeps the highest tier reached during the active session." : ""}
 							</PageTitle>
 
@@ -627,6 +658,173 @@ export default function ComplexityRouterPage() {
 									/>
 								)}
 							/>
+						</div>
+
+						{/* ── Jev classifier ── */}
+						<div className="bg-card space-y-4 rounded-sm border p-4" data-testid="complexity-router-jev-section">
+							<div className="space-y-1">
+								<SectionHeading
+									title="Jev classifier"
+									description="TypeSafe System One classifies the latest user message as SIMPLE, MEDIUM, or COMPLEX. Used as the primary classifier when embeddings are not configured, or as the semantic fallback when that option is selected."
+								/>
+								<p className="text-muted-foreground text-xs leading-relaxed">
+									State is always the latest user message. Choice confidence below the threshold leaves{" "}
+									<code className="bg-muted rounded-sm px-1 py-0.5 font-mono text-[11px]">complexity_tier</code> unpublished. A missing API
+									key fails closed.
+								</p>
+							</div>
+
+							{systemOneProviders.length === 0 && (
+								<Alert variant="warning" data-testid="complexity-router-no-jev-providers">
+									<TriangleAlert className="h-4 w-4" />
+									<AlertDescription>
+										Add the TypeSafe provider with <span className="font-mono">env.TYPESAFE_API_KEY</span> to use Jev.
+									</AlertDescription>
+								</Alert>
+							)}
+
+							<div className="grid gap-4 sm:grid-cols-2">
+								<div className="space-y-2">
+									<FieldLabel htmlFor="jev-provider">Jev provider</FieldLabel>
+									<Controller
+										control={control}
+										name="jev.provider"
+										render={({ field }) => (
+											<Select
+												value={field.value || undefined}
+												onValueChange={(value: ModelProviderName) => {
+													if (value === field.value) return;
+													field.onChange(value);
+													setValue("jev.model", "", { shouldDirty: true });
+												}}
+												disabled={!canUpdate || systemOneProviders.length === 0}
+											>
+												<SelectTrigger className="w-full" id="jev-provider" data-testid="complexity-router-jev-provider-select">
+													<SelectValue placeholder="Select provider" />
+												</SelectTrigger>
+												<SelectContent>
+													{systemOneProviders
+														.filter((provider) => provider.name)
+														.map((provider) => (
+															<SelectItem key={provider.name} value={provider.name}>
+																<div className="flex items-center gap-2">
+																	<RenderProviderIcon provider={provider.name as ProviderIconType} size="sm" className="h-4 w-4" />
+																	<span>{getProviderLabel(provider.name)}</span>
+																</div>
+															</SelectItem>
+														))}
+												</SelectContent>
+											</Select>
+										)}
+									/>
+									{errors.jev?.provider && <p className="text-destructive text-xs">{errors.jev.provider.message}</p>}
+								</div>
+
+								<div className="space-y-2">
+									<FieldLabel htmlFor="jev-model">Jev model</FieldLabel>
+									<Controller
+										control={control}
+										name="jev.model"
+										render={({ field }) => (
+											<ModelMultiselect
+												inputId="jev-model"
+												data-testid="complexity-router-jev-model-select"
+												isSingleSelect
+												provider={liveJev?.provider || undefined}
+												keys={enabledKeyIdsForJevProvider}
+												value={field.value ?? ""}
+												onChange={(model) => {
+													field.onChange(model);
+												}}
+												placeholder={liveJev?.provider ? "Search or type jev-latest…" : "Select a provider first"}
+												disabled={!canUpdate || !liveJev?.provider}
+											/>
+										)}
+									/>
+									{errors.jev?.model ? <p className="text-destructive text-xs">{errors.jev.model.message}</p> : null}
+								</div>
+							</div>
+
+							<div className="grid gap-4 sm:grid-cols-2">
+								<div className="space-y-2">
+									<FieldLabel
+										htmlFor="jev-timeout"
+										tooltip="Ceiling on the System One classification call. On timeout no complexity tier is published."
+									>
+										Classification timeout (ms)
+									</FieldLabel>
+									<Controller
+										control={control}
+										name="jev.timeout"
+										render={({ field }) => (
+											<Input
+												id="jev-timeout"
+												data-testid="complexity-router-jev-timeout-input"
+												type="number"
+												min={1}
+												step={100}
+												disabled={!canUpdate || !isJevConfigured}
+												value={jevTimeoutFieldValue(field.value)}
+												onChange={(event) => {
+													const raw = event.target.value;
+													field.onChange(raw === "" ? "" : `${raw}ms`);
+												}}
+												aria-invalid={errors.jev?.timeout ? true : undefined}
+												className={cn("font-mono", errors.jev?.timeout && "border-destructive focus-visible:ring-destructive")}
+											/>
+										)}
+									/>
+									{errors.jev?.timeout && <p className="text-destructive text-xs">{errors.jev.timeout.message}</p>}
+								</div>
+
+								<div className="space-y-2">
+									<FieldLabel
+										htmlFor="jev-min-confidence"
+										tooltip="Choice.confidence floor. Below it the classifier leaves complexity_tier unpublished. This is Jev's documented confidence, not an invented similarity score."
+									>
+										Minimum confidence
+									</FieldLabel>
+									<Input
+										id="jev-min-confidence"
+										data-testid="complexity-router-jev-min-confidence-input"
+										type="number"
+										min={0.01}
+										max={0.99}
+										step={0.05}
+										disabled={!canUpdate || !isJevConfigured}
+										aria-invalid={errors.jev?.min_confidence ? true : undefined}
+										className={cn("font-mono", errors.jev?.min_confidence && "border-destructive focus-visible:ring-destructive")}
+										{...register("jev.min_confidence", { valueAsNumber: true })}
+									/>
+									{errors.jev?.min_confidence ? (
+										<p className="text-destructive text-xs">{errors.jev.min_confidence.message}</p>
+									) : (
+										<p className="text-muted-foreground text-xs leading-relaxed">Between 0 and 1. Default 0.6.</p>
+									)}
+								</div>
+							</div>
+
+							<div className="flex items-center justify-between gap-6">
+								<FieldLabel
+									htmlFor="jev-count-toward-budgets"
+									tooltip="Bills each System One classification to the same budgets as the request that triggered it. Cost is always reported to telemetry either way."
+								>
+									Count classification cost toward budgets
+								</FieldLabel>
+								<Controller
+									control={control}
+									name="jev.count_toward_budgets"
+									render={({ field }) => (
+										<Switch
+											id="jev-count-toward-budgets"
+											data-testid="complexity-router-jev-budgets-switch"
+											checked={field.value ?? false}
+											onCheckedChange={field.onChange}
+											disabled={!canUpdate || !isJevConfigured}
+										/>
+									)}
+								/>
+							</div>
 						</div>
 
 						{/* ── Fallback Classification Prompt ── */}

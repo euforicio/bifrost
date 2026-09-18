@@ -139,6 +139,7 @@ type ServerCallbacks interface {
 	GetComplexitySemanticStatus(ctx context.Context) (complexity.SemanticStatusInfo, error)
 	RetryComplexitySemanticWarmup(ctx context.Context) (complexity.SemanticStatusInfo, bool, error)
 	GetComplexityLLMStatus(ctx context.Context) (complexity.LLMStatusInfo, error)
+	GetComplexityJevStatus(ctx context.Context) (complexity.JevStatusInfo, error)
 	ListComplexityGenerations(ctx context.Context) ([]complexity.GenerationInfo, error)
 	DeleteComplexityGeneration(ctx context.Context, namespace string) error
 	// Prompt repository related callbacks
@@ -1219,6 +1220,16 @@ func (s *BifrostHTTPServer) GetComplexityLLMStatus(_ context.Context) (complexit
 	return routingPlugin.ComplexityLLMStatus(), nil
 }
 
+// GetComplexityJevStatus returns the TypeSafe/Jev classifier's readiness from
+// the routing plugin.
+func (s *BifrostHTTPServer) GetComplexityJevStatus(_ context.Context) (complexity.JevStatusInfo, error) {
+	routingPlugin, err := s.getRoutingPlugin()
+	if err != nil {
+		return complexity.JevStatusInfo{}, fmt.Errorf("routing plugin not found: %w", err)
+	}
+	return routingPlugin.ComplexityJevStatus(), nil
+}
+
 // ReloadComplexityAnalyzerConfig reloads the complexity analyzer config into the routing plugin.
 func (s *BifrostHTTPServer) ReloadComplexityAnalyzerConfig(ctx context.Context, config *complexity.AnalyzerConfig) error {
 	routingPlugin, err := s.getRoutingPlugin()
@@ -2246,6 +2257,9 @@ func (s *BifrostHTTPServer) ReloadPlugin(ctx context.Context, name string, path 
 	if routingResponsesPlugin, ok := plugin.(routing.ResponsesExecutorSetter); ok {
 		routingResponsesPlugin.SetResponsesRequestExecutor(s.Client.ResponsesRequest)
 	}
+	if routingSystemOnePlugin, ok := plugin.(routing.SystemOneExecutorSetter); ok {
+		routingSystemOnePlugin.SetSystemOneRequestExecutor(s.Client.SystemOneRequest)
+	}
 	return s.SyncLoadedPlugin(ctx, name, plugin, placement, order)
 }
 
@@ -2918,6 +2932,7 @@ func (s *BifrostHTTPServer) Bootstrap(ctx context.Context) error {
 		routingPlugin.SetWarmupEmbedUsageObserver(s.ObserveWarmupRoutingEmbedding)
 		routingPlugin.SetChatRequestExecutor(s.Client.ChatCompletionRequest)
 		routingPlugin.SetResponsesRequestExecutor(s.Client.ResponsesRequest)
+		routingPlugin.SetSystemOneRequestExecutor(s.Client.SystemOneRequest)
 	}
 
 	// Initialize Sidekiq runner for background jobs

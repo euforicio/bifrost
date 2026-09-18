@@ -16,7 +16,7 @@ complexity_tier in ["MEDIUM", "COMPLEX"]
 
 This lets you route simple greetings to a fast, cheap model and deep reasoning tasks to a frontier model automatically, with no changes to your application code.
 
-Classification runs only when a routing rule actually references `complexity_tier`, so requests that never touch a complexity rule pay no embedding cost. Once semantic classification is configured, a request it cannot confidently match, such as a near miss or timeout, leaves `complexity_tier` unpublished. You can optionally configure an **LLM fallback classifier** to step in after semantic classification has run and returned no tier. See [LLM fallback classifier](#llm-fallback-classifier). Without semantic classification configured at all, Bifrost keeps the request on its existing routing path instead of guessing. When [session-aware routing](#session-aware-routing) is enabled and the request carries a recognized session identity, a turn that still produces no tier of its own reuses the tier already retained for that session, so `complexity_tier` goes unpublished only when neither classification nor session state supplies one.
+Classification runs only when a routing rule actually references `complexity_tier`, so requests that never touch a complexity rule pay no embedding cost. Once semantic classification is configured, a request it cannot confidently match, such as a near miss or timeout, leaves `complexity_tier` unpublished. You can optionally configure an **LLM fallback classifier** or a **Jev classifier** to step in after semantic classification has run and returned no tier. See [LLM fallback classifier](#llm-fallback-classifier) and [Jev classifier](#jev-classifier). Jev can also be the primary classifier when no semantic block is configured. Without any classifier configured, Bifrost keeps the request on its existing routing path instead of guessing. When [session-aware routing](#session-aware-routing) is enabled and the request carries a recognized session identity, a turn that still produces no tier of its own reuses the tier already retained for that session, so `complexity_tier` goes unpublished only when neither classification nor session state supplies one.
 
 <Note>
 Complexity classification is **semantic** (embedding-based). The older lexical keyword scorer is retired. See [Lexical keyword classifier (retired)](#lexical-keyword-classifier-retired).
@@ -95,6 +95,34 @@ An LLM-classified turn carries no similarity score. A chat completion has no equ
 
 ---
 
+## Jev classifier
+
+[TypeSafe Jev](/providers/supported-providers/typesafe) is a native System One evaluate model, not a chat fake. The Complexity Router uses the configured `jev.provider` + `jev.model` through Bifrost's provider queue (keys, retries, `network_config`). There is no hard-coded HTTP call that skips Providers config. The TypeSafe key must be `env.TYPESAFE_API_KEY` (or a Bifrost key-store entry that resolves to that env) — never a literal secret in config.json, the UI, CI, or the repo.
+
+Two clean paths:
+
+- **Primary** — configure a `jev` block and omit `semantic`. Jev classifies every request that needs a tier.
+- **Semantic fallback** — set `semantic.fallback` to `jev`. Jev runs only after semantic classification produces no tier, the same way the LLM fallback does.
+
+One System One call asks a contrastive Choice `SIMPLE|MEDIUM|COMPLEX` plus `OTHER`/`UNKNOWN` (so a weak match does not force a tier), an optional parallel Noul (`needs_frontier`), and an optional companion Score (`complexity_score`, 1–3). Bifrost then **composes in code**:
+
+- If Choice is `OTHER` or `UNKNOWN`, `complexity_tier` is left unpublished.
+- If `Choice.confidence` is below `min_confidence` (default `0.6`), `complexity_tier` is left unpublished — same degrade as a semantic miss. Do not force a tier.
+- Otherwise the Choice is mapped to the uppercase CEL tier. Score never names a discrete tier on its own.
+- Optional: a MEDIUM Choice with middling confidence plus high `needs_frontier.noul` or a high Score (after the Score confidence gate) is escalated to COMPLEX with a logged reason.
+
+State is always the **latest user message**. History is filtered in code; Jev is not asked to do math, date arithmetic, or count turns. The response `model` (versioned ID), Choice `confidence`, and Choice `probabilities` are logged. No invented similarity scores. The classifier runs **at most once per request**.
+
+Config examples default to the `jev-latest` alias. Tests and httptest fixtures pin `jev-1.13.0`.
+
+<Warning>
+On the model-routing path, Jev timeout, 401/missing key, `429`, `529`, and other errors **fail open**: no `complexity_tier` is published and the request stays on the existing default path (same as a semantic miss). Safety and tool gates (future) may fail closed. Session routing may still reuse a retained tier.
+</Warning>
+
+Low-cost live smoke (Jev classifier + Fireworks Flash for SIMPLE/MEDIUM + one `grok-3-mini` COMPLEX call) is documented on [TypeSafe](/providers/supported-providers/typesafe#low-cost-complexity-router-smoke). Keys stay `env.TYPESAFE_API_KEY`, `env.FIREWORKS_API_KEY`, and `env.XAI_API_KEY`. Do not soak, and do not route COMPLEX to `grok-4.6`.
+
+---
+
 ## Configuration
 
 Semantic classification requires an embedding provider and model. The provider must have an enabled key in **Model Providers**. The UI warns you if the saved provider has no usable key.
@@ -107,8 +135,9 @@ Semantic classification requires an embedding provider and model. The provider m
 Navigate to **Complexity Router** in the sidebar.
 
 - **Phrase to Tier Mapping**: add a phrase by typing it and pressing **Enter** in a tier's input; remove one with the × on its chip. Counts are shown per tier.
-- **Session-aware routing**: retain the highest tier reached by each identified session for 24 hours of inactivity. The toggle is off by default and requires the semantic classifier.
-- **Edit embedding configuration**: opens the embedding sheet (provider, model, similarity floor, history window, timeout, budgets, and phrase storage: **Embedded** keeps phrase vectors in Bifrost's own memory; **Vector Store** keeps them in the configured vector store so they survive restarts, falling back to Embedded when none is available). Setting **When no phrase matches confidently** to **LLM classifier** reveals a **Fallback classifier** section further down the same sheet: provider, model, timeout, history window, and budgets for the fallback model. Setting it back to **None** hides that section again; its settings are preserved either way.
+- **Session-aware routing**: retain the highest tier reached by each identified session for 24 hours of inactivity. The toggle is off by default and requires a semantic or Jev classifier.
+- **Jev classifier**: provider, model (`jev-latest` or `jev-1.13.0`), timeout, minimum Choice confidence, and budget attribution. Primary when embeddings are not configured; fallback when **When no phrase matches confidently** is **Jev classifier**.
+- **Edit embedding configuration**: opens the embedding sheet (provider, model, similarity floor, history window, timeout, budgets, and phrase storage: **Embedded** keeps phrase vectors in Bifrost's own memory; **Vector Store** keeps them in the configured vector store so they survive restarts, falling back to Embedded when none is available). Setting **When no phrase matches confidently** to **LLM classifier** or **Jev classifier** selects the matching fallback. Jev settings live on the main page; LLM model settings appear in the sheet.
 - When the fallback is on, a **Fallback Classification Prompt** section appears on the main page below the phrase lists, with a **Reset to default** button. The model itself is configured in the embedding sheet; only the prompt text lives here, since it needs room to iterate.
 - The **Classifier status** badge in the header shows whether the classifier is ready to serve (see [Classifier status and warmup](#classifier-status-and-warmup)).
 
@@ -137,6 +166,30 @@ curl -X PUT http://localhost:8080/api/routing/complexity-analyzer-config \
     },
     "session": {
       "enabled": true
+    },
+    "keywords": {
+      "simple_keywords": ["what is a mutex?", "fix the grammar in this sentence."],
+      "medium_keywords": ["add api-key auth: hash the keys, reject revoked ones, and never log them."],
+      "complex_keywords": ["balance testing, prescribing rules, and staffing against rising resistant infections."]
+    }
+  }'
+
+# Enable the Jev classifier as semantic fallback (or omit semantic for Jev-primary)
+curl -X PUT http://localhost:8080/api/routing/complexity-analyzer-config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "semantic": {
+      "provider": "openai",
+      "embedding_model": "text-embedding-3-small",
+      "fallback": "jev"
+    },
+    "jev": {
+      "provider": "typesafe",
+      "model": "jev-latest",
+      "timeout": "1.5s",
+      "min_confidence": 0.6,
+      "message_history_count": 1,
+      "count_toward_budgets": false
     },
     "keywords": {
       "simple_keywords": ["what is a mutex?", "fix the grammar in this sentence."],
@@ -182,6 +235,21 @@ Reference-phrase lists are stored in the existing `keywords` fields (`simple_key
 
 ```json
 {
+  "providers": {
+    "typesafe": {
+      "keys": [
+        {
+          "name": "typesafe-1",
+          "value": "env.TYPESAFE_API_KEY",
+          "models": ["*"],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "https://api.typesafe.ai"
+      }
+    }
+  },
   "governance": {
     "complexity_analyzer_config": {
       "semantic": {
@@ -192,7 +260,15 @@ Reference-phrase lists are stored in the existing `keywords` fields (`simple_key
         "message_history_count": 1,
         "count_toward_budgets": false,
         "vector_store": "embedded",
-        "fallback": "llm"
+        "fallback": "jev"
+      },
+      "jev": {
+        "provider": "typesafe",
+        "model": "jev-latest",
+        "timeout": "1.5s",
+        "min_confidence": 0.6,
+        "message_history_count": 1,
+        "count_toward_budgets": false
       },
       "llm": {
         "provider": "openai",
@@ -224,14 +300,20 @@ Reference-phrase lists are stored in the existing `keywords` fields (`simple_key
 | `semantic.message_history_count` | integer | `1` | Number of recent user messages joined into the embedded text (1–10) |
 | `semantic.count_toward_budgets` | boolean | `false` | Count embedding usage toward virtual-key budgets (record-only, never enforced) |
 | `semantic.vector_store` | string | `embedded` | Where phrase vectors are kept. `embedded` uses Bifrost's built-in in-memory store, which is private to one node and re-embeds every phrase on restart. `vector_store` uses the configured top-level `vector_store`; with a shared backend (Qdrant, Weaviate, Redis, Pinecone) vectors are shared between nodes and survive restarts, while a Chromem backend stays node-local and only persists when its `path` is set. If no vector store is configured it falls back to `embedded` and says so in the status response and the log. See [Where phrase vectors live](#where-phrase-vectors-live). |
-| `semantic.fallback` | string | `none` | What answers when semantic classification produces no tier: `none` records the request as skipped; `llm` asks the model configured in `llm` below. Requires `llm` to be set |
+| `semantic.fallback` | string | `none` | What answers when semantic classification produces no tier: `none` records the request as skipped; `llm` asks the chat model in `llm`; `jev` asks TypeSafe System One using `jev`. Requires the matching block |
 | `llm.provider` | string | Required when `fallback` is `llm` | Provider used to run the classification chat completion; must have an enabled key |
 | `llm.model` | string | Required when `fallback` is `llm` | Chat model asked to name the tier. Pick a small, fast one; every fallback classification waits on one completion |
 | `llm.timeout` | duration | `4s` | Ceiling on the classification completion; exceeding it skips tier routing for that request |
 | `llm.prompt` | string | Shipped default guidance | Replaces the shipped classification guidance (max 4,000 characters). The tier-name and response-format reinforcement is appended by Bifrost regardless and cannot be edited |
 | `llm.message_history_count` | integer | `1` | Number of recent user messages sent to the classifier, oldest first (1–10) |
 | `llm.count_toward_budgets` | boolean | `false` | Count classification completion cost toward virtual-key budgets (record-only, never enforced) |
-| `session.enabled` | boolean | `false` | Retain the highest observed tier across normally sequential turns for 24 hours of inactivity. Requires `semantic`; overlapping requests for the same session are best-effort |
+| `jev.provider` | string | Required when Jev is primary or `fallback` is `jev` | Provider used to run System One (typically `typesafe`); the key value must be `env.TYPESAFE_API_KEY` or a key-store pointer to that env |
+| `jev.model` | string | Required when Jev is used | Jev model (`jev-latest` or a versioned id such as `jev-1.13.0`) |
+| `jev.timeout` | duration | `1.5s` | Ceiling on the System One call; exceeding it skips tier routing for that request |
+| `jev.min_confidence` | number | `0.6` | Choice.confidence floor. Below it no `complexity_tier` is published |
+| `jev.message_history_count` | integer | `1` | Must be `1`. Jev always evaluates the latest user message only |
+| `jev.count_toward_budgets` | boolean | `false` | Count System One classification cost toward virtual-key budgets (record-only, never enforced) |
+| `session.enabled` | boolean | `false` | Retain the highest observed tier across normally sequential turns for 24 hours of inactivity. Requires `semantic` or `jev`; overlapping requests for the same session are best-effort |
 | `keywords.simple_keywords` | string[] | 50 built-in phrases | Reference phrases for the Simple tier |
 | `keywords.medium_keywords` | string[] | 50 built-in phrases | Reference phrases for the Medium tier |
 | `keywords.complex_keywords` | string[] | 50 built-in phrases | Reference phrases for the Complex tier |
@@ -452,8 +534,8 @@ When a routing rule references `complexity_tier`, the classification outcome is 
 | Field | Values | Meaning |
 |---|---|---|
 | `complexity_tier` | `SIMPLE`, `MEDIUM`, `COMPLEX` | The tier the request was classified into |
-| `complexity_mechanism` | `semantic`, `llm`, `session`, `skipped` | How the effective tier was produced. `semantic` means an embedding match supplied it; `llm` means the fallback model named it; `session` means retained session state supplied it because the current turn was a continuation, proposed a lower tier, produced no tier, or followed the Complex ceiling; `skipped` means a rule demanded a tier but neither a classifier nor existing session state produced one |
-| `complexity_score` | 0.0 – 1.0 | The similarity score of the nearest reference phrase. Set only when the effective decision is the current semantic match; absent for `llm`, `session`, and `skipped` |
+| `complexity_mechanism` | `semantic`, `llm`, `jev`, `session`, `skipped` | How the effective tier was produced. `semantic` means an embedding match supplied it; `llm` means the fallback chat model named it; `jev` means TypeSafe System One named it; `session` means retained session state supplied it because the current turn was a continuation, proposed a lower tier, produced no tier, or followed the Complex ceiling; `skipped` means a rule demanded a tier but neither a classifier nor existing session state produced one |
+| `complexity_score` | 0.0 – 1.0 | For `semantic`, the similarity of the nearest reference phrase. For `jev`, the documented Choice.confidence. Choice `probabilities` are written on the routing-engine log line, not invented as a similarity. Absent for `llm`, `session`, and `skipped` |
 
 The routing decision logs also record the matched reference phrase alongside the tier and similarity, so you can tell a genuine match from an accidental one. Long phrases are truncated to 120 characters in the log line.
 
@@ -480,7 +562,7 @@ curl "http://localhost:8080/api/logs?complexity_tiers=COMPLEX&complexity_mechani
 ```
 
 <Note>
-The raw `complexity_score` is displayed but not filterable; tier and mechanism are the supported filter dimensions. The mechanism filter offers `semantic`, `llm`, `session`, and `skipped`. Legacy `REASONING` tiers remain available in the logs filter.
+The raw `complexity_score` is displayed but not filterable; tier and mechanism are the supported filter dimensions. The mechanism filter offers `semantic`, `llm`, `jev`, `session`, and `skipped`. Legacy `REASONING` tiers remain available in the logs filter.
 </Note>
 
 ### In telemetry
