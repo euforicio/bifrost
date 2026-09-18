@@ -38,7 +38,7 @@ func TestClassifyComplexityTextViaJev(t *testing.T) {
 		assert.Equal(t, "jev-1.13.0", got.Model)
 	})
 
-	t.Run("401 is fail-closed key missing", func(t *testing.T) {
+	t.Run("401 is key-missing; routing fails open", func(t *testing.T) {
 		status := 401
 		plugin := &RoutingPlugin{}
 		plugin.SetSystemOneRequestExecutor(func(*schemas.BifrostContext, *schemas.BifrostSystemOneRequest) (*schemas.BifrostSystemOneResponse, *schemas.BifrostError) {
@@ -83,9 +83,14 @@ func TestClassifyJevComplexity(t *testing.T) {
 		return plugin
 	}
 
-	t.Run("publishes choice confidence not a similarity score", func(t *testing.T) {
+	t.Run("publishes choice confidence and probabilities", func(t *testing.T) {
 		plugin := newPlugin(func(context.Context, *complexity.JevConfig, string, map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
-			choice, _ := json.Marshal(map[string]any{"type": "choice", "choice": "SIMPLE", "confidence": 0.84})
+			choice, _ := json.Marshal(map[string]any{
+				"type":          "choice",
+				"choice":        "SIMPLE",
+				"confidence":    0.84,
+				"probabilities": map[string]float64{"SIMPLE": 0.8, "MEDIUM": 0.1, "COMPLEX": 0.05, "OTHER": 0.03, "UNKNOWN": 0.02},
+			})
 			return &schemas.BifrostSystemOneResponse{
 				Model:   "jev-1.13.0",
 				Answers: map[string]json.RawMessage{"complexity_tier": choice},
@@ -98,19 +103,44 @@ func TestClassifyJevComplexity(t *testing.T) {
 		require.NotNil(t, proposal.Score)
 		assert.Equal(t, 0.84, *proposal.Score)
 		assert.Contains(t, proposal.LogMessage, "confidence=0.840")
+		assert.Contains(t, proposal.LogMessage, `"SIMPLE":0.8`)
 		assert.Contains(t, proposal.LogMessage, "model=jev-1.13.0")
 		assert.Nil(t, proposal.FailClosed)
 	})
 
-	t.Run("missing key fails closed", func(t *testing.T) {
+	t.Run("missing key fails open", func(t *testing.T) {
 		plugin := newPlugin(func(context.Context, *complexity.JevConfig, string, map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
 			return nil, complexity.ErrJevKeyMissing
 		})
 		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"})
 		assert.Nil(t, proposal.Result)
 		assert.Equal(t, complexity.MechanismSkipped, proposal.Mechanism)
-		require.Error(t, proposal.FailClosed)
-		assert.ErrorIs(t, proposal.FailClosed, complexity.ErrJevKeyMissing)
+		assert.Nil(t, proposal.FailClosed)
+		assert.Contains(t, proposal.LogMessage, "failing open")
+	})
+
+	t.Run("timeout fails open", func(t *testing.T) {
+		plugin := newPlugin(func(context.Context, *complexity.JevConfig, string, map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
+			return nil, ErrJevClassificationTimeout
+		})
+		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"})
+		assert.Nil(t, proposal.Result)
+		assert.Nil(t, proposal.FailClosed)
+		assert.Contains(t, proposal.LogMessage, "no complexity tier is published")
+	})
+
+	t.Run("OTHER leaves tier unpublished", func(t *testing.T) {
+		plugin := newPlugin(func(context.Context, *complexity.JevConfig, string, map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
+			choice, _ := json.Marshal(map[string]any{"type": "choice", "choice": "OTHER", "confidence": 0.9})
+			return &schemas.BifrostSystemOneResponse{
+				Model:   "jev-1.13.0",
+				Answers: map[string]json.RawMessage{"complexity_tier": choice},
+			}, nil
+		})
+		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"})
+		assert.Nil(t, proposal.Result)
+		assert.Nil(t, proposal.FailClosed)
+		assert.Contains(t, proposal.LogMessage, "OTHER/UNKNOWN")
 	})
 
 	t.Run("low confidence leaves tier unpublished", func(t *testing.T) {

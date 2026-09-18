@@ -71,10 +71,12 @@ func TestComplexityJevConfigNormalizedDefaults(t *testing.T) {
 		Model:    " jev-latest ",
 	}).normalized()
 	assert.Equal(t, "typesafe", string(cfg.Provider))
-	assert.Equal(t, "jev-latest", cfg.Model)
+	assert.Equal(t, DefaultComplexityJevModel, cfg.Model)
 	assert.Equal(t, DefaultComplexityJevTimeout, cfg.Timeout)
 	assert.Equal(t, DefaultComplexityJevMinConfidence, cfg.MinConfidence)
 	assert.Equal(t, DefaultComplexityJevMessageHistoryCount, cfg.MessageHistoryCount)
+	emptyModel := (&ComplexityJevConfig{Provider: "typesafe"}).normalized()
+	assert.Equal(t, DefaultComplexityJevModel, emptyModel.Model)
 }
 
 func TestComplexityJevConfigValidation(t *testing.T) {

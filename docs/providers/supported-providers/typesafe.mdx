@@ -80,6 +80,7 @@ The Complexity Router can use this configured provider and model — there is no
 
 - **Primary**: configure a `jev` block and omit `semantic`. Jev classifies the latest user message.
 - **Fallback**: set `semantic.fallback` to `jev` and keep the same `jev` block. Jev runs only after semantic classification produces no tier.
+- Choice includes `OTHER`/`UNKNOWN`. Timeout and errors **fail open** (no tier). Config default alias is `jev-latest`; fixtures pin `jev-1.13.0`.
 
 See [Complexity Router](/features/governance/complexity-router#jev-classifier).
 

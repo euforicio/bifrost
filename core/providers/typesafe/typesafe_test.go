@@ -75,6 +75,19 @@ func TestToTypeSafeSystemOneRequestDefaultsModel(t *testing.T) {
 	assert.Equal(t, "choice", req.Questions["complexity_tier"].Type)
 }
 
+func TestToTypeSafeSystemOneRequestPinsVersionedModel(t *testing.T) {
+	req, err := ToTypeSafeSystemOneRequest(&schemas.BifrostSystemOneRequest{
+		Model: modelJev113,
+		State: json.RawMessage(`"hello"`),
+		Questions: map[string]json.RawMessage{
+			"complexity_tier": json.RawMessage(`{"type":"choice","instructions":"pick a tier"}`),
+		},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, req)
+	assert.Equal(t, modelJev113, req.Model)
+}
+
 func TestToBifrostSystemOneResponsePreservesDocumentedFields(t *testing.T) {
 	choice := "MEDIUM"
 	confidence := 0.81
@@ -147,10 +160,11 @@ func TestSystemOnePostsDocumentedWireShape(t *testing.T) {
 				"complexity_tier": {
 					"type": "choice",
 					"choice": "SIMPLE",
-					"probabilities": {"SIMPLE": 0.91, "MEDIUM": 0.06, "COMPLEX": 0.03},
+					"probabilities": {"SIMPLE": 0.91, "MEDIUM": 0.06, "COMPLEX": 0.02, "OTHER": 0.005, "UNKNOWN": 0.005},
 					"confidence": 0.88
 				},
-				"needs_frontier": {"type": "noul", "noul": 0.11}
+				"needs_frontier": {"type": "noul", "noul": 0.11},
+				"complexity_score": {"type": "score", "score": 1.1, "confidence": 0.86, "legend": {"1": "SIMPLE", "2": "MEDIUM", "3": "COMPLEX"}}
 			},
 			"usage": {"input_tokens": 40, "output_tokens": 8}
 		}`))

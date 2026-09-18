@@ -104,16 +104,19 @@ Two clean paths:
 - **Primary** — configure a `jev` block and omit `semantic`. Jev classifies every request that needs a tier.
 - **Semantic fallback** — set `semantic.fallback` to `jev`. Jev runs only after semantic classification produces no tier, the same way the LLM fallback does.
 
-One System One call asks a contrastive Choice `SIMPLE|MEDIUM|COMPLEX` plus an optional parallel Noul (`needs_frontier`). Bifrost then **composes in code**:
+One System One call asks a contrastive Choice `SIMPLE|MEDIUM|COMPLEX` plus `OTHER`/`UNKNOWN` (so a weak match does not force a tier), an optional parallel Noul (`needs_frontier`), and an optional companion Score (`complexity_score`, 1–3). Bifrost then **composes in code**:
 
+- If Choice is `OTHER` or `UNKNOWN`, `complexity_tier` is left unpublished.
 - If `Choice.confidence` is below `min_confidence` (default `0.6`), `complexity_tier` is left unpublished — same degrade as a semantic miss. Do not force a tier.
-- Otherwise the Choice is mapped to the uppercase CEL tier.
-- Optional: a MEDIUM Choice with high `needs_frontier.noul` and middling confidence is escalated to COMPLEX with a logged reason.
+- Otherwise the Choice is mapped to the uppercase CEL tier. Score never names a discrete tier on its own.
+- Optional: a MEDIUM Choice with middling confidence plus high `needs_frontier.noul` or a high Score (after the Score confidence gate) is escalated to COMPLEX with a logged reason.
 
-State is always the **latest user message**. History is filtered in code; Jev is not asked to do math, date arithmetic, or count turns. The response `model` (versioned ID) and Choice `confidence` are logged. No invented similarity scores.
+State is always the **latest user message**. History is filtered in code; Jev is not asked to do math, date arithmetic, or count turns. The response `model` (versioned ID), Choice `confidence`, and Choice `probabilities` are logged. No invented similarity scores. The classifier runs **at most once per request**.
+
+Config examples default to the `jev-latest` alias. Tests and httptest fixtures pin `jev-1.13.0`.
 
 <Warning>
-A missing or unauthorized TypeSafe key **fails closed** when Jev is selected: the request is rejected rather than routed without a tier. Timeout, `429`, and `529` degrade like the LLM fallback (no tier published; session routing may still reuse a retained tier).
+On the model-routing path, Jev timeout, 401/missing key, `429`, `529`, and other errors **fail open**: no `complexity_tier` is published and the request stays on the existing default path (same as a semantic miss). Safety and tool gates (future) may fail closed. Session routing may still reuse a retained tier.
 </Warning>
 
 Low-cost live smoke (Jev classifier + Fireworks Flash for SIMPLE/MEDIUM + one `grok-3-mini` COMPLEX call) is documented on [TypeSafe](/providers/supported-providers/typesafe#low-cost-complexity-router-smoke). Keys stay `env.TYPESAFE_API_KEY`, `env.FIREWORKS_API_KEY`, and `env.XAI_API_KEY`. Do not soak, and do not route COMPLEX to `grok-4.6`.
@@ -532,7 +535,7 @@ When a routing rule references `complexity_tier`, the classification outcome is 
 |---|---|---|
 | `complexity_tier` | `SIMPLE`, `MEDIUM`, `COMPLEX` | The tier the request was classified into |
 | `complexity_mechanism` | `semantic`, `llm`, `jev`, `session`, `skipped` | How the effective tier was produced. `semantic` means an embedding match supplied it; `llm` means the fallback chat model named it; `jev` means TypeSafe System One named it; `session` means retained session state supplied it because the current turn was a continuation, proposed a lower tier, produced no tier, or followed the Complex ceiling; `skipped` means a rule demanded a tier but neither a classifier nor existing session state produced one |
-| `complexity_score` | 0.0 – 1.0 | For `semantic`, the similarity of the nearest reference phrase. For `jev`, the documented Choice.confidence. Absent for `llm`, `session`, and `skipped` |
+| `complexity_score` | 0.0 – 1.0 | For `semantic`, the similarity of the nearest reference phrase. For `jev`, the documented Choice.confidence. Choice `probabilities` are written on the routing-engine log line, not invented as a similarity. Absent for `llm`, `session`, and `skipped` |
 
 The routing decision logs also record the matched reference phrase alongside the tier and similarity, so you can tell a genuine match from an accidental one. Long phrases are truncated to 120 characters in the log line.
 

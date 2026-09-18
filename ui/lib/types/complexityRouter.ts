@@ -325,7 +325,7 @@ export const MAX_JEV_MESSAGE_HISTORY = 1;
 
 export const DEFAULT_JEV_CONFIG: JevConfig = {
 	provider: "",
-	model: "",
+	model: "jev-latest",
 	timeout: `${DEFAULT_JEV_TIMEOUT_MS}ms`,
 	min_confidence: DEFAULT_JEV_MIN_CONFIDENCE,
 	message_history_count: 1,

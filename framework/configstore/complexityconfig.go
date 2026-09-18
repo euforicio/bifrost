@@ -566,6 +566,9 @@ const DefaultComplexityJevTimeout = 1500 * time.Millisecond
 // distinct from probability.
 const DefaultComplexityJevMinConfidence = 0.6
 
+// DefaultComplexityJevModel is the TypeSafe alias used when jev.model is omitted.
+const DefaultComplexityJevModel = "jev-latest"
+
 // DefaultComplexityJevFrontierNoul is the needs_frontier noul threshold used
 // when composing Choice + Noul in code. A MEDIUM Choice with middling
 // confidence and a high noul escalates to COMPLEX.
@@ -673,6 +676,9 @@ func (c *ComplexityJevConfig) normalized() *ComplexityJevConfig {
 		MinConfidence:       c.MinConfidence,
 		MessageHistoryCount: c.MessageHistoryCount,
 		CountTowardBudgets:  c.CountTowardBudgets,
+	}
+	if out.Model == "" {
+		out.Model = DefaultComplexityJevModel
 	}
 	if out.Timeout == 0 {
 		out.Timeout = DefaultComplexityJevTimeout

@@ -166,12 +166,16 @@ func (p *RoutingPlugin) classifyJevComplexity(ctx *schemas.BifrostContext, input
 	if err == nil && result != nil {
 		out := &complexity.ComplexityResult{Tier: result.Tier}
 		confidence := result.Confidence
-		message := fmt.Sprintf("Jev complexity: tier=%s confidence=%.3f model=%s", result.Tier, result.Confidence, result.Model)
-		if result.Escalated && result.Frontier != nil {
-			message = fmt.Sprintf(
-				"Jev complexity: tier=%s confidence=%.3f model=%s escalated from MEDIUM (needs_frontier.noul=%.3f)",
-				result.Tier, result.Confidence, result.Model, *result.Frontier,
-			)
+		message := fmt.Sprintf(
+			"Jev complexity: tier=%s confidence=%.3f probabilities=%s model=%s",
+			result.Tier, result.Confidence, formatJevProbabilities(result.Probabilities), result.Model,
+		)
+		if result.Escalated {
+			if result.Frontier != nil {
+				message += fmt.Sprintf(" escalated from MEDIUM (needs_frontier.noul=%.3f)", *result.Frontier)
+			} else if result.Score != nil {
+				message += fmt.Sprintf(" escalated from MEDIUM (complexity_score=%.2f)", *result.Score)
+			}
 		}
 		return complexityProposal{
 			Result:     out,
@@ -185,12 +189,12 @@ func (p *RoutingPlugin) classifyJevComplexity(ctx *schemas.BifrostContext, input
 	if err != nil && p.logger != nil {
 		p.logger.Debug("[Routing] Jev complexity classification unavailable: %v", err)
 	}
+	// Model routing fails open: no tier, existing default path — same as a
+	// semantic miss. Safety/tool gates (future) may fail closed.
 	unavailableLog := "Jev complexity classification unavailable, so no complexity tier is published"
-	failClosed := false
 	switch {
 	case errors.Is(err, complexity.ErrJevKeyMissing):
-		unavailableLog = "Jev classifier selected but no API key is configured; failing closed"
-		failClosed = true
+		unavailableLog = "Jev classifier selected but no API key is configured; failing open with no complexity tier"
 	case errors.Is(err, ErrJevClassificationTimeout):
 		unavailableLog = fmt.Sprintf(
 			"Jev complexity classification timed out after %s, so no complexity tier is published",
@@ -198,6 +202,8 @@ func (p *RoutingPlugin) classifyJevComplexity(ctx *schemas.BifrostContext, input
 		)
 	case errors.Is(err, complexity.ErrJevLowConfidence):
 		unavailableLog = fmt.Sprintf("Jev complexity confidence below threshold, so no complexity tier is published: %v", err)
+	case errors.Is(err, complexity.ErrJevUnresolvedChoice):
+		unavailableLog = fmt.Sprintf("Jev chose OTHER/UNKNOWN, so no complexity tier is published: %v", err)
 	case err != nil:
 		unavailableLog = fmt.Sprintf("Jev complexity classification unavailable: %v; no complexity tier is published", err)
 	}
@@ -205,16 +211,16 @@ func (p *RoutingPlugin) classifyJevComplexity(ctx *schemas.BifrostContext, input
 		Mechanism:  complexity.MechanismSkipped,
 		LogLevel:   schemas.LogLevelWarn,
 		LogMessage: unavailableLog,
-		FailClosed: failClosedError(failClosed, err),
 	}
 }
 
-func failClosedError(failClosed bool, err error) error {
-	if !failClosed {
-		return nil
+func formatJevProbabilities(probabilities map[string]float64) string {
+	if len(probabilities) == 0 {
+		return "{}"
 	}
+	raw, err := json.Marshal(probabilities)
 	if err != nil {
-		return err
+		return "{}"
 	}
-	return complexity.ErrJevKeyMissing
+	return string(raw)
 }

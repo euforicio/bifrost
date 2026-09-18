@@ -14,17 +14,34 @@ import (
 )
 
 const (
-	jevQuestionComplexityTier = "complexity_tier"
-	jevQuestionNeedsFrontier  = "needs_frontier"
+	jevQuestionComplexityTier  = "complexity_tier"
+	jevQuestionNeedsFrontier   = "needs_frontier"
+	jevQuestionComplexityScore = "complexity_score"
+
+	jevChoiceOther   = "OTHER"
+	jevChoiceUnknown = "UNKNOWN"
 )
 
-// ErrJevKeyMissing reports that Jev was selected as the classifier but the
-// configured provider has no usable API key. Callers must fail closed.
+// ErrJevKeyMissing reports that Jev was selected but the configured provider
+// has no usable API key. Model routing fails open (no tier); this error is
+// for logs. Future safety/tool gates may fail closed on it.
 var ErrJevKeyMissing = errors.New("jev classifier selected but no api key is configured")
 
 // ErrJevLowConfidence reports that Choice.confidence was below min_confidence.
 // The classifier publishes no tier (same degrade as a semantic miss).
 var ErrJevLowConfidence = errors.New("jev choice confidence below min_confidence")
+
+// ErrJevUnresolvedChoice reports that Jev chose OTHER or UNKNOWN so the
+// request does not force SIMPLE/MEDIUM/COMPLEX.
+var ErrJevUnresolvedChoice = errors.New("jev choice is OTHER or UNKNOWN")
+
+type jevEvalOnceKey struct{}
+
+type jevEvalOnceState struct {
+	once   sync.Once
+	result *JevResult
+	err    error
+}
 
 // JevStatus is the coarse readiness of Jev classification.
 type JevStatus string
@@ -42,11 +59,13 @@ type JevStatusInfo struct {
 // JevResult is the composed classification. Confidence is the documented
 // Choice.confidence — never an invented similarity score.
 type JevResult struct {
-	Tier       string
-	Confidence float64
-	Model      string
-	Frontier   *float64
-	Escalated  bool
+	Tier          string
+	Confidence    float64
+	Probabilities map[string]float64
+	Model         string
+	Frontier      *float64
+	Score         *float64
+	Escalated     bool
 }
 
 // SystemOneFunc executes one System One request through the configured
@@ -115,6 +134,16 @@ func (c *JevClassifier) Timeout() time.Duration {
 }
 
 func (c *JevClassifier) Classify(ctx context.Context, input ComplexityInput) (*JevResult, error) {
+	if state := jevEvalOnceFromContext(ctx); state != nil {
+		state.once.Do(func() {
+			state.result, state.err = c.classifyUncached(ctx, input)
+		})
+		return state.result, state.err
+	}
+	return c.classifyUncached(ctx, input)
+}
+
+func (c *JevClassifier) classifyUncached(ctx context.Context, input ComplexityInput) (*JevResult, error) {
 	c.mu.Lock()
 	if c.config == nil || c.config.Jev == nil || c.systemOne == nil {
 		c.mu.Unlock()
@@ -164,15 +193,15 @@ func cloneJevConfig(jev *JevConfig) *JevConfig {
 	return &clone
 }
 
-// jevComplexityQuestions is the documented contrastive Choice plus optional
-// parallel Noul. Criteria are structured what/not_for/examples — no math or
-// dates, no vague "how complex is this?" Score.
+// jevComplexityQuestions is one System One call: contrastive Choice
+// SIMPLE|MEDIUM|COMPLEX plus OTHER/UNKNOWN so weak matches do not force a
+// tier, optional Noul, and optional Score. Compose happens in code.
 func jevComplexityQuestions() (map[string]json.RawMessage, error) {
 	choice := map[string]any{
 		"type": "choice",
 		"instructions": map[string]any{
 			"question": "Which complexity tier should handle this user request?",
-			"focus":    "Judge required model capability, not topic or verbosity.",
+			"focus":    "Judge required model capability, not topic or verbosity. Prefer OTHER or UNKNOWN when no tier is a clear fit.",
 		},
 		"criteria": map[string]any{
 			"SIMPLE": map[string]any{
@@ -190,6 +219,16 @@ func jevComplexityQuestions() (map[string]json.RawMessage, error) {
 				"not_for":  "Simple Q&A or single-line edits",
 				"examples": []string{"balance testing rules and staffing against rising resistant infections"},
 			},
+			jevChoiceOther: map[string]any{
+				"what":     "The request does not match SIMPLE, MEDIUM, or COMPLEX",
+				"not_for":  "Any request that clearly fits one of those three tiers",
+				"examples": []string{"unrelated attachment with no user ask"},
+			},
+			jevChoiceUnknown: map[string]any{
+				"what":     "Too little signal to judge required model capability",
+				"not_for":  "A request whose required capability is readable from the latest user message",
+				"examples": []string{"...", "ok", "this"},
+			},
 		},
 	}
 	noul := map[string]any{
@@ -200,6 +239,15 @@ func jevComplexityQuestions() (map[string]json.RawMessage, error) {
 			"false": "A small/fast model can handle it safely",
 		},
 	}
+	score := map[string]any{
+		"type":         "score",
+		"instructions": "Rate required model capability from 1 (trivial) to 3 (frontier reasoning). Do not count tokens, dates, or steps.",
+		"criteria": map[string]any{
+			"1": "SIMPLE: trivial lookup, greeting, short rewrite, single-step fact",
+			"2": "MEDIUM: bounded implementation or analysis with clear scope",
+			"3": "COMPLEX: ambiguous root-cause, architecture tradeoffs, multi-system reasoning",
+		},
+	}
 	choiceRaw, err := json.Marshal(choice)
 	if err != nil {
 		return nil, err
@@ -208,9 +256,14 @@ func jevComplexityQuestions() (map[string]json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	scoreRaw, err := json.Marshal(score)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]json.RawMessage{
-		jevQuestionComplexityTier: choiceRaw,
-		jevQuestionNeedsFrontier:  noulRaw,
+		jevQuestionComplexityTier:  choiceRaw,
+		jevQuestionNeedsFrontier:   noulRaw,
+		jevQuestionComplexityScore: scoreRaw,
 	}, nil
 }
 
@@ -226,6 +279,14 @@ type jevNoulAnswer struct {
 	Noul *float64 `json:"noul"`
 }
 
+type jevScoreAnswer struct {
+	Type          string             `json:"type"`
+	Score         *float64           `json:"score"`
+	Confidence    *float64           `json:"confidence"`
+	Legend        map[string]string  `json:"legend"`
+	Probabilities map[string]float64 `json:"probabilities"`
+}
+
 func composeJevResult(response *schemas.BifrostSystemOneResponse, minConfidence float64) (*JevResult, error) {
 	if minConfidence <= 0 {
 		minConfidence = configstore.DefaultComplexityJevMinConfidence
@@ -239,6 +300,9 @@ func composeJevResult(response *schemas.BifrostSystemOneResponse, minConfidence 
 		return nil, fmt.Errorf("failed to parse jev choice answer: %w", err)
 	}
 	tier := strings.ToUpper(strings.TrimSpace(choice.Choice))
+	if isJevUnresolvedChoice(tier) {
+		return nil, fmt.Errorf("%w: %s", ErrJevUnresolvedChoice, tier)
+	}
 	if !isComplexityTier(tier) {
 		return nil, fmt.Errorf("jev choice named no complexity tier: %q", choice.Choice)
 	}
@@ -251,24 +315,54 @@ func composeJevResult(response *schemas.BifrostSystemOneResponse, minConfidence 
 	}
 
 	result := &JevResult{
-		Tier:       tier,
-		Confidence: confidence,
-		Model:      response.Model,
+		Tier:          tier,
+		Confidence:    confidence,
+		Probabilities: choice.Probabilities,
+		Model:         response.Model,
 	}
 	if rawNoul, ok := response.Answers[jevQuestionNeedsFrontier]; ok && len(rawNoul) > 0 {
 		var noul jevNoulAnswer
 		if err := json.Unmarshal(rawNoul, &noul); err == nil && noul.Noul != nil {
 			result.Frontier = noul.Noul
-			// Compose in code: MEDIUM + high frontier noul + middling Choice
-			// confidence escalates to COMPLEX. Do not treat noul as Choice
-			// probability identity.
-			if result.Tier == TierMedium &&
-				*noul.Noul >= configstore.DefaultComplexityJevFrontierNoul &&
-				confidence < 0.8 {
-				result.Tier = TierComplex
-				result.Escalated = true
+		}
+	}
+	var scoreConfidence float64
+	if rawScore, ok := response.Answers[jevQuestionComplexityScore]; ok && len(rawScore) > 0 {
+		var score jevScoreAnswer
+		if err := json.Unmarshal(rawScore, &score); err == nil && score.Score != nil {
+			result.Score = score.Score
+			if score.Confidence != nil {
+				scoreConfidence = *score.Confidence
 			}
 		}
 	}
+	// Compose in code against the original Choice. Score never names a
+	// discrete tier on its own. Do not treat noul as a Choice probability.
+	if result.Tier == TierMedium && confidence < 0.8 {
+		if result.Frontier != nil && *result.Frontier >= configstore.DefaultComplexityJevFrontierNoul {
+			result.Tier = TierComplex
+			result.Escalated = true
+		} else if result.Score != nil && *result.Score >= 2.5 && scoreConfidence >= minConfidence {
+			result.Tier = TierComplex
+			result.Escalated = true
+		}
+	}
 	return result, nil
+}
+
+func isJevUnresolvedChoice(tier string) bool {
+	return tier == jevChoiceOther || tier == jevChoiceUnknown
+}
+
+func jevEvalOnceFromContext(ctx context.Context) *jevEvalOnceState {
+	bfCtx, ok := ctx.(*schemas.BifrostContext)
+	if !ok || bfCtx == nil {
+		return nil
+	}
+	if existing, ok := bfCtx.Value(jevEvalOnceKey{}).(*jevEvalOnceState); ok && existing != nil {
+		return existing
+	}
+	state := &jevEvalOnceState{}
+	bfCtx.SetValue(jevEvalOnceKey{}, state)
+	return state
 }

@@ -3,6 +3,7 @@ package routing
 import (
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/plugins/routing/complexity"
@@ -23,7 +24,33 @@ type complexityProposal struct {
 	FailClosed      error
 }
 
+type complexityOnceKey struct{}
+
+type complexityOnceState struct {
+	once   sync.Once
+	result *complexity.ComplexityResult
+}
+
 func (p *RoutingPlugin) computeComplexity(
+	ctx *schemas.BifrostContext,
+	req *schemas.BifrostRequest,
+	virtualKeyID string,
+) *complexity.ComplexityResult {
+	if ctx == nil {
+		return p.computeComplexityUncached(ctx, req, virtualKeyID)
+	}
+	state, _ := ctx.Value(complexityOnceKey{}).(*complexityOnceState)
+	if state == nil {
+		state = &complexityOnceState{}
+		ctx.SetValue(complexityOnceKey{}, state)
+	}
+	state.once.Do(func() {
+		state.result = p.computeComplexityUncached(ctx, req, virtualKeyID)
+	})
+	return state.result
+}
+
+func (p *RoutingPlugin) computeComplexityUncached(
 	ctx *schemas.BifrostContext,
 	req *schemas.BifrostRequest,
 	virtualKeyID string,
@@ -353,7 +380,11 @@ func formatSessionProposalLog(event, effectiveTier, previousTier string, proposa
 	}
 	message += fmt.Sprintf(" proposed=%s source=%s", proposal.Result.Tier, proposal.Mechanism)
 	if proposal.Score != nil {
-		message += fmt.Sprintf(" proposed_similarity=%.2f", *proposal.Score)
+		if proposal.Mechanism == complexity.MechanismJev {
+			message += fmt.Sprintf(" proposed_confidence=%.3f", *proposal.Score)
+		} else {
+			message += fmt.Sprintf(" proposed_similarity=%.2f", *proposal.Score)
+		}
 	}
 	if matched := truncateExemplarForLog(proposal.MatchedExemplar); matched != "" {
 		message += fmt.Sprintf(" proposed_matched=%q", matched)

@@ -6,12 +6,15 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/configstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const fixtureJevModel = "jev-1.13.0"
 
 func testJevPrimaryAnalyzerConfig() *AnalyzerConfig {
 	cfg := DefaultAnalyzerConfig()
@@ -31,11 +34,15 @@ func testJevFallbackAnalyzerConfig() *AnalyzerConfig {
 }
 
 func systemOneResponse(model, tier string, confidence float64, frontier *float64) *schemas.BifrostSystemOneResponse {
+	normalized := strings.ToUpper(tier)
 	choiceRaw, _ := json.Marshal(map[string]any{
-		"type":          "choice",
-		"choice":        tier,
-		"confidence":    confidence,
-		"probabilities": map[string]float64{strings.ToUpper(tier): confidence},
+		"type":       "choice",
+		"choice":     tier,
+		"confidence": confidence,
+		"probabilities": map[string]float64{
+			"SIMPLE": 0, "MEDIUM": 0, "COMPLEX": 0, jevChoiceOther: 0, jevChoiceUnknown: 0,
+			normalized: confidence,
+		},
 	})
 	answers := map[string]json.RawMessage{jevQuestionComplexityTier: choiceRaw}
 	if frontier != nil {
@@ -45,18 +52,19 @@ func systemOneResponse(model, tier string, confidence float64, frontier *float64
 	return &schemas.BifrostSystemOneResponse{Model: model, Answers: answers}
 }
 
-func TestJevComplexityQuestionsAreContrastiveChoicePlusNoul(t *testing.T) {
+func TestJevComplexityQuestionsAreContrastiveChoicePlusNoulAndScore(t *testing.T) {
 	questions, err := jevComplexityQuestions()
 	require.NoError(t, err)
 	require.Contains(t, questions, jevQuestionComplexityTier)
 	require.Contains(t, questions, jevQuestionNeedsFrontier)
+	require.Contains(t, questions, jevQuestionComplexityScore)
 
 	var choice map[string]any
 	require.NoError(t, json.Unmarshal(questions[jevQuestionComplexityTier], &choice))
 	assert.Equal(t, "choice", choice["type"])
 	criteria, ok := choice["criteria"].(map[string]any)
 	require.True(t, ok)
-	for _, tier := range []string{TierSimple, TierMedium, TierComplex} {
+	for _, tier := range []string{TierSimple, TierMedium, TierComplex, jevChoiceOther, jevChoiceUnknown} {
 		entry, ok := criteria[tier].(map[string]any)
 		require.True(t, ok, tier)
 		assert.NotEmpty(t, entry["what"])
@@ -67,29 +75,33 @@ func TestJevComplexityQuestionsAreContrastiveChoicePlusNoul(t *testing.T) {
 	var noul map[string]any
 	require.NoError(t, json.Unmarshal(questions[jevQuestionNeedsFrontier], &noul))
 	assert.Equal(t, "noul", noul["type"])
+
+	var score map[string]any
+	require.NoError(t, json.Unmarshal(questions[jevQuestionComplexityScore], &score))
+	assert.Equal(t, "score", score["type"])
 }
 
 func TestComposeJevResult(t *testing.T) {
 	t.Run("maps uppercase and lowercase choice", func(t *testing.T) {
 		for _, raw := range []string{"SIMPLE", "simple", "Simple"} {
-			result, err := composeJevResult(systemOneResponse("jev-1.13.0", raw, 0.9, nil), 0.6)
+			result, err := composeJevResult(systemOneResponse(fixtureJevModel, raw, 0.9, nil), 0.6)
 			require.NoError(t, err)
 			assert.Equal(t, TierSimple, result.Tier)
-			assert.Equal(t, "jev-1.13.0", result.Model)
+			assert.Equal(t, fixtureJevModel, result.Model)
 			assert.Equal(t, 0.9, result.Confidence)
 			assert.False(t, result.Escalated)
 		}
 	})
 
 	t.Run("low confidence is unpublished", func(t *testing.T) {
-		_, err := composeJevResult(systemOneResponse("jev-1.13.0", "COMPLEX", 0.41, nil), 0.6)
+		_, err := composeJevResult(systemOneResponse(fixtureJevModel, "COMPLEX", 0.41, nil), 0.6)
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrJevLowConfidence)
 	})
 
 	t.Run("escalates medium plus high frontier noul", func(t *testing.T) {
 		frontier := 0.8
-		result, err := composeJevResult(systemOneResponse("jev-1.13.0", "MEDIUM", 0.7, &frontier), 0.6)
+		result, err := composeJevResult(systemOneResponse(fixtureJevModel, "MEDIUM", 0.7, &frontier), 0.6)
 		require.NoError(t, err)
 		assert.Equal(t, TierComplex, result.Tier)
 		assert.True(t, result.Escalated)
@@ -99,16 +111,55 @@ func TestComposeJevResult(t *testing.T) {
 
 	t.Run("does not escalate a confident medium", func(t *testing.T) {
 		frontier := 0.9
-		result, err := composeJevResult(systemOneResponse("jev-1.13.0", "MEDIUM", 0.85, &frontier), 0.6)
+		result, err := composeJevResult(systemOneResponse(fixtureJevModel, "MEDIUM", 0.85, &frontier), 0.6)
 		require.NoError(t, err)
 		assert.Equal(t, TierMedium, result.Tier)
 		assert.False(t, result.Escalated)
 	})
 
 	t.Run("unknown choice is rejected", func(t *testing.T) {
-		_, err := composeJevResult(systemOneResponse("jev-1.13.0", "REASONING", 0.9, nil), 0.6)
+		_, err := composeJevResult(systemOneResponse(fixtureJevModel, "REASONING", 0.9, nil), 0.6)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "named no complexity tier")
+	})
+
+	t.Run("OTHER and UNKNOWN leave the tier unpublished", func(t *testing.T) {
+		for _, raw := range []string{jevChoiceOther, jevChoiceUnknown, "other", "unknown"} {
+			_, err := composeJevResult(systemOneResponse(fixtureJevModel, raw, 0.95, nil), 0.6)
+			require.Error(t, err, raw)
+			assert.ErrorIs(t, err, ErrJevUnresolvedChoice)
+		}
+	})
+
+	t.Run("score can escalate a middling medium", func(t *testing.T) {
+		resp := systemOneResponse(fixtureJevModel, "MEDIUM", 0.7, nil)
+		scoreRaw, _ := json.Marshal(map[string]any{"type": "score", "score": 2.8, "confidence": 0.81})
+		resp.Answers[jevQuestionComplexityScore] = scoreRaw
+		result, err := composeJevResult(resp, 0.6)
+		require.NoError(t, err)
+		assert.Equal(t, TierComplex, result.Tier)
+		assert.True(t, result.Escalated)
+		require.NotNil(t, result.Score)
+		assert.Equal(t, 2.8, *result.Score)
+	})
+
+	t.Run("score does not publish a tier when choice is OTHER", func(t *testing.T) {
+		resp := systemOneResponse(fixtureJevModel, jevChoiceOther, 0.9, nil)
+		scoreRaw, _ := json.Marshal(map[string]any{"type": "score", "score": 3.0, "confidence": 0.9})
+		resp.Answers[jevQuestionComplexityScore] = scoreRaw
+		_, err := composeJevResult(resp, 0.6)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrJevUnresolvedChoice)
+	})
+
+	t.Run("score below its confidence gate does not escalate", func(t *testing.T) {
+		resp := systemOneResponse(fixtureJevModel, "MEDIUM", 0.7, nil)
+		scoreRaw, _ := json.Marshal(map[string]any{"type": "score", "score": 2.9, "confidence": 0.2})
+		resp.Answers[jevQuestionComplexityScore] = scoreRaw
+		result, err := composeJevResult(resp, 0.6)
+		require.NoError(t, err)
+		assert.Equal(t, TierMedium, result.Tier)
+		assert.False(t, result.Escalated)
 	})
 }
 
@@ -152,7 +203,7 @@ func TestJevClassifierClassify(t *testing.T) {
 			gotQuestions = questions
 			assert.Equal(t, "typesafe", string(jev.Provider))
 			assert.Equal(t, "jev-latest", jev.Model)
-			return systemOneResponse("jev-1.13.0", "COMPLEX", 0.77, nil), nil
+			return systemOneResponse(fixtureJevModel, "COMPLEX", 0.77, nil), nil
 		})
 		result, err := classifier.Classify(context.Background(), ComplexityInput{
 			LastUserText:   "balance testing rules and staffing",
@@ -163,10 +214,11 @@ func TestJevClassifierClassify(t *testing.T) {
 		require.NotNil(t, result)
 		assert.Equal(t, TierComplex, result.Tier)
 		assert.Equal(t, 0.77, result.Confidence)
-		assert.Equal(t, "jev-1.13.0", result.Model)
+		assert.Equal(t, fixtureJevModel, result.Model)
 		assert.Equal(t, "balance testing rules and staffing", gotState)
 		require.Contains(t, gotQuestions, jevQuestionComplexityTier)
 		require.Contains(t, gotQuestions, jevQuestionNeedsFrontier)
+		require.Contains(t, gotQuestions, jevQuestionComplexityScore)
 	})
 
 	t.Run("blank input skips the provider call", func(t *testing.T) {
@@ -199,10 +251,27 @@ func TestJevClassifierClassify(t *testing.T) {
 		classifier.Configure(testJevPrimaryAnalyzerConfig())
 		classifier.SetSystemOneFunc(func(_ context.Context, _ *JevConfig, state string, _ map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
 			gotState = state
-			return systemOneResponse("jev-1.13.0", "SIMPLE", 0.9, nil), nil
+			return systemOneResponse(fixtureJevModel, "SIMPLE", 0.9, nil), nil
 		})
 		_, err := classifier.Classify(context.Background(), ComplexityInput{LastUserText: strings.Repeat("x", maxJevStateChars+50)})
 		require.NoError(t, err)
 		assert.Equal(t, maxJevStateChars, len(gotState))
+	})
+
+	t.Run("same request context is not re-entered", func(t *testing.T) {
+		calls := 0
+		classifier := NewJevClassifier(nil)
+		classifier.Configure(testJevPrimaryAnalyzerConfig())
+		classifier.SetSystemOneFunc(func(context.Context, *JevConfig, string, map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
+			calls++
+			return systemOneResponse(fixtureJevModel, "SIMPLE", 0.9, nil), nil
+		})
+		ctx := schemas.NewBifrostContext(context.Background(), time.Time{})
+		first, err := classifier.Classify(ctx, ComplexityInput{LastUserText: "hello"})
+		require.NoError(t, err)
+		second, err := classifier.Classify(ctx, ComplexityInput{LastUserText: "hello"})
+		require.NoError(t, err)
+		assert.Equal(t, 1, calls)
+		assert.Equal(t, first, second)
 	})
 }
