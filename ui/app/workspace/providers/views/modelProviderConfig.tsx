@@ -7,7 +7,6 @@ import { useMemo, useState } from "react";
 import ProviderConfigSheet from "../dialogs/providerConfigSheet";
 import ProviderAccountsCard from "./providerAccountsCard";
 import ModelProviderKeysTableView from "./modelProviderKeysTableView";
-import ProviderGovernanceTable from "./providerGovernanceTable";
 
 interface Props {
 	provider: ModelProvider;
@@ -16,7 +15,6 @@ interface Props {
 
 export default function ModelProviderConfig({ provider, onRequestDelete }: Props) {
 	const [showConfigSheet, setShowConfigSheet] = useState(false);
-	const hasGovernanceAccess = useRbac(RbacResource.Governance, RbacOperation.View);
 	const hasDeleteProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Delete);
 	const hasUpdateProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Update);
 	const supportsProviderAccounts = provider.name === "openai-codex" || provider.name === "xai" || provider.name === "cursor";
@@ -66,7 +64,6 @@ export default function ModelProviderConfig({ provider, onRequestDelete }: Props
 			) : (
 				<ModelProviderKeysTableView provider={provider} headerActions={editConfigButton} isKeyless={!showApiKeys} />
 			)}
-			{hasGovernanceAccess ? <ProviderGovernanceTable className="mt-4" provider={provider} /> : null}
 		</div>
 	);
 }

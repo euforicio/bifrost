@@ -15,6 +15,7 @@ import {
 	DatabaseZap,
 	Flag,
 	FolderGit,
+	SquareKanban,
 	Gavel,
 	GitCompareArrows,
 	Globe,
@@ -147,6 +148,7 @@ interface SidebarItem {
 	new?: boolean;
 	isExternal?: boolean;
 	queryParam?: string; // Optional: for tab-based subitems (e.g., "client-settings")
+	testId?: string; // Optional: pin the data-testid slug across a rename (else derived from title)
 }
 
 const getSidebarItemHref = (item: Pick<SidebarItem, "url" | "queryParam">) => {
@@ -251,21 +253,20 @@ const SidebarItemView = ({
 
 	const isHighlighted = !hasSubItems && highlightedUrl === item.url;
 
-	const buttonClassName = `group/nav-item relative h-7.5 cursor-pointer rounded-sm border px-3 transition-all duration-200 ${
-		isHighlighted
-			? "bg-sidebar-accent text-accent-foreground border-primary/20"
-			: isActive || isAnySubItemActive
-				? "bg-sidebar-accent text-primary border-primary/20"
-				: item.hasAccess
-					? "hover:bg-sidebar-accent hover:text-accent-foreground border-transparent text-slate-500 dark:text-zinc-400"
-					: "hover:bg-destructive/5 hover:text-muted-foreground text-muted-foreground cursor-not-allowed border-transparent"
-	} `;
+	const buttonClassName = `group/nav-item relative h-7.5 cursor-pointer rounded-sm border px-3 transition-all duration-200 ${isHighlighted
+		? "bg-sidebar-accent text-accent-foreground border-primary/20"
+		: isActive || isAnySubItemActive
+			? "bg-sidebar-accent text-primary border-primary/20"
+			: item.hasAccess
+				? "hover:bg-sidebar-accent hover:text-accent-foreground border-transparent text-slate-500 dark:text-zinc-400"
+				: "hover:bg-destructive/5 hover:text-muted-foreground text-muted-foreground cursor-not-allowed border-transparent"
+		} `;
 
 	const innerContent = (
-		<div className="flex w-full items-center justify-between">
-			<div className="flex w-full items-center gap-2">
+		<div className="flex w-full min-w-0 items-center justify-between">
+			<div className="flex w-full min-w-0 items-center gap-2">
 				<item.icon className={`h-4 w-4 shrink-0 ${isActive || isAnySubItemActive ? "text-primary" : "text-muted-foreground"}`} />
-				<span className={`text-sm group-data-[collapsible=icon]:hidden ${isActive || isAnySubItemActive ? "font-medium" : "font-normal"}`}>
+				<span className={`min-w-0 truncate text-sm group-data-[collapsible=icon]:hidden ${isActive || isAnySubItemActive ? "font-medium" : "font-normal"}`}>
 					{item.title}
 				</span>
 				{item.tag && (
@@ -360,11 +361,13 @@ const SidebarItemView = ({
 							const href = preserveTimeFilters(baseHref, subItem.url, pathname, search);
 							const isSubItemActive = subItem.queryParam ? pathname === subItem.url : isRouteMatch(subItem.url);
 							const SubItemIcon = subItem.icon;
-							const subSlug = slug(subItem.title);
+							const subSlug = subItem.testId ?? slug(subItem.title);
 							const inner = (
-								<div className="flex items-center gap-2">
-									{SubItemIcon && <SubItemIcon className={`h-3.5 w-3.5 ${isSubItemActive ? "text-primary" : "text-muted-foreground"}`} />}
-									<span className={`text-sm ${isSubItemActive ? "text-primary font-medium" : "text-slate-500 dark:text-zinc-400"}`}>
+								<div className="flex min-w-0 items-center gap-2">
+									{SubItemIcon && (
+										<SubItemIcon className={`h-3.5 w-3.5 shrink-0 ${isSubItemActive ? "text-primary" : "text-muted-foreground"}`} />
+									)}
+									<span className={`min-w-0 truncate text-sm ${isSubItemActive ? "text-primary font-medium" : "text-slate-500 dark:text-zinc-400"}`}>
 										{subItem.title}
 									</span>
 									{subItem.tag && (
@@ -410,19 +413,20 @@ const SidebarItemView = ({
 						const isSubItemActive = subItem.queryParam ? pathname === subItem.url : isRouteMatch(subItem.url);
 						const isSubItemHighlighted = highlightedUrl ? subItemHref.startsWith(highlightedUrl) : false;
 						const SubItemIcon = subItem.icon;
-						const subItemClassName = `h-7 cursor-pointer rounded-sm px-2 transition-all duration-200 ${
-							isSubItemHighlighted
-								? "bg-sidebar-accent text-accent-foreground"
-								: isSubItemActive
-									? "bg-sidebar-accent text-primary font-medium"
-									: subItem.hasAccess === false
-										? "hover:bg-destructive/5 hover:text-muted-foreground text-muted-foreground cursor-not-allowed border-transparent"
-										: "hover:bg-sidebar-accent hover:text-accent-foreground text-slate-500 dark:text-zinc-400"
-						}`;
+						const subItemClassName = `h-7 cursor-pointer rounded-sm px-2 transition-all duration-200 ${isSubItemHighlighted
+							? "bg-sidebar-accent text-accent-foreground"
+							: isSubItemActive
+								? "bg-sidebar-accent text-primary font-medium"
+								: subItem.hasAccess === false
+									? "hover:bg-destructive/5 hover:text-muted-foreground text-muted-foreground cursor-not-allowed border-transparent"
+									: "hover:bg-sidebar-accent hover:text-accent-foreground text-slate-500 dark:text-zinc-400"
+							}`;
 						const subInner = (
-							<div className="flex w-full items-center gap-2">
-								{SubItemIcon && <SubItemIcon className={`h-3.5 w-3.5 ${isSubItemActive ? "text-primary" : "text-muted-foreground"}`} />}
-								<span className={`text-sm ${isSubItemActive ? "font-medium" : "font-normal"}`}>{subItem.title}</span>
+							<div className="flex w-full min-w-0 items-center gap-2">
+								{SubItemIcon && (
+									<SubItemIcon className={`h-3.5 w-3.5 shrink-0 ${isSubItemActive ? "text-primary" : "text-muted-foreground"}`} />
+								)}
+								<span className={`min-w-0 truncate text-sm ${isSubItemActive ? "font-medium" : "font-normal"}`}>{subItem.title}</span>
 								{subItem.tag && (
 									<Badge variant="secondary" className="text-muted-foreground ml-auto text-xs">
 										{subItem.tag}
@@ -435,7 +439,7 @@ const SidebarItemView = ({
 								{subItem.hasAccess === false ? (
 									<SidebarMenuSubButton
 										data-nav-url={subItemHref}
-										data-testid={`sidebar-subitem-disabled-${slug(subItem.title)}`}
+										data-testid={`sidebar-subitem-disabled-${subItem.testId ?? slug(subItem.title)}`}
 										className={subItemClassName}
 									>
 										{subInner}
@@ -446,7 +450,7 @@ const SidebarItemView = ({
 											to={subItemHref}
 											preload="intent"
 											data-nav-url={subItemHref}
-											data-testid={`sidebar-subitem-link-${slug(subItem.title)}`}
+											data-testid={`sidebar-subitem-link-${subItem.testId ?? slug(subItem.title)}`}
 										>
 											{subInner}
 										</Link>
@@ -532,7 +536,7 @@ export default function AppSidebar() {
 	const hasDashboardAccess = useRbac(RbacResource.Dashboard, RbacOperation.View);
 	const hasModelProvidersAccess = useRbac(RbacResource.ModelProvider, RbacOperation.View);
 	const hasMCPGatewayAccess = useRbac(RbacResource.MCPGateway, RbacOperation.View);
-	const hasMCPToolGroupsAccess = useRbac(RbacResource.MCPToolGroups, RbacOperation.View);
+	const hasVirtualMCPsAccess = useRbac(RbacResource.VirtualMCPs, RbacOperation.View);
 	const hasMCPLogsAccess = useRbac(RbacResource.MCPLogs, RbacOperation.View);
 	const hasPluginsAccess = useRbac(RbacResource.Plugins, RbacOperation.View);
 	const hasUsersAccess = useRbac(RbacResource.Users, RbacOperation.View);
@@ -560,6 +564,7 @@ export default function AppSidebar() {
 	const hasEdgeConfigAccess = useRbac(RbacResource.EdgeConfig, RbacOperation.View);
 	const hasAnyEdgeControlAccess = hasDevicesAccess || hasInventoryAccess || hasEdgeConfigAccess;
 	const hasAccessProfilesAccess = useRbac(RbacResource.AccessProfiles, RbacOperation.View);
+	const hasProjectsAccess = useRbac(RbacResource.Projects, RbacOperation.View);
 	const hasAnyGovernanceAccess =
 		hasVirtualKeysAccess ||
 		hasTeamsAccess ||
@@ -568,6 +573,7 @@ export default function AppSidebar() {
 		hasBusinessUnitsAccess ||
 		hasRbacAccess ||
 		hasAccessProfilesAccess ||
+		hasProjectsAccess ||
 		hasGovernanceLegacyAccess;
 	const { data: coreConfig } = useGetCoreConfigQuery({});
 	const isDbConnected = coreConfig?.is_db_connected ?? false;
@@ -713,7 +719,7 @@ export default function AppSidebar() {
 				icon: MCPIcon,
 				description: "MCP configuration",
 				url: "/workspace/mcp-gateway",
-				hasAccess: hasMCPGatewayAccess || hasMCPToolGroupsAccess,
+				hasAccess: hasMCPGatewayAccess || hasVirtualMCPsAccess,
 				subItems: [
 					{
 						title: "MCP Catalog",
@@ -730,11 +736,12 @@ export default function AppSidebar() {
 						hasAccess: hasMCPGatewayAccess,
 					},
 					{
-						title: "Tool Groups",
-						url: "/workspace/mcp-tool-groups",
+						title: "Virtual MCPs",
+						url: "/workspace/virtual-mcps",
 						icon: ToolCase,
-						description: "Tool Groups",
-						hasAccess: hasMCPToolGroupsAccess,
+						description: "Virtual MCPs",
+						hasAccess: hasVirtualMCPsAccess,
+						testId: "tool-groups", // keep the pre-rename E2E selector stable
 					},
 					{
 						title: "Auth Sessions",
@@ -860,6 +867,13 @@ export default function AppSidebar() {
 						hasAccess: hasAccessProfilesAccess,
 					},
 					{
+						title: "Projects",
+						url: "/workspace/governance/projects",
+						icon: SquareKanban,
+						description: "Scope requests to a project's access and budget",
+						hasAccess: hasProjectsAccess,
+					},
+					{
 						title: "Audit Logs",
 						url: "/workspace/audit-logs",
 						icon: ScrollText,
@@ -960,21 +974,21 @@ export default function AppSidebar() {
 			},
 			...(isDbConnected
 				? [
-						{
-							title: "Prompt Repository",
-							url: "/workspace/prompt-repo",
-							icon: FolderGit,
-							description: "Prompt repository",
-							hasAccess: hasPromptRepositoryAccess,
-						},
-						{
-							title: "Skills Repository",
-							url: "/workspace/skills-repo",
-							icon: BookOpenText,
-							description: "Skills repository",
-							hasAccess: hasSkillsRepositoryAccess,
-						},
-					]
+					{
+						title: "Prompt Repository",
+						url: "/workspace/prompt-repo",
+						icon: FolderGit,
+						description: "Prompt repository",
+						hasAccess: hasPromptRepositoryAccess,
+					},
+					{
+						title: "Skills Repository",
+						url: "/workspace/skills-repo",
+						icon: BookOpenText,
+						description: "Skills repository",
+						hasAccess: hasSkillsRepositoryAccess,
+					},
+				]
 				: []),
 			{
 				title: "Settings",
@@ -1013,14 +1027,14 @@ export default function AppSidebar() {
 					},
 					...(IS_ENTERPRISE
 						? [
-								{
-									title: "Proxy",
-									url: "/workspace/config/proxy",
-									icon: Globe,
-									description: "Proxy configuration",
-									hasAccess: hasSettingsAccess,
-								},
-							]
+							{
+								title: "Proxy",
+								url: "/workspace/config/proxy",
+								icon: Globe,
+								description: "Proxy configuration",
+								hasAccess: hasSettingsAccess,
+							},
+						]
 						: []),
 					{
 						title: "API Keys",
@@ -1045,21 +1059,21 @@ export default function AppSidebar() {
 					},
 					...(IS_ENTERPRISE
 						? [
-								{
-									title: "Branding",
-									url: "/workspace/config/branding",
-									icon: Palette,
-									description: "Custom logo and icon",
-									hasAccess: hasSettingsAccess,
-								},
-								{
-									title: "License Info",
-									url: "/workspace/config/license",
-									icon: BadgeInfo,
-									description: "Enterprise license information",
-									hasAccess: hasSettingsAccess,
-								},
-							]
+							{
+								title: "Branding",
+								url: "/workspace/config/branding",
+								icon: Palette,
+								description: "Custom logo and icon",
+								hasAccess: hasSettingsAccess,
+							},
+							{
+								title: "License Info",
+								url: "/workspace/config/license",
+								icon: BadgeInfo,
+								description: "Enterprise license information",
+								hasAccess: hasSettingsAccess,
+							},
+						]
 						: []),
 				],
 			},
@@ -1072,7 +1086,7 @@ export default function AppSidebar() {
 			hasDashboardAccess,
 			hasModelProvidersAccess,
 			hasMCPGatewayAccess,
-			hasMCPToolGroupsAccess,
+			hasVirtualMCPsAccess,
 			hasMCPLogsAccess,
 			hasPluginsAccess,
 			hasUsersAccess,
@@ -1095,6 +1109,7 @@ export default function AppSidebar() {
 			hasPromptRepositoryAccess,
 			hasSkillsRepositoryAccess,
 			hasAccessProfilesAccess,
+			hasProjectsAccess,
 			hasFeatureFlagsAccess,
 			hasDevicesAccess,
 			hasInventoryAccess,
@@ -1500,7 +1515,7 @@ export default function AppSidebar() {
 				</div>
 			</div>
 			<SidebarContent className="overflow-hidden">
-				<SidebarGroup className="custom-scrollbar min-h-0 flex-1 overflow-y-auto pr-3">
+				<SidebarGroup className="custom-scrollbar min-h-0 flex-1 overflow-y-auto pr-3 pt-0.5">
 					<SidebarGroupContent>
 						<SidebarMenu className="space-y-0.5">
 							{filteredItems.map((item) => {

@@ -126,6 +126,7 @@ func (provider *FireworksProvider) ChatCompletion(ctx *schemas.BifrostContext, k
 			request,
 			anthropic.AnthropicRequestBuildConfig{
 				Provider:                  schemas.Fireworks,
+				BetaHeaderOverrides:       provider.networkConfig.BetaHeaderOverrides,
 				ShouldSendBackRawRequest:  provider.sendBackRawRequest,
 				ShouldSendBackRawResponse: provider.sendBackRawResponse,
 			},
@@ -222,6 +223,8 @@ func (provider *FireworksProvider) Responses(ctx *schemas.BifrostContext, key sc
 			request,
 			anthropic.AnthropicRequestBuildConfig{
 				Provider:                  schemas.Fireworks,
+				ValidateTools:             true,
+				BetaHeaderOverrides:       provider.networkConfig.BetaHeaderOverrides,
 				ShouldSendBackRawRequest:  provider.sendBackRawRequest,
 				ShouldSendBackRawResponse: provider.sendBackRawResponse,
 			},
@@ -254,6 +257,7 @@ func (provider *FireworksProvider) ResponsesStream(ctx *schemas.BifrostContext, 
 	if anthropic.ResolveUseAnthropicEndpoints(ctx, key) {
 		jsonData, bifrostErr := anthropic.BuildAnthropicResponsesRequestBody(ctx, request, anthropic.AnthropicRequestBuildConfig{
 			Provider:                  schemas.Fireworks,
+			ValidateTools:             true,
 			IsStreaming:               true,
 			ShouldSendBackRawRequest:  provider.sendBackRawRequest,
 			ShouldSendBackRawResponse: provider.sendBackRawResponse,
@@ -316,6 +320,7 @@ func (provider *FireworksProvider) Embedding(ctx *schemas.BifrostContext, key sc
 		provider.GetProviderKey(),
 		providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest),
 		providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse),
+		nil,
 		nil,
 		provider.logger,
 	)

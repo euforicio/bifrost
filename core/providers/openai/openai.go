@@ -331,7 +331,7 @@ func HandleOpenAITextCompletionRequest(
 		return nil, bifrostErr
 	}
 
-	req.SetBody(jsonData)
+	timedSetBody(ctx, req, jsonData)
 
 	// Make request
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
@@ -340,7 +340,7 @@ func HandleOpenAITextCompletionRequest(
 		return nil, providerUtils.EnrichError(ctx, bifrostErr, jsonData, nil, sendBackRawRequest, sendBackRawResponse, latency)
 	}
 	// Extract provider response headers early so they're available on error paths too
-	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
+	providerResponseHeaders := timedExtractResponseHeaders(ctx, resp)
 	ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 
 	// Handle error response
@@ -370,9 +370,18 @@ func HandleOpenAITextCompletionRequest(
 	var rawRequest, rawResponse interface{}
 
 	if customResponseHandler != nil {
+		// Time the custom handler's decode as the response-parse phase.
+		pt, ph := providerUtils.StartResponseParseSpan(ctx)
 		rawRequest, rawResponse, bifrostErr = customResponseHandler(body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
+		if pt != nil {
+			if bifrostErr != nil {
+				pt.EndSpan(ph, schemas.SpanStatusError, "response parse failed")
+			} else {
+				pt.EndSpan(ph, schemas.SpanStatusOk, "")
+			}
+		}
 	} else {
-		rawRequest, rawResponse, bifrostErr = providerUtils.HandleProviderResponse(body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
+		rawRequest, rawResponse, bifrostErr = providerUtils.HandleProviderResponseCtx(ctx, body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
 	}
 
 	if bifrostErr != nil {
@@ -577,10 +586,10 @@ func HandleOpenAITextCompletionStreaming(
 
 		// Skip scanner for non-SSE responses — avoids bufio.Scanner buffer bloat
 		// on non-line-delimited data (e.g. provider returned JSON instead of SSE).
-		reader, drained := providerUtils.DrainNonSSEStreamReader(resp, reader)
-		if drained {
+		reader, nonSSE := providerUtils.DrainNonSSEStreamReader(resp, reader)
+		if nonSSE != nil {
 			ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
-			providerUtils.ProcessAndSendError(ctx, postHookRunner, errors.New("provider returned non-SSE response for streaming request"), responseChan, logger, postHookSpanFinalizer)
+			providerUtils.ProcessAndSendNonSSEStreamError(ctx, postHookRunner, nonSSE, responseChan, logger, postHookSpanFinalizer)
 			return
 		}
 
@@ -591,6 +600,10 @@ func HandleOpenAITextCompletionStreaming(
 		// Register the accumulating usage handle so a mid-stream
 		// cancel/timeout can bill for tokens the provider already processed.
 		ctx.SetValue(schemas.BifrostContextKeyStreamAccumulatedUsage, usage)
+		// Whether a usage frame has arrived at or after finish_reason; gates the
+		// wait_for_usage break. A bool rather than a usage.TotalTokens test, so an upstream
+		// that legitimately reports zero tokens still terminates.
+		trailingUsageSeen := false
 
 		var finishReason *string
 		var messageID string
@@ -607,11 +620,34 @@ func HandleOpenAITextCompletionStreaming(
 				if ctx.Err() != nil {
 					return
 				}
+				// A silent park after finish_reason (#7108): the response is complete, so the
+				// idle timeout that finally unblocked the read ends the stream cleanly instead
+				// of failing a response the client already has. The timer closed the socket
+				// and claimed ConnectionClosed, so the deferred release skips the drain.
+				if errors.Is(readErr, providerUtils.ErrStreamIdleTimeout) && finishReason != nil {
+					ctx.SetValue(schemas.BifrostContextKeyStreamParkedAfterFinish, true)
+					if usage.TotalTokens == 0 {
+						logger.Warn("provider %s went silent after finish_reason without sending usage; token counts and cost are unavailable for this request", providerName)
+					}
+					break
+				}
 				if readErr != io.EOF {
 					ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
 					logger.Warn("Error reading stream: %v", readErr)
 					providerUtils.ProcessAndSendError(ctx, postHookRunner, readErr, responseChan, logger, postHookSpanFinalizer)
 					return
+				}
+				if providerUtils.SSEEndedOnComment(sseReader) {
+					// Stopped on a heartbeat: the body is still open, so cleanup must abandon it.
+					ctx.SetValue(schemas.BifrostContextKeyStreamParkedAfterFinish, true)
+					// Bifrost defaults stream_options.include_usage, so no usage by now means the
+					// upstream parked before sending it and this request cannot be costed.
+					if usage.TotalTokens == 0 {
+						logger.Warn("provider %s ended the stream on heartbeats after finish_reason without sending usage; token counts and cost are unavailable for this request", providerName)
+					}
+				} else {
+					// The body is fully consumed, so the deferred release must not drain it again.
+					ctx.SetValue(schemas.BifrostContextKeyStreamBodyExhausted, true)
 				}
 				break
 			}
@@ -650,8 +686,7 @@ func HandleOpenAITextCompletionStreaming(
 				}
 
 				// Parse into bifrost response. Timed as the "response-parse" stream phase
-				// (per-event JSON decode) so it lands in Serialization like unary/Anthropic,
-				// instead of folding into core/provider-internal.
+				// (per-event JSON decode).
 				parseStart := time.Now()
 				umErr := sonic.UnmarshalString(jsonData, &response)
 				schemas.AddStreamParse(ctx, time.Since(parseStart))
@@ -678,6 +713,17 @@ func HandleOpenAITextCompletionStreaming(
 				}
 			}
 
+			// Only usage observed at or after finish_reason ends a wait_for_usage wait. Some
+			// OpenAI-compatible upstreams report usage incrementally (vLLM's
+			// stream_continuous_usage_stats; see the "usage comes before final message" note
+			// below), and a preliminary frame satisfying the wait would let the finish frame
+			// end the stream before the authoritative trailing total arrives - which is #7143
+			// again. Computed before the usage block so a frame carrying BOTH usage and
+			// finish_reason still counts: that upstream has nothing further to send.
+			finishInThisFrame := len(response.Choices) > 0 &&
+				response.Choices[0].FinishReason != nil &&
+				*response.Choices[0].FinishReason != ""
+
 			// Handle usage-only chunks (when stream_options include_usage is true)
 			if response.Usage != nil {
 				// Collect usage information and send at the end of the stream
@@ -703,11 +749,24 @@ func HandleOpenAITextCompletionStreaming(
 				if response.Usage.PromptTokensDetails != nil {
 					usage.PromptTokensDetails = response.Usage.PromptTokensDetails
 				}
+				if finishReason != nil || finishInThisFrame {
+					trailingUsageSeen = true
+				}
 				response.Usage = nil
 			}
 
-			// Skip empty responses or responses without choices
+			// Skip empty responses or responses without choices. A usage-only frame lands
+			// here, so under wait_for_usage termination has to be evaluated before skipping
+			// it: that frame is the exact thing the loop stayed open for, and the check at
+			// the bottom of the loop is unreachable once we continue. Guarded and added
+			// rather than relocated - finishReason is assigned below this point, so moving
+			// the shared check up would stop plain does_not_send_done_marker from breaking
+			// on finish_reason at all.
 			if len(response.Choices) == 0 {
+				if !providerUtils.ProviderSendsDoneMarker(ctx, providerName) && finishReason != nil &&
+					providerUtils.WaitForStreamUsage(ctx) && trailingUsageSeen {
+					break
+				}
 				continue
 			}
 
@@ -717,6 +776,8 @@ func HandleOpenAITextCompletionStreaming(
 				// Collect finish reason and send at the end of the stream
 				finishReason = choice.FinishReason
 				response.Choices[0].FinishReason = nil
+				// An upstream that parks instead of sending [DONE] can only heartbeat now.
+				providerUtils.SSEEndOnCommentAfterFinish(sseReader)
 			}
 
 			if response.ID != "" && messageID == "" {
@@ -741,8 +802,14 @@ func HandleOpenAITextCompletionStreaming(
 				providerUtils.ProcessAndSendResponse(ctx, postHookRunner, providerUtils.GetBifrostResponseForStreamResponse(&response, nil, nil, nil, nil, nil), responseChan, postHookSpanFinalizer)
 			}
 
-			// For providers that don't send [DONE] marker break on finish_reason
-			if !providerUtils.ProviderSendsDoneMarker(providerName) && finishReason != nil {
+			// For providers that don't send [DONE] marker break on finish_reason.
+			// wait_for_usage is the operator's statement that this upstream still sends the
+			// trailing usage-only frame Bifrost asks for via stream_options.include_usage, so
+			// hold the loop open for it - breaking here bills the request at zero tokens
+			// (#7143). The wait stays bounded: the usage frame above, the two post-finish
+			// heartbeat comments armed on finish_reason, EOF, or the stream idle timeout.
+			if !providerUtils.ProviderSendsDoneMarker(ctx, providerName) && finishReason != nil &&
+				(!providerUtils.WaitForStreamUsage(ctx) || trailingUsageSeen) {
 				break
 			}
 		}
@@ -806,6 +873,29 @@ func (provider *OpenAIProvider) ChatCompletion(ctx *schemas.BifrostContext, key 
 		nil,
 		provider.logger,
 	)
+}
+
+// timedSetBody copies the serialized request body onto the fasthttp request inside a
+// "request-marshal" span, so the payload copy is attributed to the marshal bucket
+// instead of the provider-internal residual.
+func timedSetBody(ctx *schemas.BifrostContext, req *fasthttp.Request, body []byte) {
+	mt, mh := providerUtils.StartPhaseSpan(ctx, "request-marshal")
+	req.SetBody(body)
+	if mt != nil {
+		mt.EndSpan(mh, schemas.SpanStatusOk, "")
+	}
+}
+
+// timedExtractResponseHeaders reads the upstream response headers inside a
+// "response-finalize" span, so the header copy is attributed to that bucket instead of
+// the provider-internal residual.
+func timedExtractResponseHeaders(ctx *schemas.BifrostContext, resp *fasthttp.Response) map[string]string {
+	ft, fh := providerUtils.StartPhaseSpan(ctx, "response-finalize")
+	headers := providerUtils.ExtractProviderResponseHeaders(resp)
+	if ft != nil {
+		ft.EndSpan(fh, schemas.SpanStatusOk, "")
+	}
+	return headers
 }
 
 // HandleOpenAIChatCompletionRequest handles a chat completion request to OpenAI's API.
@@ -894,7 +984,7 @@ func HandleOpenAIChatCompletionRequest(
 		}
 	}
 
-	req.SetBody(jsonData)
+	timedSetBody(ctx, req, jsonData)
 
 	// Make request
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
@@ -903,7 +993,7 @@ func HandleOpenAIChatCompletionRequest(
 		return nil, providerUtils.EnrichError(ctx, bifrostErr, jsonData, nil, sendBackRawRequest, sendBackRawResponse, latency)
 	}
 	// Extract provider response headers early so they're available on error paths too
-	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
+	providerResponseHeaders := timedExtractResponseHeaders(ctx, resp)
 	ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 
 	// Handle error response
@@ -934,7 +1024,16 @@ func HandleOpenAIChatCompletionRequest(
 	var rawRequest, rawResponse interface{}
 
 	if customResponseHandler != nil {
+		// The custom handler decodes the body itself; time it as the "response-parse" phase.
+		pt, ph := providerUtils.StartResponseParseSpan(ctx)
 		rawRequest, rawResponse, bifrostErr = customResponseHandler(body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
+		if pt != nil {
+			if bifrostErr != nil {
+				pt.EndSpan(ph, schemas.SpanStatusError, "response parse failed")
+			} else {
+				pt.EndSpan(ph, schemas.SpanStatusOk, "")
+			}
+		}
 	} else {
 		rawRequest, rawResponse, bifrostErr = providerUtils.HandleProviderResponseCtx(ctx, body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
 	}
@@ -1206,10 +1305,10 @@ func HandleOpenAIChatCompletionStreaming(
 
 		// Skip scanner for non-SSE responses — avoids bufio.Scanner buffer bloat
 		// on non-line-delimited data (e.g. provider returned JSON instead of SSE).
-		reader, drained := providerUtils.DrainNonSSEStreamReader(resp, reader)
-		if drained {
+		reader, nonSSE := providerUtils.DrainNonSSEStreamReader(resp, reader)
+		if nonSSE != nil {
 			ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
-			providerUtils.ProcessAndSendError(ctx, postHookRunner, errors.New("provider returned non-SSE response for streaming request"), responseChan, logger, postHookSpanFinalizer)
+			providerUtils.ProcessAndSendNonSSEStreamError(ctx, postHookRunner, nonSSE, responseChan, logger, postHookSpanFinalizer)
 			return
 		}
 
@@ -1230,9 +1329,52 @@ func HandleOpenAIChatCompletionStreaming(
 		// service_tier is echoed on chunks; propagate to the final chunk for priority/flex billing
 		var serviceTier *schemas.BifrostServiceTier
 		forwardedTerminalFinishReason := false
+		// Upstream frames read but not yet handed to a chunk. Raw capture must not
+		// depend on whether a frame becomes a forwarded chunk: finish-only and
+		// usage-only frames are documented parts of an OpenAI stream - and the usage
+		// frame is the one Bifrost bills from - yet neither reaches the semantic
+		// chunk-forwarding branch. Buffering here and draining on the next forwarded
+		// chunk (or the synthetic terminal chunk) keeps every frame in upstream
+		// order. See
+		// https://github.com/maximhq/bifrost/issues/7144.
+		//
+		// Only populated when sendBackRawResponse is set, and drained on every chunk
+		// handed to the client, so a healthy stream holds one to three frames here.
+		//
+		// A misbehaving upstream is the case that needs a ceiling: nothing drains this
+		// queue until a chunk is actually forwarded, and every frame read resets the
+		// idle-timeout reader, so a peer that streams only non-forwarding frames keeps
+		// the connection alive while growing this without bound. Past the ceiling the
+		// queue stops accepting frames and says so once. Truncating an audit trail is
+		// unpleasant, but it beats an upstream-driven allocation with no limit, and a
+		// healthy stream never approaches it.
+		var pendingRawFrames []string
+		pendingRawBytes := 0
+		rawCaptureTruncated := false
+		const maxPendingRawBytes = 1 << 20 // 1 MiB
+		queueRawFrame := func(frame string) {
+			if pendingRawBytes+len(frame) > maxPendingRawBytes {
+				if !rawCaptureTruncated {
+					rawCaptureTruncated = true
+					logger.Warn("provider %s streamed over %d bytes of frames that produce no client chunk; raw response capture is truncated for this request", providerName, maxPendingRawBytes)
+				}
+				return
+			}
+			pendingRawFrames = append(pendingRawFrames, frame)
+			pendingRawBytes += len(frame)
+		}
+		drainPendingRawFrames := func() string {
+			joined := strings.Join(pendingRawFrames, "\n\n")
+			pendingRawFrames = pendingRawFrames[:0]
+			pendingRawBytes = 0
+			return joined
+		}
 		// Defer final completed/incomplete event until usage chunk arrives (fallback path only).
 		var pendingFinalEvent *schemas.BifrostResponsesStreamResponse
 		usageSeen := false
+		// Set only by usage seen at or after finish_reason; gates the wait_for_usage break.
+		// Kept separate from usageSeen, which the Bedrock Mantle fallback path also reads.
+		trailingUsageSeen := false
 		// Fallback path only: tracks whether the upstream ever sent a finish_reason,
 		// so a finish_reason that fails to produce a terminal event (e.g. a future
 		// regression in ToBifrostResponsesStreamResponse) is treated as truncation
@@ -1249,11 +1391,36 @@ func HandleOpenAIChatCompletionStreaming(
 				if ctx.Err() != nil {
 					return
 				}
+				// A silent park after finish_reason (#7108): the response is complete, so the
+				// idle timeout that finally unblocked the read ends the stream cleanly instead
+				// of failing a response the client already has. On the Responses fallback path
+				// the terminal signal is the pending completed/incomplete event. The timer
+				// closed the socket and claimed ConnectionClosed, so the deferred release
+				// skips the drain.
+				if errors.Is(readErr, providerUtils.ErrStreamIdleTimeout) && (finishReason != nil || pendingFinalEvent != nil) {
+					ctx.SetValue(schemas.BifrostContextKeyStreamParkedAfterFinish, true)
+					if usage.TotalTokens == 0 {
+						logger.Warn("provider %s went silent after finish_reason without sending usage; token counts and cost are unavailable for this request", providerName)
+					}
+					break
+				}
 				if readErr != io.EOF {
 					ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
 					logger.Warn("Error reading stream: %v", readErr)
 					providerUtils.ProcessAndSendError(ctx, postHookRunner, readErr, responseChan, logger, postHookSpanFinalizer)
 					return
+				}
+				if providerUtils.SSEEndedOnComment(sseReader) {
+					// Stopped on a heartbeat: the body is still open, so cleanup must abandon it.
+					ctx.SetValue(schemas.BifrostContextKeyStreamParkedAfterFinish, true)
+					// Bifrost defaults stream_options.include_usage, so no usage by now means the
+					// upstream parked before sending it and this request cannot be costed.
+					if usage.TotalTokens == 0 {
+						logger.Warn("provider %s ended the stream on heartbeats after finish_reason without sending usage; token counts and cost are unavailable for this request", providerName)
+					}
+				} else {
+					// The body is fully consumed, so the deferred release must not drain it again.
+					ctx.SetValue(schemas.BifrostContextKeyStreamBodyExhausted, true)
 				}
 				break
 			}
@@ -1306,6 +1473,15 @@ func HandleOpenAIChatCompletionStreaming(
 				response.Choices = []schemas.BifrostResponseChoice{}
 			}
 
+			// Capture every frame read, on both ingresses. The fallback path cannot do
+			// this inside its spread loop: a usage-only frame has choices: [], and
+			// ToBifrostResponsesStreamResponse returns nil for that (mux.go:1710), so
+			// the loop body never runs and the frame would be lost exactly as #7144
+			// describes. Queued frames ride on the next emitted event instead.
+			if sendBackRawResponse {
+				queueRawFrame(jsonData)
+			}
+
 			if isResponsesToChatCompletionsFallback {
 				if len(response.Choices) > 0 && response.Choices[0].FinishReason != nil && *response.Choices[0].FinishReason != "" {
 					fallbackFinishReasonSeen = true
@@ -1341,7 +1517,7 @@ func HandleOpenAIChatCompletionStreaming(
 				convStart := time.Now()
 				spreadResponses := response.ToBifrostResponsesStreamResponse(responsesStreamState)
 				schemas.AddStreamConvert(ctx, time.Since(convStart))
-				for _, response := range spreadResponses {
+				for i, response := range spreadResponses {
 					if response.Type == schemas.ResponsesStreamResponseTypeError {
 						bifrostErr := &schemas.BifrostError{
 							Type:           schemas.Ptr(string(schemas.ResponsesStreamResponseTypeError)),
@@ -1366,8 +1542,15 @@ func HandleOpenAIChatCompletionStreaming(
 
 					response.ExtraFields.ChunkIndex = response.SequenceNumber
 
-					if sendBackRawResponse {
-						response.ExtraFields.RawResponse = jsonData
+					// One upstream chat frame spreads into several Responses events.
+					// Stamping every one of them made framework/streaming/responses.go
+					// concatenate that single frame once per event, so the captured raw
+					// response reported frames the provider never sent twice over. Only
+					// the first event drains, and it carries every frame queued since
+					// the last emitted event - including frames that produced no event
+					// of their own.
+					if sendBackRawResponse && i == 0 {
+						response.ExtraFields.RawResponse = drainPendingRawFrames()
 					}
 
 					if response.Type == schemas.ResponsesStreamResponseTypeCompleted || response.Type == schemas.ResponsesStreamResponseTypeIncomplete {
@@ -1380,6 +1563,15 @@ func HandleOpenAIChatCompletionStreaming(
 					lastChunkTime = time.Now()
 
 					providerUtils.ProcessAndSendResponse(ctx, postHookRunner, providerUtils.GetBifrostResponseForStreamResponse(nil, nil, response, nil, nil, nil), responseChan, postHookSpanFinalizer)
+				}
+
+				// Mantle sends usage in the chunk *after* the one carrying finish_reason and then
+				// [DONE]. Usage is attached to the terminal event at stream end, so this exits as
+				// soon as both have been seen instead of waiting for the marker; breaking on
+				// finish_reason alone would drop the usage and with it the cost.
+				if fallbackFinishReasonSeen && usageSeen &&
+					(providerName == schemas.BedrockMantle || providerName == schemas.Bedrock) {
+					break
 				}
 			} else {
 				if postResponseConverter != nil {
@@ -1397,6 +1589,17 @@ func HandleOpenAIChatCompletionStreaming(
 				if response.ServiceTier != nil {
 					serviceTier = response.ServiceTier
 				}
+
+				// Only usage observed at or after finish_reason ends a wait_for_usage wait. Some
+				// OpenAI-compatible upstreams report usage incrementally (vLLM's
+				// stream_continuous_usage_stats; see the "usage comes before final message" note
+				// below), and a preliminary frame satisfying the wait would let the finish frame
+				// end the stream before the authoritative trailing total arrives - which is #7143
+				// again. Computed before the usage block so a frame carrying BOTH usage and
+				// finish_reason still counts: that upstream has nothing further to send.
+				finishInThisFrame := len(response.Choices) > 0 &&
+					response.Choices[0].FinishReason != nil &&
+					*response.Choices[0].FinishReason != ""
 
 				// Handle usage-only chunks (when stream_options include_usage is true)
 				if response.Usage != nil {
@@ -1426,6 +1629,12 @@ func HandleOpenAIChatCompletionStreaming(
 					if response.Usage.Cost != nil {
 						usage.Cost = response.Usage.Cost
 					}
+					// usageSeen is deliberately not set here: it belongs to the Responses
+					// fallback branch above, which is the only reader (the Mantle exit and the
+					// terminal-event usage attach). This branch gates on trailingUsageSeen.
+					if finishReason != nil || finishInThisFrame {
+						trailingUsageSeen = true
+					}
 					response.Usage = nil
 				}
 
@@ -1433,8 +1642,18 @@ func HandleOpenAIChatCompletionStreaming(
 					modelName = response.Model
 				}
 
-				// Skip empty responses or responses without choices
+				// Skip empty responses or responses without choices. A usage-only frame lands
+				// here, so under wait_for_usage termination has to be evaluated before skipping
+				// it: that frame is the exact thing the loop stayed open for, and the check at
+				// the bottom of the loop is unreachable once we continue. Guarded and added
+				// rather than relocated - finishReason is assigned below this point, so moving
+				// the shared check up would stop plain does_not_send_done_marker from breaking
+				// on finish_reason at all.
 				if len(response.Choices) == 0 {
+					if !providerUtils.ProviderSendsDoneMarker(ctx, providerName) && finishReason != nil &&
+						providerUtils.WaitForStreamUsage(ctx) && trailingUsageSeen {
+						break
+					}
 					continue
 				}
 
@@ -1443,6 +1662,8 @@ func HandleOpenAIChatCompletionStreaming(
 				if choice.FinishReason != nil && *choice.FinishReason != "" {
 					// Collect finish reason and send at the end of the stream
 					finishReason = choice.FinishReason
+					// An upstream that parks instead of sending [DONE] can only heartbeat now.
+					providerUtils.SSEEndOnCommentAfterFinish(sseReader)
 				}
 
 				if response.ID != "" && messageID == "" {
@@ -1452,10 +1673,22 @@ func HandleOpenAIChatCompletionStreaming(
 					created = response.Created
 				}
 
-				// Handle regular content chunks, including reasoning
+				// Handle regular content chunks, including the initial role-only delta.
+				// OpenAI commonly sends role:"assistant" with empty content first; dropping
+				// it leaves strict streaming clients unable to reconstruct a valid message.
+				// Refusal and Annotations are answer-bearing delta fields just like
+				// Content: a refusal IS the model's reply, and annotations carry the
+				// URL citations behind a web-search answer. Omitting them here dropped
+				// those chunks entirely - the client saw a content-free completion, and
+				// the framework's ChatAssistantMessage.Refusal / .Annotations assembly
+				// (framework/streaming/chat.go) could never fire for any
+				// OpenAI-compatible provider.
 				if choice.ChatStreamResponseChoice != nil &&
 					choice.ChatStreamResponseChoice.Delta != nil &&
-					((choice.ChatStreamResponseChoice.Delta.Content != nil && *choice.ChatStreamResponseChoice.Delta.Content != "") ||
+					(choice.ChatStreamResponseChoice.Delta.Role != nil ||
+						(choice.ChatStreamResponseChoice.Delta.Content != nil && *choice.ChatStreamResponseChoice.Delta.Content != "") ||
+						(choice.ChatStreamResponseChoice.Delta.Refusal != nil && *choice.ChatStreamResponseChoice.Delta.Refusal != "") ||
+						len(choice.ChatStreamResponseChoice.Delta.Annotations) > 0 ||
 						choice.ChatStreamResponseChoice.Delta.Reasoning != nil ||
 						len(choice.ChatStreamResponseChoice.Delta.ReasoningDetails) > 0 ||
 						choice.ChatStreamResponseChoice.Delta.Audio != nil ||
@@ -1470,14 +1703,20 @@ func HandleOpenAIChatCompletionStreaming(
 					lastChunkTime = time.Now()
 
 					if sendBackRawResponse {
-						response.ExtraFields.RawResponse = jsonData
+						response.ExtraFields.RawResponse = drainPendingRawFrames()
 					}
 
 					providerUtils.ProcessAndSendResponse(ctx, postHookRunner, providerUtils.GetBifrostResponseForStreamResponse(nil, &response, nil, nil, nil, nil), responseChan, postHookSpanFinalizer)
 				}
 
-				// For providers that don't send [DONE] marker break on finish_reason
-				if !providerUtils.ProviderSendsDoneMarker(providerName) && finishReason != nil {
+				// For providers that don't send [DONE] marker break on finish_reason.
+				// wait_for_usage is the operator's statement that this upstream still sends the
+				// trailing usage-only frame Bifrost asks for via stream_options.include_usage, so
+				// hold the loop open for it - breaking here bills the request at zero tokens
+				// (#7143). The wait stays bounded: the usage frame above, the two post-finish
+				// heartbeat comments armed on finish_reason, EOF, or the stream idle timeout.
+				if !providerUtils.ProviderSendsDoneMarker(ctx, providerName) && finishReason != nil &&
+					(!providerUtils.WaitForStreamUsage(ctx) || trailingUsageSeen) {
 					break
 				}
 			}
@@ -1512,6 +1751,16 @@ func HandleOpenAIChatCompletionStreaming(
 				if sendBackRawRequest {
 					providerUtils.ParseAndSetRawRequest(&pendingFinalEvent.ExtraFields, jsonBody)
 				}
+				// The usage-only frame produces no event of its own and arrives after
+				// the finish frame that created pendingFinalEvent, so the terminal
+				// event is the only carrier it will ever get.
+				if sendBackRawResponse && len(pendingRawFrames) > 0 {
+					trailing := drainPendingRawFrames()
+					if existing, ok := pendingFinalEvent.ExtraFields.RawResponse.(string); ok && existing != "" {
+						trailing = existing + "\n\n" + trailing
+					}
+					pendingFinalEvent.ExtraFields.RawResponse = trailing
+				}
 				pendingFinalEvent.ExtraFields.Latency = time.Since(startTime).Milliseconds()
 				ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
 				providerUtils.ProcessAndSendResponse(ctx, postHookRunner, providerUtils.GetBifrostResponseForStreamResponse(nil, nil, pendingFinalEvent, nil, nil, nil), responseChan, postHookSpanFinalizer)
@@ -1532,6 +1781,12 @@ func HandleOpenAIChatCompletionStreaming(
 			// Set raw request if enabled
 			if sendBackRawRequest {
 				providerUtils.ParseAndSetRawRequest(&response.ExtraFields, jsonBody)
+			}
+			// The finish-only and usage-only frames always arrive after the last
+			// forwarded content chunk, so this synthetic terminal chunk is the only
+			// carrier they will ever get.
+			if sendBackRawResponse && len(pendingRawFrames) > 0 {
+				response.ExtraFields.RawResponse = drainPendingRawFrames()
 			}
 			response.ExtraFields.Latency = time.Since(startTime).Milliseconds()
 			ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
@@ -1661,7 +1916,7 @@ func HandleOpenAIResponsesRequest(
 		}
 	}
 
-	req.SetBody(jsonData)
+	timedSetBody(ctx, req, jsonData)
 
 	// Make request
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
@@ -1670,7 +1925,7 @@ func HandleOpenAIResponsesRequest(
 		return nil, providerUtils.EnrichError(ctx, bifrostErr, jsonData, nil, sendBackRawRequest, sendBackRawResponse, latency)
 	}
 	// Extract provider response headers early so they're available on error paths too
-	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
+	providerResponseHeaders := timedExtractResponseHeaders(ctx, resp)
 	ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 
 	// Handle error response
@@ -1700,9 +1955,18 @@ func HandleOpenAIResponsesRequest(
 	var rawRequest, rawResponse interface{}
 
 	if customResponseHandler != nil {
+		// Time the custom handler's decode as the response-parse phase.
+		pt, ph := providerUtils.StartResponseParseSpan(ctx)
 		rawRequest, rawResponse, bifrostErr = customResponseHandler(body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
+		if pt != nil {
+			if bifrostErr != nil {
+				pt.EndSpan(ph, schemas.SpanStatusError, "response parse failed")
+			} else {
+				pt.EndSpan(ph, schemas.SpanStatusOk, "")
+			}
+		}
 	} else {
-		rawRequest, rawResponse, bifrostErr = providerUtils.HandleProviderResponse(body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
+		rawRequest, rawResponse, bifrostErr = providerUtils.HandleProviderResponseCtx(ctx, body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
 	}
 
 	if bifrostErr != nil {
@@ -1932,10 +2196,10 @@ func HandleOpenAIResponsesStreaming(
 
 		// Skip scanner for non-SSE responses — avoids bufio.Scanner buffer bloat
 		// on non-line-delimited data (e.g. provider returned JSON instead of SSE).
-		reader, drained := providerUtils.DrainNonSSEStreamReader(resp, reader)
-		if drained {
+		reader, nonSSE := providerUtils.DrainNonSSEStreamReader(resp, reader)
+		if nonSSE != nil {
 			ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
-			providerUtils.ProcessAndSendError(ctx, postHookRunner, errors.New("provider returned non-SSE response for streaming request"), responseChan, logger, postHookSpanFinalizer)
+			providerUtils.ProcessAndSendNonSSEStreamError(ctx, postHookRunner, nonSSE, responseChan, logger, postHookSpanFinalizer)
 			return
 		}
 
@@ -2083,6 +2347,7 @@ func (provider *OpenAIProvider) Embedding(ctx *schemas.BifrostContext, key schem
 		providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest),
 		providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse),
 		nil,
+		nil,
 		provider.logger,
 	)
 }
@@ -2100,6 +2365,7 @@ func HandleOpenAIEmbeddingRequest(
 	sendBackRawRequest bool,
 	sendBackRawResponse bool,
 	customResponseHandler responseHandler[schemas.BifrostEmbeddingResponse],
+	customErrorConverter ErrorConverter,
 	logger schemas.Logger,
 ) (*schemas.BifrostEmbeddingResponse, *schemas.BifrostError) {
 	// Create request
@@ -2157,7 +2423,7 @@ func HandleOpenAIEmbeddingRequest(
 		return nil, bifrostErr
 	}
 
-	req.SetBody(jsonData)
+	timedSetBody(ctx, req, jsonData)
 
 	// Make request
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
@@ -2166,13 +2432,16 @@ func HandleOpenAIEmbeddingRequest(
 		return nil, providerUtils.EnrichError(ctx, bifrostErr, jsonData, nil, sendBackRawRequest, sendBackRawResponse, latency)
 	}
 	// Extract provider response headers early so they're available on error paths too
-	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
+	providerResponseHeaders := timedExtractResponseHeaders(ctx, resp)
 	ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 
 	// Handle error response
 	if resp.StatusCode() != fasthttp.StatusOK {
 		providerUtils.MaterializeStreamErrorBody(ctx, resp)
 		logger.Debug(fmt.Sprintf("error from %s provider: status %d", providerName, resp.StatusCode()))
+		if customErrorConverter != nil {
+			return nil, providerUtils.EnrichError(ctx, customErrorConverter(resp), jsonData, nil, sendBackRawRequest, sendBackRawResponse, latency)
+		}
 		return nil, providerUtils.EnrichError(ctx, ParseOpenAIError(resp), jsonData, nil, sendBackRawRequest, sendBackRawResponse, latency)
 	}
 
@@ -2194,9 +2463,18 @@ func HandleOpenAIEmbeddingRequest(
 	var rawRequest, rawResponse interface{}
 
 	if customResponseHandler != nil {
+		// Time the custom handler's decode as the response-parse phase.
+		pt, ph := providerUtils.StartResponseParseSpan(ctx)
 		rawRequest, rawResponse, bifrostErr = customResponseHandler(body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
+		if pt != nil {
+			if bifrostErr != nil {
+				pt.EndSpan(ph, schemas.SpanStatusError, "response parse failed")
+			} else {
+				pt.EndSpan(ph, schemas.SpanStatusOk, "")
+			}
+		}
 	} else {
-		rawRequest, rawResponse, bifrostErr = providerUtils.HandleProviderResponse(body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
+		rawRequest, rawResponse, bifrostErr = providerUtils.HandleProviderResponseCtx(ctx, body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
 	}
 
 	if bifrostErr != nil {
@@ -2317,7 +2595,7 @@ func HandleOpenAISpeechRequest(
 		return nil, bifrostErr
 	}
 
-	req.SetBody(jsonData)
+	timedSetBody(ctx, req, jsonData)
 
 	// Make request
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
@@ -2326,7 +2604,7 @@ func HandleOpenAISpeechRequest(
 		return nil, providerUtils.EnrichError(ctx, bifrostErr, jsonData, nil, sendBackRawRequest, sendBackRawResponse, latency)
 	}
 	// Extract provider response headers early so they're available on error paths too
-	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
+	providerResponseHeaders := timedExtractResponseHeaders(ctx, resp)
 	ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 
 	// Handle error response
@@ -2548,10 +2826,10 @@ func HandleOpenAISpeechStreamRequest(
 
 		// Skip scanner for non-SSE responses — avoids bufio.Scanner buffer bloat
 		// on non-line-delimited data (e.g. provider returned JSON instead of SSE).
-		reader, drained := providerUtils.DrainNonSSEStreamReader(resp, reader)
-		if drained {
+		reader, nonSSE := providerUtils.DrainNonSSEStreamReader(resp, reader)
+		if nonSSE != nil {
 			ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
-			providerUtils.ProcessAndSendError(ctx, postHookRunner, errors.New("provider returned non-SSE response for streaming request"), responseChan, logger, postHookSpanFinalizer)
+			providerUtils.ProcessAndSendNonSSEStreamError(ctx, postHookRunner, nonSSE, responseChan, logger, postHookSpanFinalizer)
 			return
 		}
 
@@ -2593,15 +2871,22 @@ func HandleOpenAISpeechStreamRequest(
 				}
 			}
 
-			// Parse into bifrost response
+			// Parse into bifrost response. Timed as the "response-parse" stream phase.
 			var response schemas.BifrostSpeechStreamResponse
-			if err := sonic.UnmarshalString(jsonData, &response); err != nil {
-				logger.Warn("Failed to parse stream response: %v", err)
+			parseStart := time.Now()
+			umErr := sonic.UnmarshalString(jsonData, &response)
+			schemas.AddStreamParse(ctx, time.Since(parseStart))
+			if umErr != nil {
+				logger.Warn("Failed to parse stream response: %v", umErr)
 				continue
 			}
 
 			if postResponseConverter != nil {
-				if converted := postResponseConverter(&response); converted != nil {
+				// Per-event mapping -> "convertor" (Convertor) stream phase.
+				convStart := time.Now()
+				converted := postResponseConverter(&response)
+				schemas.AddStreamConvert(ctx, time.Since(convStart))
+				if converted != nil {
 					response = *converted
 				} else {
 					logger.Warn("postResponseConverter returned nil; leaving chunk unmodified")
@@ -2755,20 +3040,37 @@ func HandleOpenAITranscriptionRequest(
 	}
 
 	// Use centralized converter
+	// Time the request conversion as the convertor phase.
+	ct, ch := providerUtils.StartPhaseSpan(ctx, "convertor")
 	reqBody := ToOpenAITranscriptionRequest(request)
+	if ct != nil {
+		if reqBody == nil {
+			ct.EndSpan(ch, schemas.SpanStatusError, "transcription input is not provided")
+		} else {
+			ct.EndSpan(ch, schemas.SpanStatusOk, "")
+		}
+	}
 	if reqBody == nil {
 		return nil, providerUtils.NewBifrostOperationError("transcription input is not provided", nil)
 	}
 
 	// Create multipart form
+	// Time the multipart encode as the request-marshal phase.
+	mt, mh := providerUtils.StartPhaseSpan(ctx, "request-marshal")
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := ParseTranscriptionFormDataBodyFromRequest(writer, reqBody, providerName); err != nil {
+		if mt != nil {
+			mt.EndSpan(mh, schemas.SpanStatusError, "multipart encode failed")
+		}
 		return nil, err
+	}
+	if mt != nil {
+		mt.EndSpan(mh, schemas.SpanStatusOk, "")
 	}
 
 	req.Header.SetContentType(writer.FormDataContentType()) // This sets multipart/form-data with boundary
-	req.SetBody(body.Bytes())
+	timedSetBody(ctx, req, body.Bytes())
 
 	// Make request
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
@@ -2777,7 +3079,7 @@ func HandleOpenAITranscriptionRequest(
 		return nil, providerUtils.SetErrorLatency(bifrostErr, latency)
 	}
 	// Extract provider response headers early so they're available on error paths too
-	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
+	providerResponseHeaders := timedExtractResponseHeaders(ctx, resp)
 	ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 
 	// Handle error response
@@ -2821,7 +3123,17 @@ func HandleOpenAITranscriptionRequest(
 		}
 	} else if request.Params != nil && schemas.IsDiarizedTranscriptionFormat(request.Params.ResponseFormat) {
 		var diarized openAIDiarizedTranscriptionResponse
-		if err := sonic.Unmarshal(copiedResponseBody, &diarized); err != nil {
+		// Time the decode as the response-parse phase.
+		pt, ph := providerUtils.StartResponseParseSpan(ctx)
+		umErr := sonic.Unmarshal(copiedResponseBody, &diarized)
+		if pt != nil {
+			if umErr != nil {
+				pt.EndSpan(ph, schemas.SpanStatusError, "response parse failed")
+			} else {
+				pt.EndSpan(ph, schemas.SpanStatusOk, "")
+			}
+		}
+		if umErr != nil {
 			if providerUtils.IsHTMLResponse(resp, copiedResponseBody) {
 				return nil, providerUtils.SetErrorLatency(&schemas.BifrostError{
 					IsBifrostError: false,
@@ -2831,7 +3143,7 @@ func HandleOpenAITranscriptionRequest(
 					},
 				}, latency)
 			}
-			return nil, providerUtils.SetErrorLatency(providerUtils.NewBifrostOperationError(schemas.ErrProviderResponseUnmarshal, err), latency)
+			return nil, providerUtils.SetErrorLatency(providerUtils.NewBifrostOperationError(schemas.ErrProviderResponseUnmarshal, umErr), latency)
 		}
 
 		// Duration/Task are decoded as pointers so an upstream response that
@@ -2853,7 +3165,17 @@ func HandleOpenAITranscriptionRequest(
 	} else if customResponseHandler != nil {
 		_, rawResponse, bifrostErr = customResponseHandler(copiedResponseBody, response, nil, false, sendBackRawResponse)
 	} else {
-		if err := sonic.Unmarshal(copiedResponseBody, response); err != nil {
+		// Time the decode as the response-parse phase.
+		pt, ph := providerUtils.StartResponseParseSpan(ctx)
+		umErr := sonic.Unmarshal(copiedResponseBody, response)
+		if pt != nil {
+			if umErr != nil {
+				pt.EndSpan(ph, schemas.SpanStatusError, "response parse failed")
+			} else {
+				pt.EndSpan(ph, schemas.SpanStatusOk, "")
+			}
+		}
+		if umErr != nil {
 			// Check if it's an HTML response
 			if providerUtils.IsHTMLResponse(resp, copiedResponseBody) {
 				return nil, providerUtils.SetErrorLatency(&schemas.BifrostError{
@@ -2864,7 +3186,7 @@ func HandleOpenAITranscriptionRequest(
 					},
 				}, latency)
 			}
-			return nil, providerUtils.SetErrorLatency(providerUtils.NewBifrostOperationError(schemas.ErrProviderResponseUnmarshal, err), latency)
+			return nil, providerUtils.SetErrorLatency(providerUtils.NewBifrostOperationError(schemas.ErrProviderResponseUnmarshal, umErr), latency)
 		}
 
 		// TODO: add HandleProviderResponse here
@@ -2941,7 +3263,16 @@ func HandleOpenAITranscriptionStreamRequest(
 ) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
 	providerUtils.SetStreamIdleTimeoutIfEmpty(ctx, streamIdleTimeoutInSeconds)
 	// Use centralized converter
+	// Time the request conversion as the convertor phase.
+	ct, ch := providerUtils.StartPhaseSpan(ctx, "convertor")
 	reqBody := ToOpenAITranscriptionRequest(request)
+	if ct != nil {
+		if reqBody == nil {
+			ct.EndSpan(ch, schemas.SpanStatusError, "transcription input is not provided")
+		} else {
+			ct.EndSpan(ch, schemas.SpanStatusOk, "")
+		}
+	}
 	if reqBody == nil {
 		return nil, providerUtils.NewBifrostOperationError("transcription input is not provided", nil)
 	}
@@ -2951,11 +3282,19 @@ func HandleOpenAITranscriptionStreamRequest(
 	}
 
 	// Create multipart form
+	// Time the multipart encode as the request-marshal phase.
+	mt, mh := providerUtils.StartPhaseSpan(ctx, "request-marshal")
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
 	if bifrostErr := ParseTranscriptionFormDataBodyFromRequest(writer, reqBody, providerName); bifrostErr != nil {
+		if mt != nil {
+			mt.EndSpan(mh, schemas.SpanStatusError, "multipart encode failed")
+		}
 		return nil, bifrostErr
+	}
+	if mt != nil {
+		mt.EndSpan(mh, schemas.SpanStatusOk, "")
 	}
 
 	// Prepare OpenAI headers
@@ -3058,10 +3397,10 @@ func HandleOpenAITranscriptionStreamRequest(
 
 		// Skip scanner for non-SSE responses — avoids bufio.Scanner buffer bloat
 		// on non-line-delimited data (e.g. provider returned JSON instead of SSE).
-		reader, drained := providerUtils.DrainNonSSEStreamReader(resp, reader)
-		if drained {
+		reader, nonSSE := providerUtils.DrainNonSSEStreamReader(resp, reader)
+		if nonSSE != nil {
 			ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
-			providerUtils.ProcessAndSendError(ctx, postHookRunner, errors.New("provider returned non-SSE response for streaming request"), responseChan, logger, postHookSpanFinalizer)
+			providerUtils.ProcessAndSendNonSSEStreamError(ctx, postHookRunner, nonSSE, responseChan, logger, postHookSpanFinalizer)
 			return
 		}
 
@@ -3094,7 +3433,10 @@ func HandleOpenAITranscriptionStreamRequest(
 			response := &schemas.BifrostTranscriptionStreamResponse{}
 			var bifrostErr *schemas.BifrostError
 			if customResponseHandler != nil {
+				// Custom handler decodes the raw event itself -> time as "response-parse" stream phase.
+				parseStart := time.Now()
 				_, _, bifrostErr = customResponseHandler([]byte(jsonData), response, nil, false, false)
+				schemas.AddStreamParse(ctx, time.Since(parseStart))
 				if bifrostErr != nil {
 					if sendBackRawResponse {
 						bifrostErr.ExtraFields.RawResponse = jsonData
@@ -3118,15 +3460,23 @@ func HandleOpenAITranscriptionStreamRequest(
 					}
 				}
 
-				if err := sonic.UnmarshalString(jsonData, response); err != nil {
-					logger.Warn("Failed to parse stream response: %v", err)
+				// Parse into bifrost response. Timed as the "response-parse" stream phase.
+				parseStart := time.Now()
+				umErr := sonic.UnmarshalString(jsonData, response)
+				schemas.AddStreamParse(ctx, time.Since(parseStart))
+				if umErr != nil {
+					logger.Warn("Failed to parse stream response: %v", umErr)
 					continue
 
 				}
 			}
 
 			if postResponseConverter != nil {
-				if converted := postResponseConverter(response); converted != nil {
+				// Per-event mapping -> "convertor" (Convertor) stream phase.
+				convStart := time.Now()
+				converted := postResponseConverter(response)
+				schemas.AddStreamConvert(ctx, time.Since(convStart))
+				if converted != nil {
 					response = converted
 				} else {
 					logger.Warn("postResponseConverter returned nil; leaving chunk unmodified")
@@ -3270,7 +3620,7 @@ func HandleOpenAIImageGenerationRequest(
 		return nil, bifrostErr
 	}
 
-	req.SetBody(jsonData)
+	timedSetBody(ctx, req, jsonData)
 
 	// Make request
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
@@ -3279,7 +3629,7 @@ func HandleOpenAIImageGenerationRequest(
 		return nil, providerUtils.EnrichError(ctx, bifrostErr, jsonData, nil, sendBackRawRequest, sendBackRawResponse, latency)
 	}
 	// Extract provider response headers early so they're available on error paths too
-	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
+	providerResponseHeaders := timedExtractResponseHeaders(ctx, resp)
 	ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 
 	// Handle error response
@@ -3303,7 +3653,7 @@ func HandleOpenAIImageGenerationRequest(
 	response := &schemas.BifrostImageGenerationResponse{}
 
 	// Use enhanced response handler with pre-allocated response
-	rawRequest, rawResponse, bifrostErr := providerUtils.HandleProviderResponse(body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
+	rawRequest, rawResponse, bifrostErr := providerUtils.HandleProviderResponseCtx(ctx, body, response, jsonData, sendBackRawRequest, sendBackRawResponse)
 	if bifrostErr != nil {
 		return nil, bifrostErr
 	}
@@ -3509,10 +3859,10 @@ func HandleOpenAIImageGenerationStreaming(
 
 		// Skip scanner for non-SSE responses — avoids bufio.Scanner buffer bloat
 		// on non-line-delimited data (e.g. provider returned JSON instead of SSE).
-		reader, drained := providerUtils.DrainNonSSEStreamReader(resp, reader)
-		if drained {
+		reader, nonSSE := providerUtils.DrainNonSSEStreamReader(resp, reader)
+		if nonSSE != nil {
 			ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
-			providerUtils.ProcessAndSendError(ctx, postHookRunner, errors.New("provider returned non-SSE response for streaming request"), responseChan, logger, postHookSpanFinalizer)
+			providerUtils.ProcessAndSendNonSSEStreamError(ctx, postHookRunner, nonSSE, responseChan, logger, postHookSpanFinalizer)
 			return
 		}
 
@@ -3564,10 +3914,14 @@ func HandleOpenAIImageGenerationStreaming(
 				}
 			}
 
-			// Parse minimally to extract usage and check for errors
+			// Parse minimally to extract usage and check for errors.
+			// Timed as the "response-parse" stream phase (per-event JSON decode).
 			var response OpenAIImageStreamResponse
-			if err := sonic.UnmarshalString(jsonData, &response); err != nil {
-				logger.Warn("Failed to parse stream response: %v", err)
+			parseStart := time.Now()
+			umErr := sonic.UnmarshalString(jsonData, &response)
+			schemas.AddStreamParse(ctx, time.Since(parseStart))
+			if umErr != nil {
+				logger.Warn("Failed to parse stream response: %v", umErr)
 				continue
 			}
 
@@ -3656,7 +4010,9 @@ func HandleOpenAIImageGenerationStreaming(
 				imageChunkIndices[imageIndex]++
 			}
 			chunkIndex := imageChunkIndices[imageIndex]
-			// Build chunk with all OpenAI fields
+			// Build chunk with all OpenAI fields.
+			// Per-event mapping -> "convertor" (Convertor) stream phase.
+			convStart := time.Now()
 			chunk := &schemas.BifrostImageGenerationStreamResponse{
 				Type:         response.Type,
 				Index:        imageIndex, // Which image (0-N)
@@ -3671,7 +4027,6 @@ func HandleOpenAIImageGenerationStreaming(
 					Latency:    time.Since(lastChunkTime).Milliseconds(),
 				},
 			}
-
 			if postResponseConverter != nil {
 				if converted := postResponseConverter(chunk); converted != nil {
 					chunk = converted
@@ -3679,6 +4034,7 @@ func HandleOpenAIImageGenerationStreaming(
 					logger.Warn("postResponseConverter returned nil; leaving chunk unmodified")
 				}
 			}
+			schemas.AddStreamConvert(ctx, time.Since(convStart))
 
 			// Only set PartialImageIndex for partial images, not for completed events
 			if !isCompleted {
@@ -4871,7 +5227,16 @@ func HandleOpenAIImageEditRequest(
 		}, nil
 	}
 
+	// Time the request conversion as the convertor phase.
+	ct, ch := providerUtils.StartPhaseSpan(ctx, "convertor")
 	openaiReq := ToOpenAIImageEditRequest(request)
+	if ct != nil {
+		if openaiReq == nil {
+			ct.EndSpan(ch, schemas.SpanStatusError, "failed to convert request to OpenAI format")
+		} else {
+			ct.EndSpan(ch, schemas.SpanStatusOk, "")
+		}
+	}
 	if openaiReq == nil {
 		return nil, providerUtils.NewBifrostOperationError("failed to convert request to OpenAI format", nil)
 	}
@@ -4899,15 +5264,23 @@ func HandleOpenAIImageEditRequest(
 	req.Header.Set("Content-Type", "multipart/form-data")
 
 	// Create multipart form
+	// Time the multipart encode as the request-marshal phase.
+	mt, mh := providerUtils.StartPhaseSpan(ctx, "request-marshal")
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := parseImageEditFormDataBodyFromRequest(writer, openaiReq, providerName); err != nil {
+		if mt != nil {
+			mt.EndSpan(mh, schemas.SpanStatusError, "multipart encode failed")
+		}
 		return nil, err
+	}
+	if mt != nil {
+		mt.EndSpan(mh, schemas.SpanStatusOk, "")
 	}
 
 	req.Header.SetContentType(writer.FormDataContentType())
 	bodyData := body.Bytes()
-	req.SetBody(bodyData)
+	timedSetBody(ctx, req, bodyData)
 
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
 	defer wait()
@@ -4915,7 +5288,7 @@ func HandleOpenAIImageEditRequest(
 		return nil, providerUtils.EnrichError(ctx, bifrostErr, nil, nil, sendBackRawRequest, sendBackRawResponse, latency)
 	}
 	// Extract provider response headers early so they're available on error paths too
-	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
+	providerResponseHeaders := timedExtractResponseHeaders(ctx, resp)
 	ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 
 	if resp.StatusCode() != fasthttp.StatusOK {
@@ -4935,7 +5308,7 @@ func HandleOpenAIImageEditRequest(
 	}
 
 	response := &schemas.BifrostImageGenerationResponse{}
-	rawRequest, rawResponse, bifrostErr := providerUtils.HandleProviderResponse(bodyBytes, response, nil, false, sendBackRawResponse)
+	rawRequest, rawResponse, bifrostErr := providerUtils.HandleProviderResponseCtx(ctx, bodyBytes, response, nil, false, sendBackRawResponse)
 	if bifrostErr != nil {
 		return nil, bifrostErr
 	}
@@ -5000,7 +5373,16 @@ func HandleOpenAIImageEditStreamRequest(
 	postHookSpanFinalizer func(context.Context),
 ) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
 	providerUtils.SetStreamIdleTimeoutIfEmpty(ctx, streamIdleTimeoutInSeconds)
+	// Time the request conversion as the convertor phase.
+	ct, ch := providerUtils.StartPhaseSpan(ctx, "convertor")
 	reqBody := ToOpenAIImageEditRequest(request)
+	if ct != nil {
+		if reqBody == nil {
+			ct.EndSpan(ch, schemas.SpanStatusError, "image edit input is not provided")
+		} else {
+			ct.EndSpan(ch, schemas.SpanStatusOk, "")
+		}
+	}
 	if reqBody == nil {
 		return nil, providerUtils.NewBifrostOperationError("image edit input is not provided", nil)
 	}
@@ -5010,11 +5392,19 @@ func HandleOpenAIImageEditStreamRequest(
 		reqBody = postRequestConverter(reqBody)
 	}
 	// Create multipart form
+	// Time the multipart encode as the request-marshal phase.
+	mt, mh := providerUtils.StartPhaseSpan(ctx, "request-marshal")
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
 	if bifrostErr := parseImageEditFormDataBodyFromRequest(writer, reqBody, providerName); bifrostErr != nil {
+		if mt != nil {
+			mt.EndSpan(mh, schemas.SpanStatusError, "multipart encode failed")
+		}
 		return nil, bifrostErr
+	}
+	if mt != nil {
+		mt.EndSpan(mh, schemas.SpanStatusOk, "")
 	}
 
 	// Prepare OpenAI headers
@@ -5115,10 +5505,10 @@ func HandleOpenAIImageEditStreamRequest(
 
 		// Skip scanner for non-SSE responses — avoids bufio.Scanner buffer bloat
 		// on non-line-delimited data (e.g. provider returned JSON instead of SSE).
-		reader, drained := providerUtils.DrainNonSSEStreamReader(resp, reader)
-		if drained {
+		reader, nonSSE := providerUtils.DrainNonSSEStreamReader(resp, reader)
+		if nonSSE != nil {
 			ctx.SetValue(schemas.BifrostContextKeyStreamEndIndicator, true)
-			providerUtils.ProcessAndSendError(ctx, postHookRunner, errors.New("provider returned non-SSE response for streaming request"), responseChan, logger, postHookSpanFinalizer)
+			providerUtils.ProcessAndSendNonSSEStreamError(ctx, postHookRunner, nonSSE, responseChan, logger, postHookSpanFinalizer)
 			return
 		}
 
@@ -5170,10 +5560,14 @@ func HandleOpenAIImageEditStreamRequest(
 				}
 			}
 
-			// Parse minimally to extract usage and check for errors
+			// Parse minimally to extract usage and check for errors.
+			// Timed as the "response-parse" stream phase (per-event JSON decode).
 			var response OpenAIImageStreamResponse
-			if err := sonic.UnmarshalString(jsonData, &response); err != nil {
-				logger.Warn("Failed to parse stream response: %v", err)
+			parseStart := time.Now()
+			umErr := sonic.UnmarshalString(jsonData, &response)
+			schemas.AddStreamParse(ctx, time.Since(parseStart))
+			if umErr != nil {
+				logger.Warn("Failed to parse stream response: %v", umErr)
 				continue
 			}
 
@@ -5262,7 +5656,9 @@ func HandleOpenAIImageEditStreamRequest(
 				imageChunkIndices[imageIndex]++
 			}
 			chunkIndex := imageChunkIndices[imageIndex]
-			// Build chunk with all OpenAI fields
+			// Build chunk with all OpenAI fields.
+			// Per-event mapping -> "convertor" (Convertor) stream phase.
+			convStart := time.Now()
 			chunk := &schemas.BifrostImageGenerationStreamResponse{
 				Type:         response.Type,
 				Index:        imageIndex, // Which image (0-N)
@@ -5277,7 +5673,6 @@ func HandleOpenAIImageEditStreamRequest(
 					Latency:    time.Since(lastChunkTime).Milliseconds(),
 				},
 			}
-
 			if postResponseConverter != nil {
 				if converted := postResponseConverter(chunk); converted != nil {
 					chunk = converted
@@ -5285,6 +5680,7 @@ func HandleOpenAIImageEditStreamRequest(
 					logger.Warn("postResponseConverter returned nil; leaving chunk unmodified")
 				}
 			}
+			schemas.AddStreamConvert(ctx, time.Since(convStart))
 
 			// Only set PartialImageIndex for partial images, not for completed events
 			if !isCompleted {
@@ -5399,7 +5795,16 @@ func HandleOpenAIImageVariationRequest(
 		}, nil
 	}
 
+	// Time the request conversion as the convertor phase.
+	ct, ch := providerUtils.StartPhaseSpan(ctx, "convertor")
 	openaiReq := ToOpenAIImageVariationRequest(request)
+	if ct != nil {
+		if openaiReq == nil {
+			ct.EndSpan(ch, schemas.SpanStatusError, "failed to convert request to OpenAI format")
+		} else {
+			ct.EndSpan(ch, schemas.SpanStatusOk, "")
+		}
+	}
 	if openaiReq == nil {
 		return nil, providerUtils.NewBifrostOperationError("failed to convert request to OpenAI format", nil)
 	}
@@ -5426,15 +5831,23 @@ func HandleOpenAIImageVariationRequest(
 	}
 
 	// Create multipart form
+	// Time the multipart encode as the request-marshal phase.
+	mt, mh := providerUtils.StartPhaseSpan(ctx, "request-marshal")
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	if err := parseImageVariationFormDataBodyFromRequest(writer, openaiReq, providerName); err != nil {
+		if mt != nil {
+			mt.EndSpan(mh, schemas.SpanStatusError, "multipart encode failed")
+		}
 		return nil, err
+	}
+	if mt != nil {
+		mt.EndSpan(mh, schemas.SpanStatusOk, "")
 	}
 
 	req.Header.SetContentType(writer.FormDataContentType())
 	bodyData := body.Bytes()
-	req.SetBody(bodyData)
+	timedSetBody(ctx, req, bodyData)
 
 	latency, bifrostErr, wait := providerUtils.MakeRequestWithContext(ctx, activeClient, req, resp)
 	defer wait()
@@ -5442,7 +5855,7 @@ func HandleOpenAIImageVariationRequest(
 		return nil, providerUtils.EnrichError(ctx, bifrostErr, nil, nil, sendBackRawRequest, sendBackRawResponse, latency)
 	}
 	// Extract provider response headers early so they're available on error paths too
-	providerResponseHeaders := providerUtils.ExtractProviderResponseHeaders(resp)
+	providerResponseHeaders := timedExtractResponseHeaders(ctx, resp)
 	ctx.SetValue(schemas.BifrostContextKeyProviderResponseHeaders, providerResponseHeaders)
 
 	if resp.StatusCode() != fasthttp.StatusOK {
@@ -5462,7 +5875,7 @@ func HandleOpenAIImageVariationRequest(
 	}
 
 	response := &schemas.BifrostImageGenerationResponse{}
-	_, rawResponse, bifrostErr := providerUtils.HandleProviderResponse(bodyBytes, response, nil, false, sendBackRawResponse)
+	_, rawResponse, bifrostErr := providerUtils.HandleProviderResponseCtx(ctx, bodyBytes, response, nil, false, sendBackRawResponse)
 	if bifrostErr != nil {
 		return nil, bifrostErr
 	}

@@ -224,6 +224,36 @@ func (provider *XAIProvider) ChatCompletionStream(ctx *schemas.BifrostContext, p
 	panic("unreachable")
 }
 
+// normalizeXAIChatResponse normalizes xAI's chat usage before the shared
+// OpenAI-compatible stream accumulator folds the terminal usage frame.
+func normalizeXAIChatResponse(response *schemas.BifrostChatResponse) *schemas.BifrostChatResponse {
+	normalizeXAIChatUsage(response)
+	return response
+}
+
+// normalizeXAIChatUsage converts xAI Chat Completions usage to OpenAI semantics.
+// xAI reports visible completion tokens separately from reasoning tokens, while
+// Bifrost's completion_tokens contract includes reasoning tokens. The total-token
+// identity makes the conversion idempotent and avoids double-counting payloads
+// that a provider or proxy has already normalized.
+//
+// The authoritative provider cost is normalized independently so it continues
+// to override catalog estimation when cost_in_usd_ticks is present.
+func normalizeXAIChatUsage(response *schemas.BifrostChatResponse) {
+	if response == nil || response.Usage == nil {
+		return
+	}
+
+	usage := response.Usage
+	if usage.CompletionTokensDetails != nil {
+		reasoningTokens := usage.CompletionTokensDetails.ReasoningTokens
+		if reasoningTokens > 0 && usage.TotalTokens == usage.PromptTokens+usage.CompletionTokens+reasoningTokens {
+			usage.CompletionTokens += reasoningTokens
+		}
+	}
+	usage.NormalizeProviderCost()
+}
+
 // Responses performs a responses request to the xAI API.
 func (provider *XAIProvider) Responses(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostResponsesRequest) (*schemas.BifrostResponsesResponse, *schemas.BifrostError) {
 	for attempt := 0; attempt < 2; attempt++ {
@@ -291,6 +321,18 @@ func (provider *XAIProvider) ResponsesStream(ctx *schemas.BifrostContext, postHo
 		return response, bifrostErr
 	}
 	panic("unreachable")
+}
+
+// normalizeXAIResponsesProviderCost converts the authoritative cost reported on
+// a terminal Responses stream event before pricing and stream accumulation read
+// it. Unlike chat completions, Responses output_tokens already includes reasoning
+// tokens, but using the provider cost also covers tools, discounts, and any other
+// provider-side billing adjustments.
+func normalizeXAIResponsesProviderCost(response *schemas.BifrostResponsesStreamResponse) *schemas.BifrostResponsesStreamResponse {
+	if response != nil && response.Response != nil {
+		response.Response.Usage.NormalizeProviderCost()
+	}
+	return response
 }
 
 // Embedding is not supported by the xAI provider.

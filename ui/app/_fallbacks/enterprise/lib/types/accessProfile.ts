@@ -46,6 +46,6 @@ export interface GetUserAccessProfilesResponse {
 // OSS has no creation-policy endpoint, but the fallback hook must preserve the
 // enterprise hook's return shape so shared virtual-key views type-check.
 export interface VKCreationPolicyResponse {
-	governed: boolean;
+	has_access_profile: boolean;
 	profile_name?: string;
 }
