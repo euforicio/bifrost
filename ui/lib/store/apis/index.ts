@@ -17,6 +17,7 @@ export * from "./oauth2ConsentApi";
 export * from "./oauth2SessionsApi";
 export * from "./pluginsApi";
 export * from "./providersApi";
+export * from "./providerCredentialsApi";
 export * from "./promptsApi";
 export * from "./sessionApi";
 export * from "./skillsApi";

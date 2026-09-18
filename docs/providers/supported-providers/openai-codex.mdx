@@ -1,0 +1,49 @@
+---
+title: "OpenAI Codex"
+description: "Use OpenAI Codex subscriptions through secure device authentication and the Responses API"
+icon: "openai"
+---
+
+## Overview
+
+The OpenAI Codex provider connects Bifrost to an OpenAI account through the official device authorization flow. It is intended for Codex subscription access and supports the OpenAI Responses API in streaming and non-streaming modes.
+
+### Supported operations
+
+| Operation | Non-streaming | Streaming |
+|---|---:|---:|
+| Responses API | ✅ | ✅ |
+| Chat Completions | ❌ | ❌ |
+| Text Completions | ❌ | ❌ |
+| Embeddings | ❌ | ❌ |
+
+Unsupported operations fail explicitly instead of being translated to a different API.
+
+## Connect an account
+
+1. Navigate to **Models** > **Model Providers** and add **OpenAI Codex**.
+2. Add a provider key and give it a recognizable account name.
+3. Select **Connect OpenAI account**.
+4. Open the displayed verification URL, enter the code, and approve access.
+5. Return to Bifrost. The account status changes to **Connected** when authorization completes.
+
+The dashboard never displays or returns access, refresh, or ID tokens. Bifrost encrypts them in its config store and refreshes them before expiry.
+
+## Multiple accounts
+
+Every OpenAI Codex provider key has its own account binding. Create one key per account, then use the existing weights, model allowlists, routing rules, budgets, and virtual-key policies to control which account serves a request. Disconnecting or refreshing one account does not affect another.
+
+## Requests
+
+Use the normal Bifrost Responses endpoint with an `openai-codex/` model prefix:
+
+```bash
+curl http://localhost:8080/v1/responses \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai-codex/gpt-5.5-codex",
+    "input": "Explain this repository"
+  }'
+```
+
+Bifrost resolves the selected key's encrypted account credential at request time and supplies the account-scoped authorization headers to the upstream Codex Responses endpoint.

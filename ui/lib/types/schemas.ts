@@ -542,6 +542,8 @@ export const modelProviderKeySchema = z
 		},
 	);
 
+export const accountProviderKeySchema = modelProviderKeySchema;
+
 // Network config schema
 export const networkConfigSchema = z
 	.object({

@@ -44,6 +44,12 @@ func (baseAccount *BaseAccount) GetKeysForProvider(ctx context.Context, provider
 		return nil, err
 	}
 	keys := config.Keys
+	if baseAccount.store.ProviderCredentialManager != nil {
+		keys = append([]schemas.Key(nil), keys...)
+		for i := range keys {
+			keys[i].CredentialResolver = baseAccount.store.ProviderCredentialManager
+		}
+	}
 	if v := ctx.Value(schemas.BifrostContextKeyGovernanceIncludeOnlyKeys); v != nil {
 		if includeOnlyKeys, ok := v.([]string); ok {
 			if len(includeOnlyKeys) == 0 {

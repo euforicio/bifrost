@@ -93,15 +93,18 @@ var dynamicallyConfigurableProviders = []schemas.ModelProvider{
 	schemas.BedrockMantle,
 	schemas.Cerebras,
 	schemas.Cohere,
+	schemas.CursorProvider,
 	schemas.Databricks,
 	schemas.DeepSeek,
 	schemas.Elevenlabs,
 	schemas.Gemini,
+	schemas.GithubCopilot,
 	schemas.Groq,
 	schemas.HuggingFace,
 	schemas.Mistral,
 	schemas.Nebius,
 	schemas.OpenAI,
+	schemas.OpenAICodex,
 	schemas.OpenRouter,
 	schemas.Parasail,
 	schemas.Perplexity,
@@ -134,7 +137,7 @@ func providerRequiresKey(customConfig *schemas.CustomProviderConfig) bool {
 // Some providers like Vertex and Bedrock have their credentials in additional key configs.
 // Ollama and SGL are keyless (API Key is optional) but use per-key server URLs.
 func CanProviderKeyValueBeEmpty(providerKey schemas.ModelProvider) bool {
-	return providerKey == schemas.Vertex || providerKey == schemas.Bedrock || providerKey == schemas.BedrockMantle || providerKey == schemas.VLLM || providerKey == schemas.Azure || providerKey == schemas.Ollama || providerKey == schemas.SGL || providerKey == schemas.Databricks
+	return providerKey == schemas.Vertex || providerKey == schemas.Bedrock || providerKey == schemas.BedrockMantle || providerKey == schemas.VLLM || providerKey == schemas.Azure || providerKey == schemas.Ollama || providerKey == schemas.SGL || providerKey == schemas.Databricks || providerKey == schemas.OpenAICodex || providerKey == schemas.CursorProvider || providerKey == schemas.XAI
 }
 
 // isKeySkippingAllowed gates SkipKeySelection on the provider this attempt resolved to. The flag
@@ -187,6 +190,9 @@ func validateRequestAfterPreRequestHooks(req *schemas.BifrostRequest) *schemas.B
 
 // validateKey validates the given key.
 func validateKey(providerKey schemas.ModelProvider, key *schemas.Key) error {
+	if (providerKey == schemas.OpenAICodex || providerKey == schemas.CursorProvider || providerKey == schemas.XAI) && key.Value.GetValue() == "" && key.CredentialResolver == nil {
+		return fmt.Errorf("credential_resolver is required when key value is empty for provider %s", providerKey)
+	}
 	// Validate the key for the provider
 	switch providerKey {
 	case schemas.Azure:

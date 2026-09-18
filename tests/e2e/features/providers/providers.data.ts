@@ -33,9 +33,11 @@ export function createCustomProviderData(overrides: Partial<CustomProviderConfig
  */
 export const KNOWN_PROVIDERS = [
   'openai',
+  'openai-codex',
   'anthropic',
   'gemini',
   'cohere',
+  'cursor',
   'bedrock',
   'azure',
   'vertex',
@@ -46,6 +48,8 @@ export const KNOWN_PROVIDERS = [
   'nebius',
   'sambanova',
 ] as const
+
+export const ACCOUNT_LOGIN_PROVIDERS = ['openai-codex', 'xai', 'cursor'] as const
 
 /**
  * Sample API keys for testing (fake values)

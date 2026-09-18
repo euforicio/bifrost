@@ -5,6 +5,7 @@ import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { SettingsIcon, Trash } from "lucide-react";
 import { useMemo, useState } from "react";
 import ProviderConfigSheet from "../dialogs/providerConfigSheet";
+import ProviderAccountsCard from "./providerAccountsCard";
 import ModelProviderKeysTableView from "./modelProviderKeysTableView";
 
 interface Props {
@@ -16,6 +17,7 @@ export default function ModelProviderConfig({ provider, onRequestDelete }: Props
 	const [showConfigSheet, setShowConfigSheet] = useState(false);
 	const hasDeleteProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Delete);
 	const hasUpdateProviderAccess = useRbac(RbacResource.ModelProvider, RbacOperation.Update);
+	const supportsProviderAccounts = provider.name === "openai-codex" || provider.name === "xai" || provider.name === "cursor";
 
 	const showApiKeys = useMemo(() => {
 		if (provider.custom_provider_config) {
@@ -57,7 +59,11 @@ export default function ModelProviderConfig({ provider, onRequestDelete }: Props
 	return (
 		<div className="flex w-full flex-col gap-2">
 			<ProviderConfigSheet show={showConfigSheet} onCancel={() => setShowConfigSheet(false)} provider={provider} />
-			<ModelProviderKeysTableView provider={provider} headerActions={editConfigButton} isKeyless={!showApiKeys} />
+			{supportsProviderAccounts ? (
+				<ProviderAccountsCard provider={provider} headerActions={editConfigButton} />
+			) : (
+				<ModelProviderKeysTableView provider={provider} headerActions={editConfigButton} isKeyless={!showApiKeys} />
+			)}
 		</div>
 	);
 }

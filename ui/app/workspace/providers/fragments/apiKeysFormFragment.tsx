@@ -157,6 +157,11 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 	// those fields genuinely are optional, and a static "(Required)" would contradict the
 	// section note telling the operator they can leave them blank.
 	const copilotAppSuffix = hasCopilotApiToken(form.watch("key.value")) ? "(Optional)" : "(Required)";
+	const isOpenAICodex = effectiveProvider === "openai-codex";
+	const isXAI = effectiveProvider === "xai";
+	const isCursor = effectiveProvider === "cursor";
+	const nameLabel = isOpenAICodex || isCursor ? "Account name" : isXAI ? "Credential name" : "Name";
+	const namePlaceholder = isOpenAICodex ? "Work ChatGPT" : isCursor ? "Work Cursor" : isXAI ? "Production xAI" : "Production Key";
 	const isKeylessProvider = isOllama || isSGL;
 	const supportsBatchAPI = BATCH_SUPPORTED_PROVIDERS.includes(effectiveProvider);
 
@@ -280,9 +285,9 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 						name={`key.name`}
 						render={({ field }) => (
 							<FormItem>
-								<FormLabel>Name</FormLabel>
+								<FormLabel>{nameLabel}</FormLabel>
 								<FormControl>
-									<Input placeholder="Production Key" type="text" {...field} />
+									<Input placeholder={namePlaceholder} type="text" {...field} />
 								</FormControl>
 								<FormMessage />
 							</FormItem>
@@ -342,14 +347,14 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 				/>
 			</div>
 			{/* Hide API Key field for providers with dedicated auth tabs */}
-			{!isAzure && !isBedrock && !isBedrockMantle && !isVertex && !isDatabricks && (
+			{!isAzure && !isBedrock && !isBedrockMantle && !isVertex && !isDatabricks && !isOpenAICodex && !isCursor && (
 				<FormField
 					control={control}
 					name={`key.value`}
 					render={({ field }) => (
 						<FormItem>
 							<FormLabel>
-								{isGithubCopilot ? "Copilot API Token" : "API Key"} {isVLLM || isGithubCopilot ? "(Optional)" : ""}
+								{isGithubCopilot ? "Copilot API Token" : "API Key"} {isVLLM || isGithubCopilot || isXAI ? "(Optional)" : ""}
 							</FormLabel>
 							{isGithubCopilot && (
 								<FormDescription>
@@ -365,6 +370,9 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 									{...field}
 								/>
 							</FormControl>
+							{isXAI ? (
+								<FormDescription>Keep using an xAI API key, or leave this blank and connect an xAI account after saving.</FormDescription>
+							) : null}
 							<FormMessage />
 						</FormItem>
 					)}

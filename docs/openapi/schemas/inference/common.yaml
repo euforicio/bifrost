@@ -29,6 +29,8 @@ ModelProvider:
     - xai
     - replicate
     - vllm
+    - openai-codex
+    - cursor
     - runway
     - runware
     - fireworks

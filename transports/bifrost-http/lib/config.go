@@ -39,6 +39,7 @@ import (
 	"github.com/maximhq/bifrost/framework/oauth2"
 	"github.com/maximhq/bifrost/framework/objectstore"
 	plugins "github.com/maximhq/bifrost/framework/plugins"
+	"github.com/maximhq/bifrost/framework/providercredentials"
 	"github.com/maximhq/bifrost/framework/vectorstore"
 	"github.com/maximhq/bifrost/plugins/compat"
 	"github.com/maximhq/bifrost/plugins/governance"
@@ -575,6 +576,9 @@ type Config struct {
 	// LogsStoreConfig is the effective logs store configuration used to create LogsStore.
 	LogsStoreConfig *logstore.Config
 	ObjectStore     objectstore.ObjectStore
+	// ProviderCredentialManager owns encrypted multi-account OAuth credentials
+	// for subscription-backed model providers.
+	ProviderCredentialManager *providercredentials.Manager
 
 	// oauth2SigningKey caches the immutable OAuth2 signing key used to sign and
 	// verify Bifrost-issued /mcp JWTs. The key is created once via an idempotent
@@ -1073,6 +1077,7 @@ func initStores(ctx context.Context, config *Config, configData *ConfigData, con
 
 	// Clear restart required flag on server startup
 	if config.ConfigStore != nil {
+		config.ProviderCredentialManager = providercredentials.NewManager(config.ConfigStore)
 		if err = config.ConfigStore.ClearRestartRequiredConfig(ctx); err != nil {
 			logger.Warn("failed to clear restart required config: %v", err)
 		}
@@ -6827,13 +6832,33 @@ func (c *Config) RemoveProviderKey(ctx context.Context, provider schemas.ModelPr
 			skipDBUpdate = skip
 		}
 	}
+	var deletedCredentials []configstoreTables.TableProviderCredential
+	durableDeleteCommitted := false
 	if c.ConfigStore != nil && !skipDBUpdate {
-		if err := c.ConfigStore.DeleteProviderKey(ctx, provider, keyID); err != nil {
+		if err := c.ConfigStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
+			if c.ProviderCredentialManager != nil {
+				if err := tx.WithContext(ctx).
+					Where("provider = ? AND provider_key_id = ?", string(provider), keyID).
+					Find(&deletedCredentials).Error; err != nil {
+					return fmt.Errorf("failed to load provider account credential for deletion: %w", err)
+				}
+				if err := tx.WithContext(ctx).
+					Where("provider = ? AND provider_key_id = ?", string(provider), keyID).
+					Delete(&configstoreTables.TableProviderCredential{}).Error; err != nil {
+					return fmt.Errorf("failed to delete provider account credential: %w", err)
+				}
+			}
+			return c.ConfigStore.DeleteProviderKey(ctx, provider, keyID, tx)
+		}); err != nil {
 			if errors.Is(err, configstore.ErrNotFound) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("failed to delete provider key from store: %w", err)
 		}
+		durableDeleteCommitted = true
+	}
+	if c.ProviderCredentialManager != nil {
+		c.ProviderCredentialManager.CancelCredentialLogins(provider, keyID)
 	}
 
 	c.Providers[provider] = updatedConfig
@@ -6843,6 +6868,22 @@ func (c *Config) RemoveProviderKey(ctx context.Context, provider schemas.ModelPr
 	c.Mu.Lock()
 
 	if clientErr != nil {
+		if durableDeleteCommitted {
+			compensationErr := c.ConfigStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
+				if err := c.ConfigStore.CreateProviderKey(ctx, provider, existingConfig.Keys[index], tx); err != nil {
+					return fmt.Errorf("failed to restore provider key: %w", err)
+				}
+				if len(deletedCredentials) > 0 {
+					if err := tx.WithContext(ctx).Create(&deletedCredentials).Error; err != nil {
+						return fmt.Errorf("failed to restore provider account credential: %w", err)
+					}
+				}
+				return nil
+			})
+			if compensationErr != nil {
+				return fmt.Errorf("failed to update provider: %w; durable delete compensation failed: %v", clientErr, compensationErr)
+			}
+		}
 		if reflect.DeepEqual(c.Providers[provider], updatedConfig) {
 			c.Providers[provider] = existingConfig
 		}
@@ -6865,9 +6906,21 @@ func (c *Config) RemoveProvider(ctx context.Context, provider schemas.ModelProvi
 		}
 	}
 	if c.ConfigStore != nil && !skipDBUpdate {
-		if err := c.ConfigStore.DeleteProvider(ctx, provider); err != nil {
+		if err := c.ConfigStore.ExecuteTransaction(ctx, func(tx *gorm.DB) error {
+			if c.ProviderCredentialManager != nil {
+				if err := tx.WithContext(ctx).
+					Where("provider = ?", string(provider)).
+					Delete(&configstoreTables.TableProviderCredential{}).Error; err != nil {
+					return fmt.Errorf("failed to delete provider account credentials: %w", err)
+				}
+			}
+			return c.ConfigStore.DeleteProvider(ctx, provider, tx)
+		}); err != nil {
 			return fmt.Errorf("failed to delete provider config from store: %w", err)
 		}
+	}
+	if c.ProviderCredentialManager != nil {
+		c.ProviderCredentialManager.CancelProviderLogins(provider)
 	}
 	if _, exists := c.Providers[provider]; !exists {
 		return nil

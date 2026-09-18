@@ -478,6 +478,12 @@
         "xai": {
           "$ref": "#/$defs/provider"
         },
+        "openai-codex": {
+          "$ref": "#/$defs/provider"
+        },
+        "cursor": {
+          "$ref": "#/$defs/provider"
+        },
         "runway": {
           "$ref": "#/$defs/provider"
         },
@@ -8741,6 +8747,8 @@
             "huggingface",
             "nebius",
             "xai",
+            "openai-codex",
+            "cursor",
             "replicate",
             "vllm",
             "runway",
