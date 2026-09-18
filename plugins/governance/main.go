@@ -1120,12 +1120,14 @@ func (p *GovernancePlugin) validateSubscriptionPricing(ctx *schemas.BifrostConte
 	if request.Provider != schemas.OpenAICodex && request.Provider != schemas.CursorProvider {
 		return nil
 	}
-	effectiveVK := request.VirtualKey
-	if bifrost.GetBoolFromContext(ctx, schemas.BifrostContextKeySkipVirtualKeyUsageTracking) {
-		effectiveVK = ""
+	// Provider/model dollar budgets still require a catalog quote. The pre-rebase
+	// helper collected IDs from VK + user + provider; the store now exposes the
+	// same budgets through the gather primitives.
+	budgets, _ := p.store.GlobalProviderLimits(ctx, request.Provider)
+	if len(budgets) == 0 {
+		budgets, _ = p.store.GlobalModelLimits(ctx, request.Provider, request.Model)
 	}
-	budgetIDs, _ := p.store.CollectApplicableGovernanceIDs(ctx, effectiveVK, request.UserID, request.Provider, request.Model)
-	if len(budgetIDs) == 0 {
+	if len(budgets) == 0 {
 		return nil
 	}
 	scopes := modelcatalog.PricingLookupScopesFromContext(ctx, string(request.Provider))
