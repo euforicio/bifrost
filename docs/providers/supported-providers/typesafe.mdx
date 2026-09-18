@@ -40,7 +40,7 @@ Jev is text-only. Do not send images, audio, or video. Do not ask Jev to do math
 1. Navigate to **Models** > **Model Providers**. Click **Add New Provider** and select **TypeSafe**.
 2. Click **Add Key**.
 3. Set a name for your key.
-4. Use an environment variable: `env.TYPESAFE_API_KEY`. Do not commit the secret.
+4. Use an environment variable: `env.TYPESAFE_API_KEY` (or a Bifrost key-store entry that resolves to that env). Never paste a literal key into config.json, the UI, CI, or the repo.
 5. Set **Allowed Models** to **All Models** or `jev-latest` / `jev-1.13.0`.
 6. Leave the base URL at `https://api.typesafe.ai` unless you are pointing at a TypeSafe-compatible endpoint.
 7. Save the provider configuration.
@@ -92,3 +92,7 @@ See [Complexity Router](/features/governance/complexity-router#jev-classifier).
 | `jev-preview` | Preview alias (currently the same as `jev-latest`) |
 
 Public pricing (TypeSafe docs): $0.042 / MTok input; output free. Rate limits are dynamic (429 + `Retry-After`). Context is 64k total, 32k for state plus the longest question.
+
+## Testing
+
+Unit and CI coverage uses **httptest fixtures only**. Do not inject `TYPESAFE_API_KEY` into GitHub Actions. Live smoke against `https://api.typesafe.ai` is an operational check: configure the provider with `env.TYPESAFE_API_KEY` and run it outside CI.

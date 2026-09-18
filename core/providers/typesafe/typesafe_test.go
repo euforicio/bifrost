@@ -1,3 +1,6 @@
+// TypeSafe tests are httptest fixtures only. They must not dial
+// api.typesafe.ai or read TYPESAFE_API_KEY. Live smoke is operational
+// (env.TYPESAFE_API_KEY in the Bifrost key store), never CI.
 package typesafe
 
 import (

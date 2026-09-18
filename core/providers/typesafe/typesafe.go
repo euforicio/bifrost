@@ -22,7 +22,8 @@ type TypeSafeProvider struct {
 }
 
 // NewTypeSafeProvider creates a TypeSafe provider. Default base URL is
-// https://api.typesafe.ai. Auth is Authorization: Bearer <TYPESAFE_API_KEY>.
+// https://api.typesafe.ai. Auth is Authorization: Bearer from the configured
+// key (must be env.TYPESAFE_API_KEY or a key-store pointer to that env).
 func NewTypeSafeProvider(config *schemas.ProviderConfig, logger schemas.Logger) *TypeSafeProvider {
 	config.CheckAndSetDefaults()
 

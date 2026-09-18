@@ -97,7 +97,7 @@ An LLM-classified turn carries no similarity score. A chat completion has no equ
 
 ## Jev classifier
 
-[TypeSafe Jev](/providers/supported-providers/typesafe) is a native System One evaluate model, not a chat fake. The Complexity Router uses the configured `jev.provider` + `jev.model` through Bifrost's provider queue (keys, retries, `network_config`). There is no hard-coded HTTP call that skips Providers config.
+[TypeSafe Jev](/providers/supported-providers/typesafe) is a native System One evaluate model, not a chat fake. The Complexity Router uses the configured `jev.provider` + `jev.model` through Bifrost's provider queue (keys, retries, `network_config`). There is no hard-coded HTTP call that skips Providers config. The TypeSafe key must be `env.TYPESAFE_API_KEY` (or a Bifrost key-store entry that resolves to that env) — never a literal secret in config.json, the UI, CI, or the repo.
 
 Two clean paths:
 
@@ -230,6 +230,21 @@ Reference-phrase lists are stored in the existing `keywords` fields (`simple_key
 
 ```json
 {
+  "providers": {
+    "typesafe": {
+      "keys": [
+        {
+          "name": "typesafe-1",
+          "value": "env.TYPESAFE_API_KEY",
+          "models": ["*"],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "https://api.typesafe.ai"
+      }
+    }
+  },
   "governance": {
     "complexity_analyzer_config": {
       "semantic": {
@@ -287,7 +302,7 @@ Reference-phrase lists are stored in the existing `keywords` fields (`simple_key
 | `llm.prompt` | string | Shipped default guidance | Replaces the shipped classification guidance (max 4,000 characters). The tier-name and response-format reinforcement is appended by Bifrost regardless and cannot be edited |
 | `llm.message_history_count` | integer | `1` | Number of recent user messages sent to the classifier, oldest first (1–10) |
 | `llm.count_toward_budgets` | boolean | `false` | Count classification completion cost toward virtual-key budgets (record-only, never enforced) |
-| `jev.provider` | string | Required when Jev is primary or `fallback` is `jev` | Provider used to run System One (typically `typesafe`); must have an enabled key |
+| `jev.provider` | string | Required when Jev is primary or `fallback` is `jev` | Provider used to run System One (typically `typesafe`); the key value must be `env.TYPESAFE_API_KEY` or a key-store pointer to that env |
 | `jev.model` | string | Required when Jev is used | Jev model (`jev-latest` or a versioned id such as `jev-1.13.0`) |
 | `jev.timeout` | duration | `1.5s` | Ceiling on the System One call; exceeding it skips tier routing for that request |
 | `jev.min_confidence` | number | `0.6` | Choice.confidence floor. Below it no `complexity_tier` is published |
