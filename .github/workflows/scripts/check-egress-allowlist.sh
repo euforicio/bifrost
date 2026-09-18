@@ -162,6 +162,8 @@ NOT_DIALLED_HOSTS = {
     "developers.openai.com": "doc link in a folder description",
     "docs.aws.amazon.com": "doc link in a folder description",
     "docs.x.ai": "doc link in a folder description",
+    "ai.google.dev": "doc link in a Gemini thinking-level case description",
+    "learn.microsoft.com": "doc comment in an Azure OpenAI files case, not fetched at run time",
     "schema.getpostman.com": "Postman collection schema declaration, not fetched at run time",
     # Identifiers that merely look like endpoints.
     "s3.amazonaws.com": "XML namespace URI in a ListBucketResult document; namespaces are names, not fetches",
