@@ -1421,6 +1421,14 @@ func GenerateComplexityAnalyzerConfigHashes(config *ComplexityAnalyzerConfig) (C
 		hashes.LLMSettings = settingsHash
 	}
 
+	if normalized.Jev != nil {
+		settingsHash, err := hashComplexityValue(normalized.Jev)
+		if err != nil {
+			return ComplexityAnalyzerConfigHashes{}, fmt.Errorf("failed to hash jev settings: %w", err)
+		}
+		hashes.JevSettings = settingsHash
+	}
+
 	if normalized.Session != nil {
 		settingsHash, err := hashComplexityValue(normalized.Session)
 		if err != nil {

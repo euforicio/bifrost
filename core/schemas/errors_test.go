@@ -414,6 +414,7 @@ var modelAddressingByRequestType = map[string]bool{
 	"RerankRequest":                true,
 	"OCRRequest":                   false,
 	"CountTokensRequest":           true,
+	"SystemOneRequest":             true,
 
 	// Addresses a resource id too, so a 404 is ambiguous.
 	"ResponsesRetrieveRequest":       false,

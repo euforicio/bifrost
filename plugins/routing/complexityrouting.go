@@ -20,6 +20,7 @@ type complexityProposal struct {
 	MatchedExemplar string
 	LogLevel        schemas.LogLevel
 	LogMessage      string
+	FailClosed      error
 }
 
 func (p *RoutingPlugin) computeComplexity(
@@ -70,6 +71,7 @@ func (p *RoutingPlugin) computeComplexity(
 
 	if !sessionActive {
 		proposal := p.classifyComplexityInput(ctx, input)
+		rememberJevFailClosed(ctx, proposal.FailClosed)
 		publishComplexityProposal(ctx, proposal)
 		return proposal.Result
 	}
@@ -79,6 +81,7 @@ func (p *RoutingPlugin) computeComplexity(
 	if loadErr != nil {
 		p.logComplexitySessionStoreError("inspect", loadErr)
 		proposal := p.classifyComplexityInput(ctx, input)
+		rememberJevFailClosed(ctx, proposal.FailClosed)
 		publishComplexityProposal(ctx, proposal)
 		return proposal.Result
 	}
@@ -103,6 +106,7 @@ func (p *RoutingPlugin) computeComplexity(
 	}
 
 	proposal := p.classifyComplexityInput(ctx, input)
+	rememberJevFailClosed(ctx, proposal.FailClosed)
 	proposedTier := ""
 	if proposal.Result != nil {
 		proposedTier = proposal.Result.Tier
@@ -161,6 +165,9 @@ func (p *RoutingPlugin) computeComplexity(
 
 func (p *RoutingPlugin) classifyComplexityInput(ctx *schemas.BifrostContext, input complexity.ComplexityInput) complexityProposal {
 	if p.semanticClassifier == nil || !p.semanticClassifier.IsConfigured() {
+		if p.jevClassifier != nil && p.jevClassifier.PrimaryEnabled() {
+			return p.classifyJevComplexity(ctx, input)
+		}
 		if p.logger != nil {
 			p.logger.Debug("[Routing] %s", noSemanticClassifierLog)
 		}
@@ -228,6 +235,14 @@ func (p *RoutingPlugin) classifyComplexityInput(ctx *schemas.BifrostContext, inp
 		)
 	}
 
+	if p.jevClassifier != nil && p.jevClassifier.FallbackEnabled() {
+		ctx.AppendRoutingEngineLog(
+			schemas.RoutingEngineRoutingRule,
+			schemas.LogLevelInfo,
+			unavailableCause+"; falling back to the Jev classifier",
+		)
+		return p.classifyJevComplexity(ctx, input)
+	}
 	if p.llmClassifier != nil && p.llmClassifier.FallbackEnabled() {
 		ctx.AppendRoutingEngineLog(
 			schemas.RoutingEngineRoutingRule,
@@ -282,6 +297,23 @@ func (p *RoutingPlugin) logComplexitySessionStoreError(operation string, err err
 	if p.logger != nil {
 		p.logger.Warn("[Routing] complexity session store %s failed: %v", operation, err)
 	}
+}
+
+type jevFailClosedKey struct{}
+
+func rememberJevFailClosed(ctx *schemas.BifrostContext, err error) {
+	if ctx == nil || err == nil {
+		return
+	}
+	ctx.SetValue(jevFailClosedKey{}, err)
+}
+
+func jevFailClosedFromContext(ctx *schemas.BifrostContext) error {
+	if ctx == nil {
+		return nil
+	}
+	err, _ := ctx.Value(jevFailClosedKey{}).(error)
+	return err
 }
 
 func publishComplexityProposal(ctx *schemas.BifrostContext, proposal complexityProposal) {

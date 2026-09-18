@@ -54,6 +54,8 @@ type RoutingManager interface {
 	RetryComplexitySemanticWarmup(ctx context.Context) (complexity.SemanticStatusInfo, bool, error)
 	// GetComplexityLLMStatus returns the llm fallback classifier's readiness.
 	GetComplexityLLMStatus(ctx context.Context) (complexity.LLMStatusInfo, error)
+	// GetComplexityJevStatus returns the TypeSafe/Jev classifier's readiness.
+	GetComplexityJevStatus(ctx context.Context) (complexity.JevStatusInfo, error)
 	// ListComplexityGenerations reports the exemplar generations the vector
 	// store holds. Retired ones are not reclaimed on a shared external store, so
 	// this is the only way to see what has accumulated.
@@ -68,6 +70,7 @@ type RoutingManager interface {
 type complexityStatusResponse struct {
 	complexity.SemanticStatusInfo
 	LLM *complexity.LLMStatusInfo `json:"llm,omitempty"`
+	Jev *complexity.JevStatusInfo `json:"jev,omitempty"`
 	// LLMDefaultPrompt is the shipped classification guidance, served so the
 	// UI can seed its prompt editor and offer a reset without holding a copy
 	// that drifts from the gateway's. It is the editable half only; the fixed
@@ -430,6 +433,11 @@ func (h *RoutingHandler) getComplexitySemanticStatus(ctx *fasthttp.RequestCtx) {
 	} else {
 		response.LLM = &llmStatus
 		response.LLMDefaultPrompt = complexity.DefaultLLMClassifierGuidance()
+	}
+	if jevStatus, jevErr := h.routingManager.GetComplexityJevStatus(ctx); jevErr != nil {
+		logger.Warn("failed to get jev complexity status: %v", jevErr)
+	} else {
+		response.Jev = &jevStatus
 	}
 	SendJSON(ctx, response)
 }

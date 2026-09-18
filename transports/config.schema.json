@@ -495,6 +495,9 @@
         },
         "github-copilot": {
           "$ref": "#/$defs/provider_with_github_copilot_config"
+        },
+        "typesafe": {
+          "$ref": "#/$defs/provider"
         }
       },
       "additionalProperties": true
@@ -4033,6 +4036,9 @@
         "llm": {
           "$ref": "#/$defs/complexity_llm_config"
         },
+        "jev": {
+          "$ref": "#/$defs/complexity_jev_config"
+        },
         "session": {
           "$ref": "#/$defs/complexity_session_config"
         }
@@ -4074,6 +4080,25 @@
           },
           "then": {
             "required": ["llm"]
+          }
+        },
+        {
+          "description": "Selecting the jev fallback without configuring the classifier it names is rejected.",
+          "if": {
+            "required": ["semantic"],
+            "properties": {
+              "semantic": {
+                "required": ["fallback"],
+                "properties": {
+                  "fallback": {
+                    "const": "jev"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "required": ["jev"]
           }
         }
       ],
@@ -4142,8 +4167,8 @@
         },
         "fallback": {
           "type": "string",
-          "enum": ["none", "llm"],
-          "description": "What answers when semantic classification produces no tier (a match below min_similarity, a timeout, an unfinished warmup): 'none' (the default) records the request as 'skipped'; 'llm' asks the chat model configured in the analyzer's llm block, which is required when this is set."
+          "enum": ["none", "llm", "jev"],
+          "description": "What answers when semantic classification produces no tier (a match below min_similarity, a timeout, an unfinished warmup): 'none' (the default) records the request as 'skipped'; 'llm' asks the chat model configured in the analyzer's llm block; 'jev' asks the TypeSafe System One model configured in the analyzer's jev block."
         }
       },
       "required": ["provider", "embedding_model"],
@@ -4191,6 +4216,54 @@
         "count_toward_budgets": {
           "type": "boolean",
           "description": "Record classification completion cost against governance budgets (record-only, never enforced; default: false)"
+        }
+      },
+      "required": ["provider", "model"],
+      "additionalProperties": false
+    },
+    "complexity_jev_config": {
+      "type": "object",
+      "description": "TypeSafe/Jev System One classifier settings. Primary when no semantic block is present; otherwise used when complexity_semantic_config.fallback selects 'jev'. State is always the latest user message. Choice.confidence below min_confidence leaves complexity_tier unpublished.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider used to run the System One classification request (typically typesafe)"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Jev model (jev-latest or a versioned id such as jev-1.13.0)"
+        },
+        "timeout": {
+          "description": "Per-request classification timeout (duration string like '1.5s' or milliseconds as a number; default: 1.5s). On timeout no complexity tier is published.",
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)$"
+            },
+            {
+              "type": "number",
+              "minimum": 0
+            }
+          ],
+          "default": "1.5s"
+        },
+        "min_confidence": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 1,
+          "description": "Choice.confidence floor (default: 0.6). Below it no complexity_tier is published."
+        },
+        "message_history_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1,
+          "description": "Jev always evaluates the latest user message only. Must be 1."
+        },
+        "count_toward_budgets": {
+          "type": "boolean",
+          "description": "Record classification cost against governance budgets (record-only, never enforced; default: false)"
         }
       },
       "required": ["provider", "model"],
@@ -8755,7 +8828,8 @@
             "runware",
             "fireworks",
             "sarvam",
-            "wafer"
+            "wafer",
+            "typesafe"
           ],
           "description": "Base provider type to extend"
         },
@@ -8820,6 +8894,9 @@
               "type": "boolean"
             },
             "ocr": {
+              "type": "boolean"
+            },
+            "system_one": {
               "type": "boolean"
             },
             "speech": {

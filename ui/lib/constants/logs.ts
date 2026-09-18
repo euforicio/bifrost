@@ -34,6 +34,7 @@ export const KnownProvidersNames = [
 	"wafer",
 	"databricks",
 	"github-copilot",
+	"typesafe",
 ] as const;
 
 // Local Provider type derived from KNOWN_PROVIDERS constant
@@ -75,6 +76,7 @@ export const Statuses = ["success", "error", "processing", "cancelled"] as const
 
 export const RequestTypes = [
 	"list_models",
+	"system_one",
 	"text_completion",
 	"text_completion_stream",
 	"chat_completion",
@@ -175,6 +177,7 @@ export const ProviderLabels: Record<ProviderName, string> = {
 	wafer: "Wafer",
 	databricks: "Databricks",
 	"github-copilot": "GitHub Copilot",
+	typesafe: "TypeSafe",
 } as const;
 
 // Helper function to get provider label, supporting custom providers

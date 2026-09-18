@@ -77,6 +77,7 @@ const (
 	Wafer          ModelProvider = "wafer"
 	GithubCopilot  ModelProvider = "github-copilot"
 	Databricks     ModelProvider = "databricks"
+	TypeSafe       ModelProvider = "typesafe"
 )
 
 // SupportedBaseProviders is the list of base providers allowed for custom providers.
@@ -126,6 +127,7 @@ var StandardProviders = []ModelProvider{
 	Wafer,
 	GithubCopilot,
 	Databricks,
+	TypeSafe,
 }
 
 // RequestType represents the type of request being made to a provider.
@@ -194,6 +196,7 @@ const (
 	ContainerFileDeleteRequest     RequestType = "container_file_delete"
 	RerankRequest                  RequestType = "rerank"
 	OCRRequest                     RequestType = "ocr"
+	SystemOneRequest               RequestType = "system_one"
 	CountTokensRequest             RequestType = "count_tokens"
 	CompactionRequest              RequestType = "compaction"
 	MCPToolExecutionRequest        RequestType = "mcp_tool_execution"
@@ -587,6 +590,7 @@ type BifrostRequest struct {
 	EmbeddingRequest             *BifrostEmbeddingRequest
 	RerankRequest                *BifrostRerankRequest
 	OCRRequest                   *BifrostOCRRequest
+	SystemOneRequest             *BifrostSystemOneRequest
 	SpeechRequest                *BifrostSpeechRequest
 	TranscriptionRequest         *BifrostTranscriptionRequest
 	ImageGenerationRequest       *BifrostImageGenerationRequest
@@ -656,6 +660,8 @@ func (br *BifrostRequest) GetRequestFields() (provider ModelProvider, model stri
 		return br.RerankRequest.Provider, br.RerankRequest.Model, br.RerankRequest.Fallbacks
 	case br.OCRRequest != nil:
 		return br.OCRRequest.Provider, br.OCRRequest.Model, br.OCRRequest.Fallbacks
+	case br.SystemOneRequest != nil:
+		return br.SystemOneRequest.Provider, br.SystemOneRequest.Model, br.SystemOneRequest.Fallbacks
 	case br.SpeechRequest != nil:
 		return br.SpeechRequest.Provider, br.SpeechRequest.Model, br.SpeechRequest.Fallbacks
 	case br.TranscriptionRequest != nil:
@@ -809,6 +815,8 @@ func (br *BifrostRequest) SetProvider(provider ModelProvider) {
 		br.RerankRequest.Provider = provider
 	case br.OCRRequest != nil:
 		br.OCRRequest.Provider = provider
+	case br.SystemOneRequest != nil:
+		br.SystemOneRequest.Provider = provider
 	case br.SpeechRequest != nil:
 		br.SpeechRequest.Provider = provider
 	case br.TranscriptionRequest != nil:
@@ -864,6 +872,8 @@ func (br *BifrostRequest) SetModel(model string) {
 		br.RerankRequest.Model = model
 	case br.OCRRequest != nil:
 		br.OCRRequest.Model = model
+	case br.SystemOneRequest != nil:
+		br.SystemOneRequest.Model = model
 	case br.SpeechRequest != nil:
 		br.SpeechRequest.Model = model
 	case br.TranscriptionRequest != nil:
@@ -921,6 +931,8 @@ func (br *BifrostRequest) SetFallbacks(fallbacks []Fallback) {
 		br.RerankRequest.Fallbacks = fallbacks
 	case br.OCRRequest != nil:
 		br.OCRRequest.Fallbacks = fallbacks
+	case br.SystemOneRequest != nil:
+		br.SystemOneRequest.Fallbacks = fallbacks
 	case br.SpeechRequest != nil:
 		br.SpeechRequest.Fallbacks = fallbacks
 	case br.TranscriptionRequest != nil:
@@ -964,6 +976,8 @@ func (br *BifrostRequest) SetRawRequestBody(rawRequestBody []byte) {
 		br.RerankRequest.RawRequestBody = rawRequestBody
 	case br.OCRRequest != nil:
 		br.OCRRequest.RawRequestBody = rawRequestBody
+	case br.SystemOneRequest != nil:
+		br.SystemOneRequest.RawRequestBody = rawRequestBody
 	case br.SpeechRequest != nil:
 		br.SpeechRequest.RawRequestBody = rawRequestBody
 	case br.TranscriptionRequest != nil:
@@ -1138,6 +1152,7 @@ type BifrostResponse struct {
 	EmbeddingResponse             *BifrostEmbeddingResponse
 	RerankResponse                *BifrostRerankResponse
 	OCRResponse                   *BifrostOCRResponse
+	SystemOneResponse             *BifrostSystemOneResponse
 	SpeechResponse                *BifrostSpeechResponse
 	SpeechStreamResponse          *BifrostSpeechStreamResponse
 	TranscriptionResponse         *BifrostTranscriptionResponse
@@ -1202,6 +1217,8 @@ func (r *BifrostResponse) GetExtraFields() *BifrostResponseExtraFields {
 		return &r.RerankResponse.ExtraFields
 	case r.OCRResponse != nil:
 		return &r.OCRResponse.ExtraFields
+	case r.SystemOneResponse != nil:
+		return &r.SystemOneResponse.ExtraFields
 	case r.SpeechResponse != nil:
 		return &r.SpeechResponse.ExtraFields
 	case r.SpeechStreamResponse != nil:
@@ -1623,6 +1640,11 @@ func (r *BifrostResponse) PopulateExtraFields(requestType RequestType, provider 
 		r.OCRResponse.ExtraFields.Provider = provider
 		r.OCRResponse.ExtraFields.OriginalModelRequested = originalModelRequested
 		r.OCRResponse.ExtraFields.ResolvedModelUsed = resolvedModel
+	case r.SystemOneResponse != nil:
+		r.SystemOneResponse.ExtraFields.RequestType = requestType
+		r.SystemOneResponse.ExtraFields.Provider = provider
+		r.SystemOneResponse.ExtraFields.OriginalModelRequested = originalModelRequested
+		r.SystemOneResponse.ExtraFields.ResolvedModelUsed = resolvedModel
 	case r.PassthroughResponse != nil:
 		r.PassthroughResponse.ExtraFields.RequestType = requestType
 		r.PassthroughResponse.ExtraFields.Provider = provider

@@ -106,6 +106,7 @@ var modelAddressedRequestTypes = map[RequestType]struct{}{
 	ImageGenerationStreamRequest: {},
 	RerankRequest:                {},
 	CountTokensRequest:           {},
+	SystemOneRequest:             {},
 }
 
 // RequestTypeAddressesModel reports whether the model is the only resource addressed.

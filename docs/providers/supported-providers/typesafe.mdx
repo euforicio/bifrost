@@ -1,0 +1,94 @@
+---
+title: "TypeSafe"
+description: "Native TypeSafe/Jev System One provider — evaluate API, not chat. POST /v1/systemone with Bearer auth and GET /v1/models."
+icon: "shield-check"
+---
+
+TypeSafe Jev is a **native evaluate provider**, not a chat model. Bifrost does not fake `chat_completion` against TypeSafe. The only supported inference operation is System One: typed questions (`choice`, `noul`, `score`) against a state.
+
+Official API: [docs.typesafe.ai](https://docs.typesafe.ai/api).
+
+## Supported operations
+
+| Operation | Supported | Endpoint |
+|-----------|-----------|----------|
+| System One | ✅ | `POST /v1/systemone` |
+| List Models | ✅ | `GET /v1/models` |
+| Chat Completions | ❌ | Not a text generator |
+| Responses API | ❌ | — |
+| Embeddings | ❌ | — |
+
+`GET /v1/models` lists **aliases** (`jev-latest`, `jev-preview`). Versioned IDs such as `jev-1.13.0` are still accepted on `POST /v1/systemone`. The response `model` field is the versioned ID — log it.
+
+## Auth and wire shape
+
+- Base URL default: `https://api.typesafe.ai`
+- Auth: `Authorization: Bearer <API_KEY>` from `env.TYPESAFE_API_KEY`
+- Request body (documented fields only): `{ "state", "model", "questions" }`
+- Response: `{ "model", "answers", "usage": { "input_tokens", "output_tokens" } }`
+- Choice answers: `choice`, `probabilities`, `confidence`
+- Noul answers: `noul` in `[0,1]` — **no confidence field**
+- Errors: `401`, `422`, `429`, `529`. Bifrost retries `429` and `529` with backoff.
+
+Jev is text-only. Do not send images, audio, or video. Do not ask Jev to do math, date arithmetic, or text generation.
+
+## Setup & Configuration
+
+<Tabs>
+<Tab title="Web UI">
+
+1. Navigate to **Models** > **Model Providers**. Click **Add New Provider** and select **TypeSafe**.
+2. Click **Add Key**.
+3. Set a name for your key.
+4. Use an environment variable: `env.TYPESAFE_API_KEY`. Do not commit the secret.
+5. Set **Allowed Models** to **All Models** or `jev-latest` / `jev-1.13.0`.
+6. Leave the base URL at `https://api.typesafe.ai` unless you are pointing at a TypeSafe-compatible endpoint.
+7. Save the provider configuration.
+
+</Tab>
+<Tab title="config.json">
+
+```json
+{
+  "providers": {
+    "typesafe": {
+      "keys": [
+        {
+          "name": "typesafe-1",
+          "value": "env.TYPESAFE_API_KEY",
+          "models": ["*"],
+          "weight": 1.0
+        }
+      ],
+      "network_config": {
+        "base_url": "https://api.typesafe.ai"
+      }
+    }
+  }
+}
+```
+
+</Tab>
+<Tab title="API">
+Refer to the API documentation for [Provider Keys Management](https://docs.getbifrost.ai/api-reference/providers/create-a-key-for-a-provider).
+</Tab>
+</Tabs>
+
+## Complexity Router
+
+The Complexity Router can use this configured provider and model — there is no side-door HTTP call that skips Providers config.
+
+- **Primary**: configure a `jev` block and omit `semantic`. Jev classifies the latest user message.
+- **Fallback**: set `semantic.fallback` to `jev` and keep the same `jev` block. Jev runs only after semantic classification produces no tier.
+
+See [Complexity Router](/features/governance/complexity-router#jev-classifier).
+
+## Models
+
+| ID | Role |
+|----|------|
+| `jev-latest` | Alias for the current production Jev (today `jev-1.13.0`) |
+| `jev-1.13.0` | Versioned pin — use this if you tune confidence thresholds |
+| `jev-preview` | Preview alias (currently the same as `jev-latest`) |
+
+Public pricing (TypeSafe docs): $0.042 / MTok input; output free. Rate limits are dynamic (429 + `Retry-After`). Context is 64k total, 32k for state plus the longest question.

@@ -75,6 +75,7 @@ type RoutingPlugin struct {
 	complexityAnalyzer atomic.Pointer[complexity.ComplexityAnalyzer]
 	semanticClassifier *complexity.SemanticClassifier
 	llmClassifier      *complexity.LLMClassifier
+	jevClassifier      *complexity.JevClassifier
 	sessionStore       *complexitySessionStore
 	sessionEnabled     atomic.Bool
 
@@ -111,6 +112,7 @@ type RoutingPlugin struct {
 	// a chat completion is rejected because the judge model requires
 	// /v1/responses; it stays nil until wired, in which case no fallback runs.
 	responsesRequestExecutor atomic.Pointer[ResponsesRequestExecutor]
+	systemOneRequestExecutor atomic.Pointer[SystemOneRequestExecutor]
 }
 
 // Init initializes and returns a routing plugin instance.
@@ -172,6 +174,7 @@ func InitFromStore(
 		logger:             logger,
 		semanticClassifier: complexity.NewSemanticClassifier(ctx, logger),
 		llmClassifier:      complexity.NewLLMClassifier(logger),
+		jevClassifier:      complexity.NewJevClassifier(logger),
 	}
 	if config != nil && config.KVStore != nil {
 		plugin.sessionStore = newComplexitySessionStore(config.KVStore, complexitySessionInactivityTTL)
@@ -257,7 +260,18 @@ func (p *RoutingPlugin) storeComplexityAnalyzerConfig(config *complexity.Analyze
 	if p.llmClassifier != nil {
 		p.llmClassifier.Configure(resolved)
 	}
+	if p.jevClassifier != nil {
+		p.jevClassifier.Configure(resolved)
+	}
 	return nil
+}
+
+// ComplexityJevStatus returns the current jev classifier readiness.
+func (p *RoutingPlugin) ComplexityJevStatus() complexity.JevStatusInfo {
+	if p.jevClassifier == nil {
+		return complexity.JevStatusInfo{State: complexity.JevStatusDisabled}
+	}
+	return p.jevClassifier.Status()
 }
 
 // ComplexityLLMStatus returns the current llm classifier readiness.
@@ -502,6 +516,9 @@ func (p *RoutingPlugin) applyRoutingRules(ctx *schemas.BifrostContext, req *sche
 
 	// Evaluate routing rules
 	decision, err := p.engine.EvaluateRoutingRules(ctx, routingCtx)
+	if failClosed := jevFailClosedFromContext(ctx); failClosed != nil {
+		return nil, failClosed
+	}
 	if err != nil {
 		p.logger.Error("failed to evaluate routing rules: %v", err)
 		ctx.AppendRoutingEngineLog(schemas.RoutingEngineRoutingRule, schemas.LogLevelError, fmt.Sprintf("Routing rule evaluation error: %v", err))
