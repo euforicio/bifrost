@@ -95,4 +95,118 @@ Public pricing (TypeSafe docs): $0.042 / MTok input; output free. Rate limits ar
 
 ## Testing
 
-Unit and CI coverage uses **httptest fixtures only**. Do not inject `TYPESAFE_API_KEY` into GitHub Actions. Live smoke against `https://api.typesafe.ai` is an operational check: configure the provider with `env.TYPESAFE_API_KEY` and run it outside CI.
+Unit and CI coverage uses **httptest fixtures only**. Do not inject `TYPESAFE_API_KEY`, `FIREWORKS_API_KEY`, or `XAI_API_KEY` into GitHub Actions. Live smoke is operational, outside CI, and must stay cheap.
+
+### Required env vars (never commit)
+
+Wire every key as `env.*` in Bifrost provider config (or a key-store entry that resolves to the same env). CoS holds TypeSafe; Fireworks and xAI are injected for smoke after the PR.
+
+| Env var | `config.json` value | Who | Used for |
+|---------|---------------------|-----|----------|
+| `TYPESAFE_API_KEY` | `env.TYPESAFE_API_KEY` | CoS | Jev classifier (`POST /v1/systemone`) |
+| `FIREWORKS_API_KEY` | `env.FIREWORKS_API_KEY` | CoS after PR | SIMPLE / MEDIUM chat targets |
+| `XAI_API_KEY` | `env.XAI_API_KEY` | CoS after PR | One COMPLEX Grok smoke |
+
+### Low-cost Complexity Router smoke
+
+Classifier is **TypeSafe Jev only** (no semantic embeddings). Routing targets stay on cheap Fireworks chat for SIMPLE and MEDIUM. COMPLEX is a **single short** xAI Grok call — never soak, never `grok-4.6` / `grok-4-0709` / `grok-4.5`.
+
+| Tier | Target | Model | Prompts |
+|------|--------|-------|---------|
+| Classifier | `typesafe` | `jev-latest` | One System One call per smoke prompt |
+| SIMPLE | `fireworks` | `accounts/fireworks/models/deepseek-v4-flash-0731` (or the cheapest DeepSeek Flash ID the Fireworks provider already accepts, e.g. `accounts/fireworks/models/deepseek-v4p1-flash`) | 1 short prompt |
+| MEDIUM | `fireworks` | Same Flash model to keep cost down. Distinct mid-tier only if you must split: `accounts/fireworks/models/deepseek-v3p2`. No frontier. | 1 short prompt |
+| COMPLEX | `xai` | `grok-3-mini` (cheapest Grok chat model Bifrost documents) | **1** short prompt, once |
+
+Three chat completions and three Jev calls total. Cap each chat at a small `max_tokens` (e.g. 32). Do not add loops.
+
+Suggested prompts (from the Jev Choice criteria — keep them short):
+
+| Expect | Prompt |
+|--------|--------|
+| SIMPLE | `what is a mutex?` |
+| MEDIUM | `add api-key auth: hash keys, reject revoked, never log them` |
+| COMPLEX | `balance testing rules and staffing against rising resistant infections` |
+
+```json
+{
+  "providers": {
+    "typesafe": {
+      "keys": [{ "name": "typesafe-1", "value": "env.TYPESAFE_API_KEY", "models": ["*"], "weight": 1.0 }],
+      "network_config": { "base_url": "https://api.typesafe.ai" }
+    },
+    "fireworks": {
+      "keys": [{ "name": "fireworks-1", "value": "env.FIREWORKS_API_KEY", "models": ["*"], "weight": 1.0 }]
+    },
+    "xai": {
+      "keys": [{ "name": "xai-1", "value": "env.XAI_API_KEY", "models": ["*"], "weight": 1.0 }]
+    }
+  },
+  "governance": {
+    "complexity_analyzer_config": {
+      "jev": {
+        "provider": "typesafe",
+        "model": "jev-latest",
+        "timeout": "1.5s",
+        "min_confidence": 0.6,
+        "message_history_count": 1,
+        "count_toward_budgets": false
+      },
+      "keywords": {
+        "simple_keywords": ["what is a mutex?", "fix the grammar in this sentence."],
+        "medium_keywords": ["add api-key auth: hash keys, reject revoked, never log them"],
+        "complex_keywords": ["balance testing rules and staffing against rising resistant infections"]
+      }
+    },
+    "routing_rules": [
+      {
+        "id": "smoke-simple",
+        "name": "SIMPLE → Fireworks Flash",
+        "enabled": true,
+        "cel_expression": "complexity_tier == \"SIMPLE\"",
+        "targets": [{ "provider": "fireworks", "model": "accounts/fireworks/models/deepseek-v4-flash-0731", "weight": 1 }],
+        "scope": "global",
+        "priority": 0
+      },
+      {
+        "id": "smoke-medium",
+        "name": "MEDIUM → Fireworks Flash",
+        "enabled": true,
+        "cel_expression": "complexity_tier == \"MEDIUM\"",
+        "targets": [{ "provider": "fireworks", "model": "accounts/fireworks/models/deepseek-v4-flash-0731", "weight": 1 }],
+        "scope": "global",
+        "priority": 1
+      },
+      {
+        "id": "smoke-complex",
+        "name": "COMPLEX → Grok mini (once)",
+        "enabled": true,
+        "cel_expression": "complexity_tier == \"COMPLEX\"",
+        "targets": [{ "provider": "xai", "model": "grok-3-mini", "weight": 1 }],
+        "scope": "global",
+        "priority": 2
+      }
+    ]
+  }
+}
+```
+
+```bash
+# Same inbound model on every call — routing (not the client) must pick Fireworks vs Grok.
+# Three short smokes only. Do not loop.
+INBOUND='fireworks/accounts/fireworks/models/deepseek-v4-flash-0731'
+
+curl -sS http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"$INBOUND\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"what is a mutex?\"}]}"
+
+curl -sS http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"$INBOUND\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"add api-key auth: hash keys, reject revoked, never log them\"}]}"
+
+curl -sS http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"$INBOUND\",\"max_tokens\":32,\"messages\":[{\"role\":\"user\",\"content\":\"balance testing rules and staffing against rising resistant infections\"}]}"
+```
+
+Check request logs for `complexity_mechanism=jev`, Choice `confidence`, the versioned Jev `model`, and that COMPLEX ran **once** on `grok-3-mini`. If Flash-0731 is not on the account, swap the Fireworks model to `accounts/fireworks/models/deepseek-v4p1-flash`.

@@ -116,6 +116,8 @@ State is always the **latest user message**. History is filtered in code; Jev is
 A missing or unauthorized TypeSafe key **fails closed** when Jev is selected: the request is rejected rather than routed without a tier. Timeout, `429`, and `529` degrade like the LLM fallback (no tier published; session routing may still reuse a retained tier).
 </Warning>
 
+Low-cost live smoke (Jev classifier + Fireworks Flash for SIMPLE/MEDIUM + one `grok-3-mini` COMPLEX call) is documented on [TypeSafe](/providers/supported-providers/typesafe#low-cost-complexity-router-smoke). Keys stay `env.TYPESAFE_API_KEY`, `env.FIREWORKS_API_KEY`, and `env.XAI_API_KEY`. Do not soak, and do not route COMPLEX to `grok-4.6`.
+
 ---
 
 ## Configuration
