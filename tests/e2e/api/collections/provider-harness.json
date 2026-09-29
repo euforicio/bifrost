@@ -177564,6 +177564,116 @@
           "name": "[EXPECT-400] openai openai/gpt-5-mini /v1/chat/completions conflicting reasoning_effort high vs reasoning.effort low still rejected - #7659"
         }
       ]
+    },
+    {
+      "name": "128. xAI reasoning usage normalization",
+      "description": "xAI Chat Completions reports visible completion tokens separately from reasoning tokens. The gateway must include reasoning in completion_tokens so total_tokens equals prompt_tokens plus completion_tokens. Pins both unary and terminal SSE usage, including a positive reasoning count so an unexercised reasoning path cannot silently pass. A pre-existing deployment failure showed the normalization helper was disconnected from both entrypoints.",
+      "item": [
+        {
+          "name": "xai/grok-4-1-fast-reasoning /v1/chat/completions reasoning usage normalization unary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('xAI reasoning usage is normalized', function () {",
+                  "  var raw = pm.response.text();",
+                  "  pm.expect(pm.response.code, 'request failed: ' + raw).to.equal(200);",
+                  "  var usage = pm.response.json().usage;",
+                  "  pm.expect(usage, 'missing terminal usage: ' + raw.slice(-600)).to.be.an('object');",
+                  "  pm.expect(usage.completion_tokens_details, 'missing reasoning usage: ' + raw.slice(-600)).to.be.an('object');",
+                  "  pm.expect(usage.completion_tokens_details.reasoning_tokens, 'model must emit reasoning to exercise normalization').to.be.above(0);",
+                  "  pm.expect(usage.completion_tokens, 'completion tokens must include reasoning').to.be.at.least(usage.completion_tokens_details.reasoning_tokens);",
+                  "  pm.expect(usage.total_tokens, 'total must equal prompt plus normalized completion: ' + JSON.stringify(usage)).to.equal(usage.prompt_tokens + usage.completion_tokens);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"xai/grok-4-1-fast-reasoning\",\"messages\":[{\"role\":\"user\",\"content\":\"Calculate 17 times 19. Think briefly, then give only the number.\"}],\"max_tokens\":128}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        },
+        {
+          "name": "xai/grok-4-1-fast-reasoning /v1/chat/completions reasoning usage normalization streaming",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('xAI reasoning usage is normalized', function () {",
+                  "  var raw = pm.response.text();",
+                  "  pm.expect(pm.response.code, 'request failed: ' + raw).to.equal(200);",
+                  "  pm.expect(pm.response.headers.get('content-type'), 'expected SSE: ' + raw.slice(0, 300)).to.include('text/event-stream');",
+                  "  var usage;",
+                  "  raw.split('\\n').forEach(function (line) {",
+                  "    if (line.indexOf('data:') !== 0) { return; }",
+                  "    var data = line.slice(5).trim();",
+                  "    if (!data || data === '[DONE]') { return; }",
+                  "    var chunk = JSON.parse(data);",
+                  "    pm.expect(chunk.error, 'stream error: ' + data).to.equal(undefined);",
+                  "    if (chunk.usage) { usage = chunk.usage; }",
+                  "  });",
+                  "  pm.expect(raw, 'missing stream terminator').to.include('[DONE]');",
+                  "  pm.expect(usage, 'missing terminal usage: ' + raw.slice(-600)).to.be.an('object');",
+                  "  pm.expect(usage.completion_tokens_details, 'missing reasoning usage: ' + raw.slice(-600)).to.be.an('object');",
+                  "  pm.expect(usage.completion_tokens_details.reasoning_tokens, 'model must emit reasoning to exercise normalization').to.be.above(0);",
+                  "  pm.expect(usage.completion_tokens, 'completion tokens must include reasoning').to.be.at.least(usage.completion_tokens_details.reasoning_tokens);",
+                  "  pm.expect(usage.total_tokens, 'total must equal prompt plus normalized completion: ' + JSON.stringify(usage)).to.equal(usage.prompt_tokens + usage.completion_tokens);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"model\":\"xai/grok-4-1-fast-reasoning\",\"messages\":[{\"role\":\"user\",\"content\":\"Calculate 17 times 19. Think briefly, then give only the number.\"}],\"max_tokens\":128,\"stream\":true,\"stream_options\":{\"include_usage\":true}}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/v1/chat/completions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "v1",
+                "chat",
+                "completions"
+              ]
+            }
+          }
+        }
+      ]
     }
   ]
 }
