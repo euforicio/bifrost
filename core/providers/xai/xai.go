@@ -100,10 +100,7 @@ func mergeHeaders(base, additional map[string]string) map[string]string {
 }
 
 func normalizeXAIChatStreamResponse(response *schemas.BifrostChatResponse) *schemas.BifrostChatResponse {
-	if response != nil {
-		response.Usage.NormalizeProviderCost()
-	}
-	return response
+	return normalizeXAIChatResponse(response)
 }
 
 func normalizeXAIResponsesStreamResponse(response *schemas.BifrostResponsesStreamResponse) *schemas.BifrostResponsesStreamResponse {
@@ -179,8 +176,7 @@ func (provider *XAIProvider) ChatCompletion(ctx *schemas.BifrostContext, key sch
 		if bifrostErr != nil {
 			return nil, bifrostErr
 		}
-		response.Usage.NormalizeProviderCost()
-		return response, nil
+		return normalizeXAIChatResponse(response), nil
 	}
 	panic("unreachable")
 }
