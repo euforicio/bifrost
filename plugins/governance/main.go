@@ -30,6 +30,50 @@ const (
 	VirtualKeyPrefix = "sk-bf-"
 )
 
+// A team or a customer can carry budgets and a rate limit of its own. The enterprise build adds a
+// second way to govern the same entity - an access profile attached to it - and the two cannot both
+// apply, or the entity ends up with two caps on the same keys.
+//
+// Enterprise registers the check here, and the paths that write those limits ask before writing: the
+// team and customer update handlers, and the config reconcile that applies governance.budgets from
+// config.json. In the OSS build nothing is registered, so nothing is refused.
+const (
+	// The kinds of entity that can hold budgets and a rate limit of their own. A team or customer may
+	// hold several budgets; a business unit holds at most one.
+	LegacyLimitHolderTeam         = "team"
+	LegacyLimitHolderCustomer     = "customer"
+	LegacyLimitHolderBusinessUnit = "business_unit"
+)
+
+// LegacyLimitGuard names what already governs an entity's spend, or "" when nothing does. An error
+// means the question could not be answered; callers fail closed rather than write a second cap.
+type LegacyLimitGuard func(ctx context.Context, holderKind, holderID string) (governedBy string, err error)
+
+var (
+	legacyLimitGuardMu sync.RWMutex
+	legacyLimitGuard   LegacyLimitGuard
+)
+
+// RegisterLegacyLimitGuard installs the guard for this process. Passing nil clears it, which is how a
+// test puts the process back as it found it.
+func RegisterLegacyLimitGuard(guard LegacyLimitGuard) {
+	legacyLimitGuardMu.Lock()
+	legacyLimitGuard = guard
+	legacyLimitGuardMu.Unlock()
+}
+
+// LegacyLimitsGovernedBy names what already governs this entity's spend, or "" when nothing does -
+// including every build where no guard is registered.
+func LegacyLimitsGovernedBy(ctx context.Context, holderKind, holderID string) (string, error) {
+	legacyLimitGuardMu.RLock()
+	guard := legacyLimitGuard
+	legacyLimitGuardMu.RUnlock()
+	if guard == nil || holderID == "" {
+		return "", nil
+	}
+	return guard(ctx, holderKind, holderID)
+}
+
 // Config is the configuration for the governance plugin
 type Config struct {
 	IsVkMandatory         *bool     `json:"is_vk_mandatory"`
@@ -40,6 +84,7 @@ type Config struct {
 
 type InMemoryStore interface {
 	GetConfiguredProviders() map[schemas.ModelProvider]configstore.ProviderConfig
+	GetConfiguredProviderNames() []string
 	GetMCPClientsAllowedByDefault() map[string]string // clientID → clientName
 	GetMCPClientNames() map[string]string             // clientID → clientName, every client
 	// GetMCPClientBySlug resolves a client by its endpoint slug (for serving one client at /mcp/<slug>).
@@ -458,11 +503,16 @@ func (p *GovernancePlugin) LoadBalanceProvider(ctx *schemas.BifrostContext, req 
 		return nil
 	}
 
+	// Only weighted candidates can be selected or offered as fallbacks, so a candidate without a
+	// weight is as excluded as one a budget refused. Name it for the same reason every other
+	// exclusion above is named: the counts below are otherwise impossible to reconcile from the trail.
 	weighted := make([]schemas.ProviderCandidate, 0, len(eligible))
 	for _, candidate := range eligible {
-		if candidate.Weight != nil {
-			weighted = append(weighted, candidate)
+		if candidate.Weight == nil {
+			ctx.AppendRoutingEngineLog(schemas.RoutingEngineGovernance, schemas.LogLevelInfo, fmt.Sprintf("Provider %s excluded: no weight assigned for model %s", candidate.Provider, modelStr))
+			continue
 		}
+		weighted = append(weighted, candidate)
 	}
 
 	if len(weighted) == 0 {
@@ -495,8 +545,16 @@ func (p *GovernancePlugin) LoadBalanceProvider(ctx *schemas.BifrostContext, req 
 		selectedProvider = schemas.ModelProvider(weighted[0].Provider)
 	}
 
+	var weightedProviders []string
+	for _, candidate := range weighted {
+		weightedProviders = append(weightedProviders, candidate.Provider)
+	}
+
 	p.logger.Debug("[governance] Selected provider: %s", selectedProvider)
-	ctx.AppendRoutingEngineLog(schemas.RoutingEngineGovernance, schemas.LogLevelInfo, fmt.Sprintf("Selected provider %s for model %s (from %d eligible: %v)", selectedProvider, modelStr, len(eligible), eligibleProviders))
+	// The pool selection actually ran over, which is `weighted` and not `eligible`: reporting the
+	// wider set would describe candidates the roll could never have landed on, and would not
+	// account for the fallbacks added below.
+	ctx.AppendRoutingEngineLog(schemas.RoutingEngineGovernance, schemas.LogLevelInfo, fmt.Sprintf("Selected provider %s for model %s (from %d weighted: %v)", selectedProvider, modelStr, len(weighted), weightedProviders))
 
 	refinedModel := modelStr
 	// Refine the model for the selected provider
@@ -1203,6 +1261,7 @@ func (p *GovernancePlugin) PostLLMHook(ctx *schemas.BifrostContext, result *sche
 	requestType, provider, requestedModel, _ := bifrost.GetResponseFields(result, err)
 
 	requestID := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyRequestID)
+	billingNonce := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyBillingNonce)
 
 	isFinalChunk := bifrost.IsFinalChunk(ctx)
 
@@ -1282,7 +1341,7 @@ func (p *GovernancePlugin) PostLLMHook(ctx *schemas.BifrostContext, result *sche
 				}
 			}()
 			// Use the requested model for usage tracking
-			p.postHookWorker(result, err, provider, requestedModel, requestType, requestID, isFinalChunk, attemptNumber, pricingScopes, accountedBudgets, accountedRateLimits, routingMetadata)
+			p.postHookWorker(result, err, provider, requestedModel, requestType, requestID, billingNonce, isFinalChunk, attemptNumber, pricingScopes, accountedBudgets, accountedRateLimits, routingMetadata)
 		}()
 	}
 
@@ -1384,6 +1443,7 @@ func (p *GovernancePlugin) PostMCPHook(ctx *schemas.BifrostContext, resp *schema
 	}
 
 	requestID := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyRequestID)
+	billingNonce := bifrost.GetStringFromContext(ctx, schemas.BifrostContextKeyBillingNonce)
 
 	// Determine if request was successful
 	success := (resp != nil && bifrostErr == nil)
@@ -1434,6 +1494,7 @@ func (p *GovernancePlugin) PostMCPHook(ctx *schemas.BifrostContext, resp *schema
 		Success:      success,
 		Cost:         toolCost,
 		RequestID:    requestID,
+		BillingNonce: billingNonce,
 		IsStreaming:  false,
 		IsFinalChunk: true,
 		HasUsageData: toolCost > 0, // Has usage data if we have a cost
@@ -1482,6 +1543,7 @@ func (p *GovernancePlugin) PreMCPConnectionHook(ctx *schemas.BifrostContext, req
 	}
 	ctx.SetValue(schemas.BifrostContextKeyGovernanceVirtualKeyID, vk.ID)
 	ctx.SetValue(schemas.BifrostContextKeyGovernanceVirtualKeyName, vk.Name)
+	stampVirtualKeyContentLogging(ctx, vk)
 	if vk.Team != nil {
 		ctx.SetValue(schemas.BifrostContextKeyGovernanceTeamID, vk.Team.ID)
 		ctx.SetValue(schemas.BifrostContextKeyGovernanceTeamName, vk.Team.Name)
@@ -1536,7 +1598,7 @@ func (p *GovernancePlugin) Cleanup() error {
 //   - isBatch: Whether the request is a batch request
 //   - isFinalChunk: Whether the request is the final chunk
 //   - pricingScopes: Prebuilt pricing lookup scopes using governance VK ID (nil if not applicable)
-func (p *GovernancePlugin) postHookWorker(result *schemas.BifrostResponse, bifrostErr *schemas.BifrostError, provider schemas.ModelProvider, model string, requestType schemas.RequestType, requestID string, isFinalChunk bool, attemptNumber int, pricingScopes *modelcatalog.PricingLookupScopes, budgets, rateLimits []schemas.Limit, routingMetadata *schemas.BifrostRoutingMetadata) {
+func (p *GovernancePlugin) postHookWorker(result *schemas.BifrostResponse, bifrostErr *schemas.BifrostError, provider schemas.ModelProvider, model string, requestType schemas.RequestType, requestID string, billingNonce string, isFinalChunk bool, attemptNumber int, pricingScopes *modelcatalog.PricingLookupScopes, budgets, rateLimits []schemas.Limit, routingMetadata *schemas.BifrostRoutingMetadata) {
 	// Determine if request was successful
 	success := (result != nil)
 	billedReason := "success"
@@ -1609,6 +1671,7 @@ func (p *GovernancePlugin) postHookWorker(result *schemas.BifrostResponse, bifro
 			TokensUsed:    int64(tokensUsed),
 			Cost:          cost,
 			RequestID:     requestID,
+			BillingNonce:  billingNonce,
 			IsStreaming:   isStreaming,
 			IsFinalChunk:  isFinalChunk,
 			HasUsageData:  tokensUsed > 0 || cost > 0,
@@ -1689,7 +1752,7 @@ func (p *GovernancePlugin) reportBatchModelUsage(ctx context.Context, usage joba
 	if len(usage.ModelUsage) == 0 {
 		return nil
 	}
-	alreadyCharged := make(map[string]bool, len(usage.BudgetIDs)+len(usage.RateLimitIDs))
+	alreadyCharged := make(map[string]bool)
 	for _, id := range usage.BudgetIDs {
 		alreadyCharged["budget:"+id] = true
 	}

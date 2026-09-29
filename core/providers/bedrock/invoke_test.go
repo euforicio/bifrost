@@ -1131,6 +1131,69 @@ func TestUsesAnthropicInvokePath_ExtraParamsShapes(t *testing.T) {
 	})
 }
 
+// Supported safeguards requests use InvokeModel so the native field and beta
+// reach Claude together. Absent or unsupported safeguards preserve Converse.
+func TestResponsesUsesAnthropicInvokePath_Safeguards(t *testing.T) {
+	ctx := schemas.NewBifrostContext(context.Background(), time.Time{})
+	model := "us.anthropic.claude-sonnet-5"
+
+	t.Run("nonempty safeguards diverts to invoke", func(t *testing.T) {
+		for _, v := range []interface{}{
+			json.RawMessage(`{"check":"auto_mode"}`),
+			[]byte(`{"check":"auto_mode"}`),
+			json.RawMessage(``),
+			nil,
+		} {
+			req := &schemas.BifrostResponsesRequest{Model: model, Params: &schemas.ResponsesParameters{
+				ExtraParams: map[string]interface{}{"safeguards": v},
+			}}
+			want := extraParamsHasSafeguards(req.Params.ExtraParams)
+			require.Equal(t, want, responsesUsesAnthropicInvokePath(ctx, req))
+			require.Equal(t, want, chatUsesAnthropicInvokePath(ctx, &schemas.BifrostChatRequest{Model: model, Params: &schemas.ChatParameters{ExtraParams: req.Params.ExtraParams}}))
+		}
+	})
+	t.Run("absent safeguards stays on converse", func(t *testing.T) {
+		req := &schemas.BifrostResponsesRequest{Model: model, Params: &schemas.ResponsesParameters{}}
+		require.False(t, responsesUsesAnthropicInvokePath(ctx, req))
+	})
+	t.Run("unsupported model stays on converse", func(t *testing.T) {
+		extra := map[string]interface{}{"safeguards": json.RawMessage(`{"check":"auto_mode"}`)}
+		require.False(t, responsesUsesAnthropicInvokePath(ctx, &schemas.BifrostResponsesRequest{Model: "us.anthropic.claude-haiku-4-5", Params: &schemas.ResponsesParameters{ExtraParams: extra}}))
+		require.False(t, chatUsesAnthropicInvokePath(ctx, &schemas.BifrostChatRequest{Model: "us.anthropic.claude-haiku-4-5", Params: &schemas.ChatParameters{ExtraParams: extra}}))
+	})
+	t.Run("catalog can disable invoke routing", func(t *testing.T) {
+		schemas.SetCapabilityResolver(func(schemas.ModelProvider, string) *schemas.ModelCapabilities {
+			return &schemas.ModelCapabilities{SupportsSafeguards: schemas.Ptr(false)}
+		})
+		defer schemas.SetCapabilityResolver(nil)
+		extra := map[string]interface{}{"safeguards": json.RawMessage(`{"check":"auto_mode"}`)}
+		require.False(t, responsesUsesAnthropicInvokePath(ctx, &schemas.BifrostResponsesRequest{Model: model, Params: &schemas.ResponsesParameters{ExtraParams: extra}}))
+		require.False(t, chatUsesAnthropicInvokePath(ctx, &schemas.BifrostChatRequest{Model: model, Params: &schemas.ChatParameters{ExtraParams: extra}}))
+	})
+	t.Run("non-anthropic model stays on converse even with safeguards", func(t *testing.T) {
+		req := &schemas.BifrostResponsesRequest{Model: "us.amazon.nova-lite-v1:0", Params: &schemas.ResponsesParameters{
+			ExtraParams: map[string]interface{}{"safeguards": json.RawMessage(`{"check":"auto_mode"}`)},
+		}}
+		require.False(t, responsesUsesAnthropicInvokePath(ctx, req))
+	})
+	// Catalog overrides remain authoritative for model support.
+	t.Run("datasheet-enabled pair diverts to invoke", func(t *testing.T) {
+		yes := true
+		schemas.SetCapabilityResolver(func(p schemas.ModelProvider, m string) *schemas.ModelCapabilities {
+			if p == schemas.Bedrock {
+				return &schemas.ModelCapabilities{SupportsSafeguards: &yes}
+			}
+			return nil
+		})
+		defer schemas.SetCapabilityResolver(nil)
+
+		req := &schemas.BifrostResponsesRequest{Model: model, Params: &schemas.ResponsesParameters{
+			ExtraParams: map[string]interface{}{"safeguards": json.RawMessage(`{"check":"auto_mode"}`)},
+		}}
+		require.True(t, responsesUsesAnthropicInvokePath(ctx, req))
+	})
+}
+
 // The InvokeModel route (and Mantle) go through fasthttp, whose path
 // normalisation decodes a percent-encoded inference-profile ARN in the model
 // segment. The provider must build its fasthttp clients with that disabled;
@@ -1839,4 +1902,168 @@ func TestToBedrockConverseRequest_InvokeToolSearchReplay(t *testing.T) {
 	assert.Equal(t, "server_tool_use", roundTripped[0].Get("type").String())
 	assert.Equal(t, "weather", roundTripped[0].Get("input.pattern").String(),
 		"the replayed block lost its search query on the way back out: %s", string(encoded))
+}
+
+// --- Regression tests for #7649: the /invoke egress dropped the extended-thinking token
+// breakdown. Anthropic's native InvokeModel response carries
+// usage.output_tokens_details.thinking_tokens (a subset of output_tokens); Bifrost holds
+// the same figure as ResponsesResponseUsage.OutputTokensDetails.ReasoningTokens, but the
+// Anthropic-shaped response builders never wrote it out, so cost attribution that separates
+// thinking from answer tokens read zero. Both tests assert on the marshaled bytes rather than
+// a typed field so they pin the wire shape a client sees. ---
+
+// TestToBedrockInvokeAnthropicResponse_ThinkingTokens covers the non-streaming /invoke
+// response: output_tokens stays inclusive (thinking is already inside it upstream) and the
+// breakdown appears under output_tokens_details.thinking_tokens.
+func TestToBedrockInvokeAnthropicResponse_ThinkingTokens(t *testing.T) {
+	model := "global.anthropic.claude-sonnet-5"
+	resp := &schemas.BifrostResponsesResponse{
+		Model: model,
+		Usage: &schemas.ResponsesResponseUsage{
+			InputTokens:  27,
+			OutputTokens: 25,
+			TotalTokens:  52,
+			OutputTokensDetails: &schemas.ResponsesResponseOutputTokens{
+				ReasoningTokens: 18,
+			},
+		},
+	}
+
+	result := toBedrockInvokeAnthropicResponse(resp, model)
+	require.NotNil(t, result.Usage)
+
+	raw, err := sonic.Marshal(result)
+	require.NoError(t, err)
+	usage := gjson.GetBytes(raw, "usage")
+	require.True(t, usage.Exists(), "response must carry usage: %s", raw)
+
+	assert.EqualValues(t, 27, usage.Get("input_tokens").Int())
+	assert.EqualValues(t, 25, usage.Get("output_tokens").Int(), "output_tokens must stay inclusive of thinking")
+	thinking := usage.Get("output_tokens_details.thinking_tokens")
+	assert.True(t, thinking.Exists(), "usage.output_tokens_details.thinking_tokens must be present, got usage %s", usage.Raw)
+	assert.EqualValues(t, 18, thinking.Int())
+}
+
+// TestToBedrockInvokeAnthropicResponse_NoThinkingOmitsDetails guards the other direction:
+// a non-thinking response must not grow an output_tokens_details object, matching what
+// Anthropic itself returns (the field is absent on non-thinking responses).
+func TestToBedrockInvokeAnthropicResponse_NoThinkingOmitsDetails(t *testing.T) {
+	model := "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+	resp := &schemas.BifrostResponsesResponse{
+		Model: model,
+		Usage: &schemas.ResponsesResponseUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+	}
+
+	raw, err := sonic.Marshal(toBedrockInvokeAnthropicResponse(resp, model))
+	require.NoError(t, err)
+	assert.False(t, gjson.GetBytes(raw, "usage.output_tokens_details").Exists(), "no thinking -> no output_tokens_details: %s", raw)
+}
+
+// TestToAnthropicInvokeStreamBytes_MessageDeltaCarriesThinkingTokens covers the
+// /invoke-with-response-stream half: native Anthropic reports the thinking breakdown on the
+// terminal message_delta usage, which is also the only event where Bifrost has the full
+// figures for a Bedrock-backed call (see the sibling cache tests above).
+func TestToAnthropicInvokeStreamBytes_MessageDeltaCarriesThinkingTokens(t *testing.T) {
+	resp := &schemas.BifrostResponsesStreamResponse{
+		Type: schemas.ResponsesStreamResponseTypeCompleted,
+		Response: &schemas.BifrostResponsesResponse{
+			Usage: &schemas.ResponsesResponseUsage{
+				InputTokens:  27,
+				OutputTokens: 25,
+				TotalTokens:  52,
+				OutputTokensDetails: &schemas.ResponsesResponseOutputTokens{
+					ReasoningTokens: 18,
+				},
+			},
+		},
+	}
+
+	frames, err := toAnthropicInvokeStreamBytes(schemas.NewBifrostContext(context.Background(), schemas.NoDeadline), resp)
+	require.NoError(t, err)
+	require.Len(t, frames, 2, "expected message_delta + message_stop")
+
+	usage := gjson.GetBytes(frames[0], "usage")
+	require.True(t, usage.Exists(), "message_delta must carry a usage object: %s", frames[0])
+	assert.EqualValues(t, 25, usage.Get("output_tokens").Int(), "output_tokens must stay inclusive of thinking")
+	thinking := usage.Get("output_tokens_details.thinking_tokens")
+	assert.True(t, thinking.Exists(), "message_delta.usage.output_tokens_details.thinking_tokens must be present, got usage %s", usage.Raw)
+	assert.EqualValues(t, 18, thinking.Int())
+}
+
+// TestResponsesUsesAnthropicInvokePath_InvokeIngressThinking is the routing half of #7649.
+// AWS Converse's TokenUsage has no thinking-token breakdown (verified live: the same
+// adaptive-thinking Sonnet 5 request returns {inputTokens, outputTokens, totalTokens, cache*}
+// on Converse and usage.output_tokens_details.thinking_tokens on InvokeModel), so a request
+// that arrived on the InvokeModel-shaped ingress (/bedrock/model/{id}/invoke and its stream
+// sibling) with thinking requested must be served by InvokeModel upstream, where the shared
+// anthropic handlers already map thinking_tokens -> OutputTokensDetails.ReasoningTokens.
+// The ingress marks the context; the predicate keys on the marker so /v1 and /bedrock
+// converse ingress keep their Converse routing.
+func TestResponsesUsesAnthropicInvokePath_InvokeIngressThinking(t *testing.T) {
+	marker := schemas.BifrostContextKey("bedrock-anthropic-invoke-ingress")
+	model := "global.anthropic.claude-sonnet-5"
+	adaptive := &schemas.ResponsesParametersReasoning{Effort: schemas.Ptr("high")}
+
+	newCtx := func(marked bool) *schemas.BifrostContext {
+		ctx := schemas.NewBifrostContext(context.Background(), time.Time{})
+		if marked {
+			ctx.SetValue(marker, true)
+		}
+		return ctx
+	}
+	newReq := func(m string, reasoning *schemas.ResponsesParametersReasoning) *schemas.BifrostResponsesRequest {
+		return &schemas.BifrostResponsesRequest{Model: m, Params: &schemas.ResponsesParameters{Reasoning: reasoning}}
+	}
+
+	t.Run("invoke ingress with thinking diverts to invoke", func(t *testing.T) {
+		require.True(t, responsesUsesAnthropicInvokePath(newCtx(true), newReq(model, adaptive)))
+	})
+	t.Run("invoke ingress with budget-style thinking diverts to invoke", func(t *testing.T) {
+		require.True(t, responsesUsesAnthropicInvokePath(newCtx(true), newReq(model, &schemas.ResponsesParametersReasoning{Effort: schemas.Ptr("medium"), MaxTokens: schemas.Ptr(2048)})))
+	})
+	t.Run("invoke ingress with thinking disabled stays on converse", func(t *testing.T) {
+		require.False(t, responsesUsesAnthropicInvokePath(newCtx(true), newReq(model, &schemas.ResponsesParametersReasoning{Effort: schemas.Ptr("none")})))
+	})
+	t.Run("invoke ingress without thinking stays on converse", func(t *testing.T) {
+		require.False(t, responsesUsesAnthropicInvokePath(newCtx(true), newReq(model, nil)))
+	})
+	t.Run("unmarked ingress with thinking stays on converse", func(t *testing.T) {
+		require.False(t, responsesUsesAnthropicInvokePath(newCtx(false), newReq(model, adaptive)))
+	})
+	t.Run("non-anthropic model stays on converse even when marked", func(t *testing.T) {
+		require.False(t, responsesUsesAnthropicInvokePath(newCtx(true), newReq("us.amazon.nova-pro-v1:0", adaptive)))
+	})
+}
+
+// Issue #7601: a truncated or filtered Responses stream ends with response.incomplete.
+// The invoke-with-response-stream egress handled only response.completed, so the
+// terminal message_delta/message_stop pair was dropped, and its incomplete_details
+// fallback leaked the Responses vocabulary ("max_output_tokens") as an Anthropic
+// stop_reason.
+func TestToAnthropicInvokeStreamBytes_IncompleteEmitsTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		reason string
+		want   string
+	}{
+		{schemas.ResponsesResponseIncompleteReasonMaxOutputTokens, "max_tokens"},
+		{schemas.ResponsesResponseIncompleteReasonContentFilter, "refusal"},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			resp := &schemas.BifrostResponsesStreamResponse{
+				Type: schemas.ResponsesStreamResponseTypeIncomplete,
+				Response: &schemas.BifrostResponsesResponse{
+					IncompleteDetails: &schemas.ResponsesResponseIncompleteDetails{Reason: tc.reason},
+				},
+			}
+			frames, err := toAnthropicInvokeStreamBytes(schemas.NewBifrostContext(context.Background(), schemas.NoDeadline), resp)
+			require.NoError(t, err)
+			require.Len(t, frames, 2, "expected message_delta + message_stop")
+
+			var messageDelta map[string]interface{}
+			require.NoError(t, json.Unmarshal(frames[0], &messageDelta))
+			delta, ok := messageDelta["delta"].(map[string]interface{})
+			require.True(t, ok, "message_delta must carry a delta object")
+			assert.Equal(t, tc.want, delta["stop_reason"])
+		})
+	}
 }

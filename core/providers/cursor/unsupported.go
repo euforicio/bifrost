@@ -179,3 +179,7 @@ func (p unsupportedProvider) Passthrough(*schemas.BifrostContext, schemas.Key, *
 func (p unsupportedProvider) PassthroughStream(*schemas.BifrostContext, schemas.PostHookRunner, func(context.Context), schemas.Key, *schemas.BifrostPassthroughRequest) (chan *schemas.BifrostStreamChunk, *schemas.BifrostError) {
 	return nil, p.unsupported(schemas.PassthroughStreamRequest)
 }
+
+func (p unsupportedProvider) Decision(*schemas.BifrostContext, schemas.Key, *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
+	return nil, p.unsupported(schemas.DecisionRequest)
+}

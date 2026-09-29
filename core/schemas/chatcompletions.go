@@ -271,15 +271,25 @@ func (cp *ChatParameters) UnmarshalJSON(data []byte) error {
 
 	// Now aux.Reasoning (from Alias) and aux.ReasoningEffort are filled
 
-	// Validate that specific fields don't conflict
-	if aux.ReasoningEffort != nil && aux.Reasoning != nil && aux.Reasoning.Effort != nil {
-		return fmt.Errorf("both reasoning_effort and reasoning.effort cannot be present at the same time")
+	// Clients that mirror the same reasoning directive in both spellings (the
+	// flat reasoning_* shorthand and the equivalent reasoning object field)
+	// are accepted as long as the two agree; the value canonicalizes to the
+	// object form in the merge below. Only contradictory values stay an error,
+	// which keeps the union invariant's protective intent: a request that asks
+	// for two different efforts is still rejected instead of silently picking
+	// a winner. Clients known to send both spellings include ai-sdk-based
+	// agents that emit every vendor dialect at once.
+	if aux.ReasoningEffort != nil && aux.Reasoning != nil && aux.Reasoning.Effort != nil &&
+		*aux.ReasoningEffort != *aux.Reasoning.Effort {
+		return fmt.Errorf("reasoning_effort (%q) conflicts with reasoning.effort (%q)", *aux.ReasoningEffort, *aux.Reasoning.Effort)
 	}
-	if aux.ReasoningMaxTokens != nil && aux.Reasoning != nil && aux.Reasoning.MaxTokens != nil {
-		return fmt.Errorf("both reasoning_max_tokens and reasoning.max_tokens cannot be present at the same time")
+	if aux.ReasoningMaxTokens != nil && aux.Reasoning != nil && aux.Reasoning.MaxTokens != nil &&
+		*aux.ReasoningMaxTokens != *aux.Reasoning.MaxTokens {
+		return fmt.Errorf("reasoning_max_tokens (%d) conflicts with reasoning.max_tokens (%d)", *aux.ReasoningMaxTokens, *aux.Reasoning.MaxTokens)
 	}
-	if aux.ReasoningDisplay != nil && aux.Reasoning != nil && aux.Reasoning.Display != nil {
-		return fmt.Errorf("both reasoning_display and reasoning.display cannot be present at the same time")
+	if aux.ReasoningDisplay != nil && aux.Reasoning != nil && aux.Reasoning.Display != nil &&
+		*aux.ReasoningDisplay != *aux.Reasoning.Display {
+		return fmt.Errorf("reasoning_display (%q) conflicts with reasoning.display (%q)", *aux.ReasoningDisplay, *aux.Reasoning.Display)
 	}
 
 	if aux.ReasoningEffort != nil || aux.ReasoningMaxTokens != nil || aux.ReasoningDisplay != nil {
@@ -1639,6 +1649,16 @@ func (cm *ChatAssistantMessage) UnmarshalJSON(data []byte) error {
 		cm.Reasoning = aux.ReasoningContent
 	}
 
+	// DeepSeek-shaped upstreams (ModelScope) keep sending empty reasoning fields
+	// on every content-phase frame once thinking has ended. Folding "" into a
+	// non-nil Reasoning made MarshalJSON re-emit it under both spellings and
+	// synthesize an empty details entry below, which reasoning-aware clients
+	// render as a fresh thinking block per chunk (#7294). Empty means absent.
+	cm.ReasoningDetails = pruneEmptyReasoningDetails(cm.ReasoningDetails)
+	if cm.Reasoning != nil && *cm.Reasoning == "" {
+		cm.Reasoning = nil
+	}
+
 	// If Reasoning is present and there are no reasoning_details,
 	// synthesize a text reasoning_details entry.
 	if cm.Reasoning != nil && len(cm.ReasoningDetails) == 0 {
@@ -1653,6 +1673,37 @@ func (cm *ChatAssistantMessage) UnmarshalJSON(data []byte) error {
 	}
 
 	return nil
+}
+
+// pruneEmptyReasoningDetails drops reasoning detail entries that carry no
+// payload at all: no text, summary, signature, or data. An entry with empty
+// text but a signature (or summary/data) is payload, not noise, and survives.
+// Returns the input slice untouched when nothing prunes; nil when nothing
+// survives, so len()==0 checks and omitempty both see absence (#7294).
+func pruneEmptyReasoningDetails(details []ChatReasoningDetails) []ChatReasoningDetails {
+	isEmpty := func(d ChatReasoningDetails) bool {
+		return (d.Text == nil || *d.Text == "") && d.Summary == nil && d.Signature == nil && d.Data == nil
+	}
+	needsPrune := false
+	for _, d := range details {
+		if isEmpty(d) {
+			needsPrune = true
+			break
+		}
+	}
+	if !needsPrune {
+		return details
+	}
+	kept := make([]ChatReasoningDetails, 0, len(details))
+	for _, d := range details {
+		if !isEmpty(d) {
+			kept = append(kept, d)
+		}
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	return kept
 }
 
 // ChatAssistantMessageAnnotation represents an annotation in a response.
@@ -1838,6 +1889,15 @@ func (d *ChatStreamResponseChoiceDelta) UnmarshalJSON(data []byte) error {
 	// This allows both OpenAI's "reasoning" and xAI's "reasoning_content" to work
 	if aux.ReasoningContent != nil && d.Reasoning == nil {
 		d.Reasoning = aux.ReasoningContent
+	}
+
+	// Same normalization as ChatAssistantMessage.UnmarshalJSON above: an empty
+	// reasoning string on a content-phase delta is upstream noise, and
+	// re-emitting it (plus a synthesized empty details entry) opened a fresh
+	// thinking block per chunk in reasoning-aware clients (#7294).
+	d.ReasoningDetails = pruneEmptyReasoningDetails(d.ReasoningDetails)
+	if d.Reasoning != nil && *d.Reasoning == "" {
+		d.Reasoning = nil
 	}
 
 	// If Reasoning is present and there are no reasoning_details,
@@ -2218,6 +2278,68 @@ func (l legacyBifrostCost) mergeInto(bc *BifrostCost) {
 	}
 }
 
+// DeepCopy returns a copy whose detail pointers are all cloned, so a caller can
+// edit any category without mutating a cost shared with the client-facing
+// response. Returns nil for a nil receiver.
+//
+// Every field is copied explicitly. TestBifrostCost_DeepCopyCoversEveryField
+// fails when a field is added to BifrostCost or any of its detail structs
+// without being added here.
+func (bc *BifrostCost) DeepCopy() *BifrostCost {
+	if bc == nil {
+		return nil
+	}
+	return &BifrostCost{
+		InputCost:             bc.InputCost,
+		InputCostDetails:      bc.InputCostDetails.deepCopy(),
+		OutputCost:            bc.OutputCost,
+		OutputCostDetails:     bc.OutputCostDetails.deepCopy(),
+		AdditionalCost:        bc.AdditionalCost,
+		AdditionalCostDetails: bc.AdditionalCostDetails.deepCopy(),
+		TotalCost:             bc.TotalCost,
+	}
+}
+
+func (a *InputCostDetails) deepCopy() *InputCostDetails {
+	if a == nil {
+		return nil
+	}
+	return &InputCostDetails{
+		TextCost:        a.TextCost,
+		AudioCost:       a.AudioCost,
+		ImageCost:       a.ImageCost,
+		CachedReadCost:  a.CachedReadCost,
+		CachedWriteCost: a.CachedWriteCost,
+		RequestCost:     a.RequestCost,
+	}
+}
+
+func (a *OutputCostDetails) deepCopy() *OutputCostDetails {
+	if a == nil {
+		return nil
+	}
+	return &OutputCostDetails{
+		TextCost:          a.TextCost,
+		AudioCost:         a.AudioCost,
+		ImageCost:         a.ImageCost,
+		ReasoningCost:     a.ReasoningCost,
+		CitationCost:      a.CitationCost,
+		SearchQueriesCost: a.SearchQueriesCost,
+	}
+}
+
+func (a *AdditionalCostDetails) deepCopy() *AdditionalCostDetails {
+	if a == nil {
+		return nil
+	}
+	return &AdditionalCostDetails{
+		GuardrailCost:     a.GuardrailCost,
+		MCPCost:           a.MCPCost,
+		SemanticCacheCost: a.SemanticCacheCost,
+		RoutingCost:       a.RoutingCost,
+	}
+}
+
 // Add returns the component-wise sum of two cost breakdowns, treating a nil
 // operand as zero. Returns nil only when both are nil.
 func (bc *BifrostCost) Add(other *BifrostCost) *BifrostCost {
@@ -2335,22 +2457,7 @@ func (u *BifrostLLMUsage) DeepCopy() *BifrostLLMUsage {
 		su := *u.SearchUnits
 		c.SearchUnits = &su
 	}
-	if u.Cost != nil {
-		cost := *u.Cost
-		if u.Cost.InputCostDetails != nil {
-			d := *u.Cost.InputCostDetails
-			cost.InputCostDetails = &d
-		}
-		if u.Cost.OutputCostDetails != nil {
-			d := *u.Cost.OutputCostDetails
-			cost.OutputCostDetails = &d
-		}
-		if u.Cost.AdditionalCostDetails != nil {
-			d := *u.Cost.AdditionalCostDetails
-			cost.AdditionalCostDetails = &d
-		}
-		c.Cost = &cost
-	}
+	c.Cost = u.Cost.DeepCopy()
 	if u.CostInUsdTicks != nil {
 		t := *u.CostInUsdTicks
 		c.CostInUsdTicks = &t

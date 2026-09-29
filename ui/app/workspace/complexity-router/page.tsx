@@ -16,11 +16,11 @@ import { ScrollArea } from "@/components/ui/scrollArea";
 import { TagInput } from "@/components/ui/tagInput";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { EmbeddingSupportedProviders, getProviderLabel } from "@/lib/constants/logs";
-import { ProviderIconType, RenderProviderIcon } from "@/lib/constants/icons";
+import { EmbeddingSupportedProviders } from "@/lib/constants/logs";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ModelMultiselect } from "@/components/ui/modelMultiselect";
+import { ModelSelector } from "@/components/ui/modelSelector";
+import { ProviderSelector } from "@/components/ui/providerSelector";
 import { getErrorMessage, useGetCoreConfigQuery, useGetProvidersQuery } from "@/lib/store";
 import { useGetAllKeysQuery } from "@/lib/store/apis/providersApi";
 import {
@@ -36,7 +36,7 @@ import {
 	MAX_SEMANTIC_PHRASES,
 	TIER_PHRASE_LIST_DEFINITIONS,
 } from "@/lib/types/complexityRouter";
-import { ModelProvider, ModelProviderName } from "@/lib/types/config";
+import { ModelProvider } from "@/lib/types/config";
 import { DBKey } from "@/lib/types/governance";
 import { cn } from "@/lib/utils";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
@@ -181,7 +181,7 @@ export default function ComplexityRouterPage() {
 	// serve. /api/models only applies per-key allow-lists and blacklists when it
 	// is handed key ids; without them it returns the whole provider pool, so the
 	// dropdown offers models every key would reject. Memoized because
-	// ModelMultiselect refetches whenever this array's identity changes.
+	// ModelSelector refetches whenever this array's identity changes.
 	const enabledKeyIdsForProvider = useMemo(
 		() => (allKeys || []).filter((key) => key.provider === liveSemantic?.provider && key.enabled !== false).map((key) => key.key_id),
 		[allKeys, liveSemantic?.provider],
@@ -190,6 +190,7 @@ export default function ComplexityRouterPage() {
 		() => (allKeys || []).filter((key) => key.provider === liveLLM?.provider && key.enabled !== false).map((key) => key.key_id),
 		[allKeys, liveLLM?.provider],
 	);
+	const systemOneProviderNames = useMemo(() => systemOneProviders.map((provider) => provider.name), [systemOneProviders]);
 	const enabledKeyIdsForJevProvider = useMemo(
 		() => (allKeys || []).filter((key) => key.provider === liveJev?.provider && key.enabled !== false).map((key) => key.key_id),
 		[allKeys, liveJev?.provider],
@@ -364,7 +365,9 @@ export default function ComplexityRouterPage() {
 				void refetchStatus();
 			})
 			.catch((err) => {
-				toast.error(`Couldn’t retry semantic warmup. ${getErrorMessage(err)}`, { position: "top-right" });
+				toast.error(`Couldn’t retry semantic warmup. ${getErrorMessage(err)}`, {
+					position: "top-right",
+				});
 			});
 	};
 
@@ -690,31 +693,20 @@ export default function ComplexityRouterPage() {
 										control={control}
 										name="jev.provider"
 										render={({ field }) => (
-											<Select
-												value={field.value || undefined}
-												onValueChange={(value: ModelProviderName) => {
+											<ProviderSelector
+												source="values"
+												values={systemOneProviderNames}
+												inputId="jev-provider"
+												data-testid="complexity-router-jev-provider-select"
+												value={field.value || ""}
+												onChange={(value: string) => {
 													if (value === field.value) return;
 													field.onChange(value);
 													setValue("jev.model", "", { shouldDirty: true });
 												}}
 												disabled={!canUpdate || systemOneProviders.length === 0}
-											>
-												<SelectTrigger className="w-full" id="jev-provider" data-testid="complexity-router-jev-provider-select">
-													<SelectValue placeholder="Select provider" />
-												</SelectTrigger>
-												<SelectContent>
-													{systemOneProviders
-														.filter((provider) => provider.name)
-														.map((provider) => (
-															<SelectItem key={provider.name} value={provider.name}>
-																<div className="flex items-center gap-2">
-																	<RenderProviderIcon provider={provider.name as ProviderIconType} size="sm" className="h-4 w-4" />
-																	<span>{getProviderLabel(provider.name)}</span>
-																</div>
-															</SelectItem>
-														))}
-												</SelectContent>
-											</Select>
+												placeholder="Select provider"
+											/>
 										)}
 									/>
 									{errors.jev?.provider && <p className="text-destructive text-xs">{errors.jev.provider.message}</p>}
@@ -726,10 +718,10 @@ export default function ComplexityRouterPage() {
 										control={control}
 										name="jev.model"
 										render={({ field }) => (
-											<ModelMultiselect
+											<ModelSelector
 												inputId="jev-model"
 												data-testid="complexity-router-jev-model-select"
-												isSingleSelect
+												allowCustomModel
 												provider={liveJev?.provider || undefined}
 												keys={enabledKeyIdsForJevProvider}
 												value={field.value ?? ""}

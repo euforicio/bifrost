@@ -148,6 +148,8 @@ HARNESS_MARKERS = ("test-core.sh", "test-provider-harness.sh")
 # allowlisted fails this check, so a new host forces an explicit decision rather
 # than being quietly assumed harmless.
 NOT_DIALLED_HOSTS = {
+    "harness.example": "OAuth redirect URI in registration/consent fixtures; never followed by the runner",
+    "mcp.deepwiki.com": "native mcp_servers URL dereferenced by Anthropic server-side, not the runner",
     # Fetched by the provider's own server-side tooling, never by Bifrost.
     "example.com": "MCP server_url and web_fetch targets - dereferenced by the provider",
     "www.youtube.com": "Gemini video input - Google fetches the URL server-side",

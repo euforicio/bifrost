@@ -598,3 +598,12 @@ func TestListModelsRejectsMissingAndOversizedCatalogs(t *testing.T) {
 		})
 	}
 }
+
+func TestDecisionUnsupported(t *testing.T) {
+	provider := &OpenAICodexProvider{unsupportedProvider: unsupportedProvider{providerKey: schemas.OpenAICodex}}
+	var _ schemas.Provider = provider
+	response, err := provider.Decision(nil, schemas.Key{}, &schemas.BifrostDecisionRequest{})
+	if response != nil || err == nil || err.Error == nil || err.ExtraFields.RequestType != schemas.DecisionRequest || err.ExtraFields.Provider != provider.GetProviderKey() {
+		t.Fatalf("expected unsupported decision with provider metadata, got response=%+v error=%+v", response, err)
+	}
+}

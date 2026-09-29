@@ -34,10 +34,9 @@ type complexityOnceState struct {
 func (p *RoutingPlugin) computeComplexity(
 	ctx *schemas.BifrostContext,
 	req *schemas.BifrostRequest,
-	virtualKeyID string,
 ) *complexity.ComplexityResult {
 	if ctx == nil {
-		return p.computeComplexityUncached(ctx, req, virtualKeyID)
+		return p.computeComplexityUncached(ctx, req)
 	}
 	state, _ := ctx.Value(complexityOnceKey{}).(*complexityOnceState)
 	if state == nil {
@@ -45,7 +44,7 @@ func (p *RoutingPlugin) computeComplexity(
 		ctx.SetValue(complexityOnceKey{}, state)
 	}
 	state.once.Do(func() {
-		state.result = p.computeComplexityUncached(ctx, req, virtualKeyID)
+		state.result = p.computeComplexityUncached(ctx, req)
 	})
 	return state.result
 }
@@ -53,7 +52,6 @@ func (p *RoutingPlugin) computeComplexity(
 func (p *RoutingPlugin) computeComplexityUncached(
 	ctx *schemas.BifrostContext,
 	req *schemas.BifrostRequest,
-	virtualKeyID string,
 ) *complexity.ComplexityResult {
 	input, disposition := complexity.BuildInputWithDisposition(ctx, req)
 	sessionID, _ := ctx.Value(schemas.BifrostContextKeySessionID).(string)
@@ -61,7 +59,7 @@ func (p *RoutingPlugin) computeComplexityUncached(
 
 	if disposition == complexity.InputContinuation {
 		if sessionActive {
-			key := buildComplexitySessionKey(ctx, virtualKeyID, sessionID)
+			key := complexitySessionKey(ctx)
 			tier, found, err := p.sessionStore.load(key, true)
 			if err != nil {
 				p.logComplexitySessionStoreError("refresh continuation", err)
@@ -103,7 +101,7 @@ func (p *RoutingPlugin) computeComplexityUncached(
 		return proposal.Result
 	}
 
-	key := buildComplexitySessionKey(ctx, virtualKeyID, sessionID)
+	key := complexitySessionKey(ctx)
 	priorTier, priorFound, loadErr := p.sessionStore.load(key, false)
 	if loadErr != nil {
 		p.logComplexitySessionStoreError("inspect", loadErr)

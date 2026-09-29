@@ -92,7 +92,7 @@ func TestSubscriptionPricingGateRejectsOnlyDollarBudgetedUnpricedRequests(t *tes
 	store, err := NewLocalGovernanceStore(context.Background(), logger, nil, &configstore.GovernanceConfig{
 		Providers: []configstoreTables.TableProvider{*provider},
 		Budgets:   []configstoreTables.TableBudget{*budget},
-	}, nil)
+	}, nil, nil)
 	require.NoError(t, err)
 	plugin := &GovernancePlugin{store: store}
 	ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
@@ -106,7 +106,7 @@ func TestSubscriptionPricingGateRejectsOnlyDollarBudgetedUnpricedRequests(t *tes
 	// catalog quote before dispatch.
 	assert.Nil(t, plugin.validateSubscriptionPricing(ctx, &EvaluationRequest{Provider: schemas.XAI, Model: "grok-4"}, schemas.ResponsesRequest))
 
-	emptyStore, err := NewLocalGovernanceStore(context.Background(), logger, nil, &configstore.GovernanceConfig{}, nil)
+	emptyStore, err := NewLocalGovernanceStore(context.Background(), logger, nil, &configstore.GovernanceConfig{}, nil, nil)
 	require.NoError(t, err)
 	assert.Nil(t, (&GovernancePlugin{store: emptyStore}).validateSubscriptionPricing(ctx, &EvaluationRequest{Provider: schemas.CursorProvider, Model: "auto"}, schemas.ResponsesRequest))
 }

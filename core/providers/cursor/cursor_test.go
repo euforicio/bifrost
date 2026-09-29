@@ -788,3 +788,12 @@ func TestCursorContinuationUsageReportsPerCallDelta(t *testing.T) {
 		t.Fatalf("continuation usage = %#v", second)
 	}
 }
+
+func TestDecisionUnsupported(t *testing.T) {
+	provider := &CursorProvider{unsupportedProvider: unsupportedProvider{providerKey: schemas.CursorProvider}}
+	var _ schemas.Provider = provider
+	response, err := provider.Decision(nil, schemas.Key{}, &schemas.BifrostDecisionRequest{})
+	if response != nil || err == nil || err.Error == nil || err.ExtraFields.RequestType != schemas.DecisionRequest || err.ExtraFields.Provider != provider.GetProviderKey() {
+		t.Fatalf("expected unsupported decision with provider metadata, got response=%+v error=%+v", response, err)
+	}
+}
