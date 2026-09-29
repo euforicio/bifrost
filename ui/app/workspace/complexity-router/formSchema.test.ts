@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { analyzerConfigSchema, countCanonicalSemanticPhrases, DEFAULT_FORM_VALUES, shouldSeedLLMPrompt } from "./formSchema";
+import {
+	analyzerConfigSchema,
+	countCanonicalSemanticPhrases,
+	DEFAULT_FORM_VALUES,
+	shouldSeedLLMPrompt,
+	toAnalyzerPayload,
+	toFormValues,
+} from "./formSchema";
 
 describe("fallback prompt initialization", () => {
 	test("initializes an untouched empty prompt", () => {
@@ -54,5 +61,22 @@ describe("semantic complexity phrase limit", () => {
 
 	test("does not cap a form that will omit the semantic block", () => {
 		expect(analyzerConfigSchema.safeParse(formValues(750, false)).success).toBe(true);
+	});
+});
+
+describe("Jev configuration compatibility", () => {
+	test("leaves an unconfigured Jev classifier empty", () => {
+		const values = formValues(1, false);
+		expect(analyzerConfigSchema.safeParse(values).success).toBe(true);
+		expect(toAnalyzerPayload(values).jev).toBeUndefined();
+	});
+	test("preserves a versioned Jev model and session routing", () => {
+		const values = formValues(1, false);
+		values.jev = { ...values.jev, provider: "typesafe", model: "jev-1.13.0" };
+		values.session = { enabled: true };
+		expect(analyzerConfigSchema.safeParse(values).success).toBe(true);
+		const restored = toFormValues(toAnalyzerPayload(values));
+		expect(restored.jev).toEqual(values.jev);
+		expect(restored.session).toEqual(values.session);
 	});
 });

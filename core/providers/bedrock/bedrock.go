@@ -217,8 +217,8 @@ func isStreamTransportError(err error) bool {
 // camelCase shape names AWS uses for ConverseStream / InvokeModelWithResponseStream
 // in-stream exception members) to a retryable HTTP status code. These exceptions
 // are transient and should be retried — the retry gate in executeRequestWithRetries
-// checks StatusCode against transientServerStatusCodes (500, 502, 503, 504) for
-// same-key retries and perKeyFailureStatusCodes (429) for rotation-triggered retries.
+// classifies the StatusCode (ClassifyFailure): 500, 502, 503 and 504 retry on the same
+// key, 429 rotates to the next one.
 //
 // Some AWS exceptions have a native status code the gate does not recognize
 // (modelStreamErrorException=424, modelTimeoutException=408); they are mapped to
@@ -2415,6 +2415,11 @@ func (provider *BedrockProvider) Rerank(ctx *schemas.BifrostContext, key schemas
 	return bifrostResponse, nil
 }
 
+// Decision is not supported by the Bedrock provider.
+func (provider *BedrockProvider) Decision(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.DecisionRequest, provider.GetProviderKey())
+}
+
 // OCR is not supported by the Bedrock provider.
 func (provider *BedrockProvider) OCR(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostOCRRequest) (*schemas.BifrostOCRResponse, *schemas.BifrostError) {
 	return nil, providerUtils.NewUnsupportedOperationError(schemas.OCRRequest, provider.GetProviderKey())
@@ -2755,6 +2760,9 @@ func (provider *BedrockProvider) FileUpload(ctx *schemas.BifrostContext, key sch
 
 	// Parse bucket name and optional prefix from s3Bucket (could be "bucket-name" or "s3://bucket-name/prefix/")
 	bucketName, bucketPrefix := parseS3URI(s3Bucket)
+	if bucketErr := validateS3Bucket(bucketName); bucketErr != nil {
+		return nil, bucketErr
+	}
 	if bucketPrefix != "" {
 		s3Prefix = bucketPrefix + s3Prefix
 	}
@@ -2873,6 +2881,9 @@ func (provider *BedrockProvider) FileList(ctx *schemas.BifrostContext, keys []sc
 	}
 
 	bucketName, bucketPrefix := parseS3URI(s3Bucket)
+	if bucketErr := validateS3Bucket(bucketName); bucketErr != nil {
+		return nil, bucketErr
+	}
 	if bucketPrefix != "" {
 		s3Prefix = bucketPrefix + s3Prefix
 	}
@@ -3013,6 +3024,9 @@ func (provider *BedrockProvider) FileRetrieve(ctx *schemas.BifrostContext, keys 
 	if bucketName == "" || s3Key == "" {
 		return nil, providerUtils.NewBifrostOperationError("invalid S3 URI format, expected s3://bucket/key", nil)
 	}
+	if bucketErr := validateS3Bucket(bucketName); bucketErr != nil {
+		return nil, bucketErr
+	}
 
 	var lastErr *schemas.BifrostError
 	for _, key := range keys {
@@ -3111,6 +3125,9 @@ func (provider *BedrockProvider) FileDelete(ctx *schemas.BifrostContext, keys []
 	if bucketName == "" || s3Key == "" {
 		return nil, providerUtils.NewBifrostOperationError("invalid S3 URI format, expected s3://bucket/key", nil)
 	}
+	if bucketErr := validateS3Bucket(bucketName); bucketErr != nil {
+		return nil, bucketErr
+	}
 
 	var lastErr *schemas.BifrostError
 	for _, key := range keys {
@@ -3191,6 +3208,9 @@ func (provider *BedrockProvider) FileContent(ctx *schemas.BifrostContext, keys [
 	bucketName, s3Key := parseS3URI(request.FileID)
 	if bucketName == "" || s3Key == "" {
 		return nil, providerUtils.NewBifrostOperationError("invalid S3 URI format, expected s3://bucket/key", nil)
+	}
+	if bucketErr := validateS3Bucket(bucketName); bucketErr != nil {
+		return nil, bucketErr
 	}
 
 	var lastErr *schemas.BifrostError
@@ -3649,7 +3669,7 @@ func (provider *BedrockProvider) fetchBatchManifest(ctx *schemas.BifrostContext,
 
 	// Parse the output S3 URI and construct manifest path
 	bucketName, prefix := parseS3URI(outputS3Uri)
-	if bucketName == "" {
+	if validateS3Bucket(bucketName) != nil {
 		return nil
 	}
 
@@ -3702,6 +3722,18 @@ func (provider *BedrockProvider) fetchBatchManifest(ctx *schemas.BifrostContext,
 	return &manifest
 }
 
+func escapeBedrockBatchARN(batchID string) (string, *schemas.BifrostError) {
+	if !strings.HasPrefix(batchID, "arn:") || !strings.Contains(batchID, ":bedrock:") {
+		return "", providerUtils.NewBifrostBadRequestError("invalid batch_id: a Bedrock job ARN is required")
+	}
+	for _, r := range batchID {
+		if r == '?' || r == '#' || r == '\\' || r == '%' || r < 0x20 || r == 0x7f {
+			return "", providerUtils.NewBifrostBadRequestError("invalid batch_id: URL delimiters and control characters are not allowed")
+		}
+	}
+	return url.PathEscape(batchID), nil
+}
+
 // BatchRetrieve retrieves a specific batch inference job from AWS Bedrock by trying each key until found.
 func (provider *BedrockProvider) BatchRetrieve(ctx *schemas.BifrostContext, keys []schemas.Key, request *schemas.BifrostBatchRetrieveRequest) (*schemas.BifrostBatchRetrieveResponse, *schemas.BifrostError) {
 	if err := providerUtils.CheckOperationAllowed(schemas.Bedrock, provider.customProviderConfig, schemas.BatchRetrieveRequest); err != nil {
@@ -3711,6 +3743,10 @@ func (provider *BedrockProvider) BatchRetrieve(ctx *schemas.BifrostContext, keys
 	if request.BatchID == "" {
 		return nil, providerUtils.NewBifrostOperationError("batch_id (job ARN) is required", nil)
 	}
+	encodedJobArn, idErr := escapeBedrockBatchARN(request.BatchID)
+	if idErr != nil {
+		return nil, idErr
+	}
 
 	var lastErr *schemas.BifrostError
 	for _, key := range keys {
@@ -3719,8 +3755,6 @@ func (provider *BedrockProvider) BatchRetrieve(ctx *schemas.BifrostContext, keys
 			region = key.BedrockKeyConfig.Region.GetValue()
 		}
 
-		// URL encode the job ARN
-		encodedJobArn := url.PathEscape(request.BatchID)
 		reqURL := fmt.Sprintf("https://%s/model-invocation-job/%s", resolveBedrockHost(bedrockEndpoints(key.BedrockKeyConfig), bedrockServiceControlPlane, region), encodedJobArn)
 
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -3857,6 +3891,10 @@ func (provider *BedrockProvider) BatchCancel(ctx *schemas.BifrostContext, keys [
 	if request.BatchID == "" {
 		return nil, providerUtils.NewBifrostOperationError("batch_id (job ARN) is required", nil)
 	}
+	encodedJobArn, idErr := escapeBedrockBatchARN(request.BatchID)
+	if idErr != nil {
+		return nil, idErr
+	}
 
 	var lastErr *schemas.BifrostError
 	for _, key := range keys {
@@ -3865,8 +3903,6 @@ func (provider *BedrockProvider) BatchCancel(ctx *schemas.BifrostContext, keys [
 			region = key.BedrockKeyConfig.Region.GetValue()
 		}
 
-		// URL encode the job ARN
-		encodedJobArn := url.PathEscape(request.BatchID)
 		reqURL := fmt.Sprintf("https://%s/model-invocation-job/%s/stop", resolveBedrockHost(bedrockEndpoints(key.BedrockKeyConfig), bedrockServiceControlPlane, region), encodedJobArn)
 
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reqURL, nil)
@@ -4347,6 +4383,32 @@ func toolNeedsAnthropicInvokePath(toolType string, deferLoading *bool) bool {
 	return deferLoading != nil && *deferLoading
 }
 
+// safeguardsSurviveStrip reports whether the shared Anthropic strip gate would
+// keep safeguards for this model. Only supported requests need InvokeModel,
+// where the native field and its required beta are assembled together.
+func safeguardsSurviveStrip(ctx *schemas.BifrostContext, model string) bool {
+	capModel := schemas.ResolveCanonicalModel(ctx, model)
+	caps := schemas.ResolveModelCaps(schemas.Bedrock, capModel)
+	return anthropic.ProviderFeatures[schemas.Bedrock].Safeguards &&
+		caps.SupportsSafeguards(anthropic.DefaultSupportsSafeguards(schemas.Bedrock, caps.Model()))
+}
+
+// extraParamsHasSafeguards accepts opaque JSON and programmatic parameter values.
+func extraParamsHasSafeguards(extraParams map[string]interface{}) bool {
+	v, exists := extraParams["safeguards"]
+	if !exists || v == nil {
+		return false
+	}
+	switch val := v.(type) {
+	case json.RawMessage:
+		return len(val) > 0
+	case []byte:
+		return len(val) > 0
+	default:
+		return true
+	}
+}
+
 func chatUsesAnthropicInvokePath(ctx *schemas.BifrostContext, request *schemas.BifrostChatRequest) bool {
 	if request == nil || request.Params == nil {
 		return false
@@ -4356,6 +4418,9 @@ func chatUsesAnthropicInvokePath(ctx *schemas.BifrostContext, request *schemas.B
 	}
 	if !schemas.IsAnthropicModelFamily(ctx, request.Model) {
 		return false
+	}
+	if extraParamsHasSafeguards(request.Params.ExtraParams) && safeguardsSurviveStrip(ctx, request.Model) {
+		return true
 	}
 	for _, tool := range request.Params.Tools {
 		if toolNeedsAnthropicInvokePath(string(tool.Type), tool.DeferLoading) {
@@ -4375,12 +4440,39 @@ func responsesUsesAnthropicInvokePath(ctx *schemas.BifrostContext, request *sche
 	if !schemas.IsAnthropicModelFamily(ctx, request.Model) {
 		return false
 	}
+	if extraParamsHasSafeguards(request.Params.ExtraParams) && safeguardsSurviveStrip(ctx, request.Model) {
+		return true
+	}
+	if invokeIngressThinkingNeedsInvokePath(ctx, request.Params.Reasoning) {
+		return true
+	}
 	for _, tool := range request.Params.Tools {
 		if toolNeedsAnthropicInvokePath(string(tool.Type), tool.DeferLoading) {
 			return true
 		}
 	}
 	return false
+}
+
+// invokeIngressThinkingNeedsInvokePath reports whether a request from the
+// InvokeModel-shaped ingress (BedrockContextKeyAnthropicInvokeIngress) has
+// thinking on. Converse TokenUsage has no thinking-token breakdown, while
+// InvokeModel returns usage.output_tokens_details.thinking_tokens, so such a
+// request is served by InvokeModel to keep the count the client asked for
+// (#7649). Thinking disabled (effort "none") or absent stays on Converse, and
+// so does every other ingress: /v1 and /bedrock converse callers never see
+// the marker. Callers gate on the Anthropic model family first.
+func invokeIngressThinkingNeedsInvokePath(ctx *schemas.BifrostContext, reasoning *schemas.ResponsesParametersReasoning) bool {
+	if ctx == nil || reasoning == nil {
+		return false
+	}
+	if marked, _ := ctx.Value(BedrockContextKeyAnthropicInvokeIngress).(bool); !marked {
+		return false
+	}
+	if reasoning.Effort != nil && *reasoning.Effort == "none" {
+		return false
+	}
+	return true
 }
 
 // invokeURL builds https://<bedrock-runtime host>/model/<model>/<action> using

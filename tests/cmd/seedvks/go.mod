@@ -9,7 +9,7 @@ replace (
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/maximhq/bifrost/core v1.8.6
+	github.com/maximhq/bifrost/core v1.10.2
 	github.com/maximhq/bifrost/framework v1.3.16
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/gorm v1.31.1
@@ -87,5 +87,6 @@ require (
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
+	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

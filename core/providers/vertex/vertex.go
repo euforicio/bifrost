@@ -34,9 +34,10 @@ import (
 
 type VertexError struct {
 	Error struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Status  string `json:"status"`
+		Code    int                                   `json:"code"`
+		Message string                                `json:"message"`
+		Status  string                                `json:"status"`
+		Details []gemini.GeminiGenerationErrorDetails `json:"details"`
 	} `json:"error"`
 }
 
@@ -367,17 +368,12 @@ func (provider *VertexProvider) listModelsByKey(ctx *schemas.BifrostContext, key
 					break
 				}
 
+				apiErr := parseVertexError(resp)
 				respBody := append([]byte(nil), resp.Body()...)
-				statusCode := resp.StatusCode()
 				wait()
 				fasthttp.ReleaseRequest(req)
 				fasthttp.ReleaseResponse(resp)
-
-				var errorResp VertexError
-				if err := sonic.Unmarshal(respBody, &errorResp); err != nil {
-					return nil, providerUtils.EnrichError(ctx, providerUtils.NewBifrostOperationError(schemas.ErrProviderResponseUnmarshal, err), nil, respBody, provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
-				}
-				return nil, providerUtils.EnrichError(ctx, providerUtils.NewProviderAPIError(errorResp.Error.Message, nil, statusCode, nil, nil), nil, respBody, provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
+				return nil, providerUtils.EnrichError(ctx, apiErr, nil, respBody, provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
 			}
 
 			// Parse Vertex's publisher models response
@@ -1786,29 +1782,7 @@ func (provider *VertexProvider) Embedding(ctx *schemas.BifrostContext, key schem
 			removeVertexClient(key.VertexKeyConfig.AuthCredentials.GetValue())
 		}
 
-		errBody := resp.Body()
-
-		// Extract error message from Vertex's error format
-		errorMessage := "Unknown error"
-		if len(errBody) > 0 {
-			// Try to parse Vertex's error format
-			var vertexError map[string]interface{}
-			if err := sonic.Unmarshal(errBody, &vertexError); err != nil {
-				return nil, providerUtils.EnrichError(ctx, providerUtils.NewBifrostOperationError(schemas.ErrProviderResponseUnmarshal, err), jsonBody, errBody, provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
-			}
-
-			if errorObj, exists := vertexError["error"]; exists {
-				if errorMap, ok := errorObj.(map[string]interface{}); ok {
-					if message, exists := errorMap["message"]; exists {
-						if msgStr, ok := message.(string); ok {
-							errorMessage = msgStr
-						}
-					}
-				}
-			}
-		}
-
-		return nil, providerUtils.EnrichError(ctx, providerUtils.NewProviderAPIError(errorMessage, nil, resp.StatusCode(), nil, nil), jsonBody, errBody, provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
+		return nil, providerUtils.EnrichError(ctx, parseVertexError(resp), jsonBody, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
 	}
 
 	responseBody, isLargeResp, decodeErr := providerUtils.FinalizeResponseWithLargeDetection(ctx, resp, provider.logger)
@@ -1954,7 +1928,12 @@ func (provider *VertexProvider) Rerank(ctx *schemas.BifrostContext, key schemas.
 				parsedError.Error.Message == schemas.ErrProviderResponseUnmarshal
 
 			if shouldOverride {
-				parsedError = providerUtils.NewProviderAPIError(errorMessage, nil, resp.StatusCode(), nil, nil)
+				overridden := providerUtils.NewProviderAPIError(errorMessage, nil, resp.StatusCode(), nil, nil)
+				if parsedError != nil {
+					// Keep the retry hint parseVertexError read from the response.
+					overridden.ExtraFields.RetryAfter = parsedError.ExtraFields.RetryAfter
+				}
+				parsedError = overridden
 			}
 		}
 
@@ -2000,6 +1979,11 @@ func (provider *VertexProvider) Rerank(ctx *schemas.BifrostContext, key schemas.
 	}
 
 	return bifrostResponse, nil
+}
+
+// Decision is not supported by the Vertex provider.
+func (provider *VertexProvider) Decision(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.DecisionRequest, provider.GetProviderKey())
 }
 
 // OCR is not supported by the Vertex provider.
@@ -2575,6 +2559,15 @@ func (provider *VertexProvider) VideoGeneration(ctx *schemas.BifrostContext, key
 	return bifrostResp, nil
 }
 
+// vertexVideoModelPath returns the escaped "projects/.../models/{model}" prefix of a video operation name.
+func vertexVideoModelPath(taskID string) (string, *schemas.BifrostError) {
+	parts, bifrostErr := parseVertexResourceName(taskID, "video_id", "projects", "", "locations", "", "publishers", "", "models", "", "operations", "")
+	if bifrostErr != nil {
+		return "", bifrostErr
+	}
+	return strings.Join(parts[:8], "/"), nil
+}
+
 // VideoRetrieve retrieves the status of a video generation operation.
 // Uses the fetchPredictOperation endpoint for Vertex AI.
 func (provider *VertexProvider) VideoRetrieve(ctx *schemas.BifrostContext, key schemas.Key, bifrostReq *schemas.BifrostVideoRetrieveRequest) (*schemas.BifrostVideoGenerationResponse, *schemas.BifrostError) {
@@ -2591,14 +2584,10 @@ func (provider *VertexProvider) VideoRetrieve(ctx *schemas.BifrostContext, key s
 	// Construct the URL for fetching the operation status
 	// The operation name (bifrostReq.ID) already contains the full path:
 	// projects/PROJECT_ID/locations/REGION/publishers/google/models/MODEL_ID/operations/OPERATION_ID
-	// We need to extract the model path from it to construct the fetchPredictOperation endpoint
-	// Extract: projects/.../models/MODEL_ID from the operation name
 	taskID := providerUtils.StripVideoIDProviderSuffix(bifrostReq.ID, provider.GetProviderKey())
-	var modelPath string
-	if idx := strings.Index(taskID, "/operations/"); idx != -1 {
-		modelPath = taskID[:idx]
-	} else {
-		return nil, providerUtils.NewBifrostOperationError("invalid operation ID format", nil)
+	modelPath, idErr := vertexVideoModelPath(taskID)
+	if idErr != nil {
+		return nil, idErr
 	}
 
 	// Construct the URL: https://{vertex-api-host}/v1/{modelPath}:fetchPredictOperation
@@ -3006,7 +2995,7 @@ func (provider *VertexProvider) BatchCreate(ctx *schemas.BifrostContext, key sch
 		if resp.StatusCode() == fasthttp.StatusUnauthorized || resp.StatusCode() == fasthttp.StatusForbidden {
 			removeVertexClient(key.VertexKeyConfig.AuthCredentials.GetValue())
 		}
-		return nil, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp.Body(), resp.StatusCode(), "batch create"), jsonData, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
+		return nil, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp, "batch create"), jsonData, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
 	}
 
 	var created VertexBatchPredictionJob
@@ -3147,7 +3136,7 @@ func (provider *VertexProvider) batchListByKey(ctx *schemas.BifrostContext, key 
 		if resp.StatusCode() == fasthttp.StatusUnauthorized || resp.StatusCode() == fasthttp.StatusForbidden {
 			removeVertexClient(key.VertexKeyConfig.AuthCredentials.GetValue())
 		}
-		return nil, 0, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp.Body(), resp.StatusCode(), "batch list"), nil, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
+		return nil, 0, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp, "batch list"), nil, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
 	}
 
 	// GET request: no request body, so raw request capture is skipped by HandleProviderResponse.
@@ -3243,7 +3232,7 @@ func (provider *VertexProvider) vertexGetBatchJob(ctx *schemas.BifrostContext, k
 		if resp.StatusCode() == fasthttp.StatusUnauthorized || resp.StatusCode() == fasthttp.StatusForbidden {
 			removeVertexClient(key.VertexKeyConfig.AuthCredentials.GetValue())
 		}
-		return nil, nil, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp.Body(), resp.StatusCode(), "batch retrieve"), nil, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
+		return nil, nil, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp, "batch retrieve"), nil, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
 	}
 
 	var job VertexBatchPredictionJob
@@ -3307,7 +3296,7 @@ func (provider *VertexProvider) batchCancelByKey(ctx *schemas.BifrostContext, ke
 		if resp.StatusCode() == fasthttp.StatusUnauthorized || resp.StatusCode() == fasthttp.StatusForbidden {
 			removeVertexClient(key.VertexKeyConfig.AuthCredentials.GetValue())
 		}
-		return nil, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp.Body(), resp.StatusCode(), "batch cancel"), nil, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
+		return nil, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp, "batch cancel"), nil, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
 	}
 
 	return &schemas.BifrostBatchCancelResponse{
@@ -3374,7 +3363,7 @@ func (provider *VertexProvider) batchDeleteByKey(ctx *schemas.BifrostContext, ke
 		if resp.StatusCode() == fasthttp.StatusUnauthorized || resp.StatusCode() == fasthttp.StatusForbidden {
 			removeVertexClient(key.VertexKeyConfig.AuthCredentials.GetValue())
 		}
-		return nil, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp.Body(), resp.StatusCode(), "batch delete"), nil, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
+		return nil, providerUtils.EnrichError(ctx, parseVertexJobAPIError(resp, "batch delete"), nil, resp.Body(), provider.sendBackRawRequest, provider.sendBackRawResponse, latency)
 	}
 
 	return &schemas.BifrostBatchDeleteResponse{

@@ -1,7 +1,7 @@
 package bifrost
 
 import (
-	"fmt"
+	"bytes"
 	"strings"
 
 	schemas "github.com/maximhq/bifrost/core/schemas"
@@ -117,8 +117,83 @@ func containsAnyMarker(message string, markers []string) bool {
 	return false
 }
 
+// reasoningTokenWords are the family names every upstream uses when it refuses a
+// replayed reasoning token, whatever else the sentence says. OpenAI, Azure, xAI and
+// Bedrock's OpenAI-compatible surfaces say "encrypted content" or "encrypted
+// reasoning"; Bedrock Converse says "reasoningContent"; Anthropic says "thinking" and
+// "redacted_thinking"; Gemini and Vertex say "thought signature". These are the names
+// of the field, not the provider's verdict on it, which is why they hold still while
+// the verdict wording ("invalid", "corrupted", "not valid", "could not decrypt",
+// "different region") keeps changing.
+var reasoningTokenWords = []string{"encrypted", "reasoning", "thinking", "thought"}
+
+// reasoningConfigParams are request parameters that configure reasoning rather than
+// replay it. A 400 naming one is a configuration error -- an effort level or summary
+// mode the model does not take, a thinking budget outside Anthropic's documented
+// bounds, or a thinking mode the model has retired -- and the strip never touches
+// these parameters, so the retry would only earn the same 400.
+var reasoningConfigParams = []string{
+	"reasoning.effort",
+	"reasoning_effort",
+	"reasoning.summary",
+	"reasoning_summary",
+	"budget_tokens",
+	"thinking.type",
+	"thinking_budget",
+	"thinkingbudget",
+	"thinking_level",
+	"thinkinglevel",
+	"include_thoughts",
+	"includethoughts",
+}
+
+// shouldStripReasoningAfterClientError reports whether a failed attempt earns one more
+// try with the request's replayed reasoning tokens removed.
+//
+// The gate is a 400 whose message names a reasoning token, by family word alone. It
+// deliberately does not require the upstream's verdict wording: only Anthropic
+// documents its refusal text, and every mid-conversation provider or model switch
+// (bedrock to bedrock_mantle, Azure to Mantle, a per-turn router) produced a new
+// sentence per surface that the older verdict-based matcher missed, each time handing a
+// healable 400 straight to the client. Requiring the family word keeps an unrelated
+// 400 (context length, an unsupported parameter) from spending an upstream call that
+// would only return the same error.
+//
+// A 400 is the only class where the payload is the plausible cause: 401/403 are
+// identity, 404 is routing, 429 and 5xx are transient, and the ordinary retry classes
+// already own those. The caller pairs this with stripUnverifiableReasoning, which
+// returns false when the request carries no token, so the extra attempt is spent only
+// on requests that replay one. A 400 that names the family for another reason (a
+// missing thought_signature) costs one cheap call that is rejected before inference
+// and returns the same error; a successful response is never touched, because the
+// strip runs only after a refusal.
+//
+// Two exclusions are certain to earn the same 400 again. Anthropic's documented
+// "`thinking` or `redacted_thinking` blocks in the latest assistant message cannot be
+// modified": the strip drops those blocks. And a 400 that names a reasoning
+// configuration parameter (see reasoningConfigParams) but no replayed-token field:
+// the strip leaves the parameter in place.
+func shouldStripReasoningAfterClientError(err *schemas.BifrostError) bool {
+	if err == nil || err.Error == nil || err.StatusCode == nil || *err.StatusCode != 400 {
+		return false
+	}
+	message := strings.ToLower(err.Error.Message)
+	if strings.Contains(message, "cannot be modified") {
+		return false
+	}
+	if containsAnyMarker(message, reasoningConfigParams) && !namesEncryptedReasoningField(message) {
+		return false
+	}
+	return containsAnyMarker(message, reasoningTokenWords)
+}
+
 // isEncryptedReasoningRejection reports whether err is an upstream refusal to accept
-// replayed encrypted reasoning content.
+// replayed encrypted reasoning content, as far as the known phrasings go.
+//
+// It no longer gates the fail-soft retry; shouldStripReasoningAfterClientError does,
+// on status alone. This classifier labels the retry in logs and metrics, so an
+// operator can tell a recognised token refusal from a speculative strip after an
+// unrelated 400. A miss here costs a less specific log line, not a failed turn.
 //
 // encrypted_content is bound to the identity that minted it: the item id it was
 // issued with, the API key's organization, and the serving endpoint. A gateway
@@ -157,6 +232,13 @@ func isEncryptedReasoningRejection(err *schemas.BifrostError) bool {
 	// trigger would spend an upstream call to arrive at the same error, worse.
 	if strings.Contains(message, "cannot be modified") {
 		return false
+	}
+
+	// Bedrock runtime's OpenAI-compatible Responses endpoint uses validation_error
+	// for model/account-bound reasoning replay. Match its specific refusal rather
+	// than treating unrelated reasoning validation errors as recoverable.
+	if strings.Contains(message, "encrypted reasoning was created for a different account or model") {
+		return true
 	}
 
 	if !namesEncryptedReasoningField(message) {
@@ -428,11 +510,18 @@ func stripRawAnthropicChatThinking(rawBody *[]byte) bool {
 	// with tool_use present and thinking still enabled; measured against the live API on
 	// claude-sonnet-4-5, claude-haiku-4-5 and claude-opus-5.
 	// https://platform.claude.com/docs/en/build-with-claude/thinking#preserving-thinking-blocks
+	// Each message is rewritten in its own JSON and the messages array is written back
+	// once. Addressing through the whole body (messages.<i>.content) would reserialise
+	// the entire request per changed message, making this O(messages x body).
+	// Pinned by TestStripRawAnthropicChatThinking_AllocationScaling.
 	changed := false
-	for messageIndex, message := range messages.Array() {
+	var rebuilt [][]byte
+	for _, message := range messages.Array() {
+		messageRaw := []byte(message.Raw)
 		content := message.Get("content")
 		// The shorthand string form carries no blocks, so there is nothing to rewrite.
 		if !content.IsArray() {
+			rebuilt = append(rebuilt, messageRaw)
 			continue
 		}
 
@@ -455,21 +544,44 @@ func stripRawAnthropicChatThinking(rawBody *[]byte) bool {
 		}
 
 		if !messageChanged || len(kept) == 0 {
+			rebuilt = append(rebuilt, messageRaw)
 			continue
 		}
-		updated, err := sjson.SetRawBytes(body, fmt.Sprintf("messages.%d.content", messageIndex), []byte("["+strings.Join(kept, ",")+"]"))
+		updated, err := sjson.SetRawBytes(messageRaw, "content", []byte("["+strings.Join(kept, ",")+"]"))
 		if err != nil {
+			rebuilt = append(rebuilt, messageRaw)
 			continue
 		}
-		body = updated
+		rebuilt = append(rebuilt, updated)
 		changed = true
 	}
 
 	if !changed {
 		return false
 	}
-	*rawBody = body
+	updated, err := sjson.SetRawBytes(body, "messages", joinRawJSONArray(rebuilt, len(body)))
+	if err != nil {
+		return false
+	}
+	*rawBody = updated
 	return true
+}
+
+// joinRawJSONArray concatenates pre-encoded JSON values into one array, so a batch of
+// element-local edits costs a single write of the enclosing document instead of one per
+// element.
+func joinRawJSONArray(parts [][]byte, sizeHint int) []byte {
+	var buf bytes.Buffer
+	buf.Grow(sizeHint)
+	buf.WriteByte('[')
+	for i, p := range parts {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.Write(p)
+	}
+	buf.WriteByte(']')
+	return buf.Bytes()
 }
 
 // stripContentBlockReasoningPayloads returns the message's content blocks with every
@@ -683,16 +795,31 @@ func stripRawResponsesEncryptedContent(rawBody *[]byte, dropItemIDs bool) bool {
 		// Deleting a field inside a block never reorders the content array, so the indices
 		// read before the deletes stay valid. A string-valued content yields a one-element
 		// array carrying neither field, and falls through untouched.
-		for blockIndex, block := range gjson.Get(rest, "content").Array() {
-			for _, field := range contentBlockReasoningCarriers {
-				if !gjson.Get(block.Raw, field).Exists() {
-					continue
+		// Each carrier is dropped from the block's own JSON and the content array is
+		// written back once. Deleting content.<i>.<field> through the whole item would
+		// reserialise it per block per carrier, making this O(blocks x item).
+		// Pinned by TestStripRawResponsesEncryptedContent_AllocationScaling.
+		if contentResult := gjson.Get(rest, "content"); contentResult.IsArray() {
+			var rebuiltBlocks [][]byte
+			contentChanged := false
+			for _, block := range contentResult.Array() {
+				blockRaw := []byte(block.Raw)
+				for _, field := range contentBlockReasoningCarriers {
+					if !gjson.GetBytes(blockRaw, field).Exists() {
+						continue
+					}
+					updated, err := sjson.DeleteBytes(blockRaw, field)
+					if err != nil {
+						continue
+					}
+					blockRaw, contentChanged = updated, true
 				}
-				updated, err := sjson.Delete(rest, fmt.Sprintf("content.%d.%s", blockIndex, field))
-				if err != nil {
-					continue
+				rebuiltBlocks = append(rebuiltBlocks, blockRaw)
+			}
+			if contentChanged {
+				if updated, err := sjson.SetRawBytes([]byte(rest), "content", joinRawJSONArray(rebuiltBlocks, len(rest))); err == nil {
+					rest, itemChanged = string(updated), true
 				}
-				rest, itemChanged = updated, true
 			}
 		}
 

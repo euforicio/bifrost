@@ -94,10 +94,7 @@ const jevSchema = z.object({
 		.min(1, "Enter a classification timeout")
 		.refine((value) => isPositiveDurationString(value), "Enter a timeout greater than 0")
 		.optional(),
-	min_confidence: z
-		.number({ error: "Enter a number between 0 and 1" })
-		.gt(0, "Must be greater than 0")
-		.lt(1, "Must be less than 1"),
+	min_confidence: z.number({ error: "Enter a number between 0 and 1" }).gt(0, "Must be greater than 0").lt(1, "Must be less than 1"),
 	message_history_count: z
 		.number({
 			error: `Jev always uses the latest user message only (${MIN_JEV_MESSAGE_HISTORY})`,
@@ -255,7 +252,7 @@ export const DEFAULT_LLM_FORM_VALUES: LLMFormValues = {
 
 export const DEFAULT_JEV_FORM_VALUES: JevFormValues = {
 	provider: DEFAULT_JEV_CONFIG.provider,
-	model: DEFAULT_JEV_CONFIG.model,
+	model: "",
 	timeout: DEFAULT_JEV_CONFIG.timeout,
 	min_confidence: DEFAULT_JEV_CONFIG.min_confidence ?? DEFAULT_JEV_MIN_CONFIDENCE,
 	message_history_count: DEFAULT_JEV_CONFIG.message_history_count ?? MIN_JEV_MESSAGE_HISTORY,
