@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly helper=$(cd "$(dirname "$0")" && pwd)/orion-push.sh
-readonly test_root=$(mktemp -d "${TMPDIR:-/tmp}/bifrost-orion-push-test.XXXXXX")
+helper=$(cd "$(dirname "$0")" && pwd)/orion-push.sh
+readonly helper
+test_root=$(mktemp -d "${TMPDIR:-/tmp}/bifrost-orion-push-test.XXXXXX")
+readonly test_root
 trap 'rm -rf -- "$test_root"' EXIT
 readonly remote="$test_root/euforicio/orion-infra.git"
 readonly checkout="$test_root/checkout"
