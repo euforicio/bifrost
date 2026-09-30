@@ -21,13 +21,13 @@ git pull --rebase origin main
 
 readonly manifest=apps/bifrost/kustomization.yaml
 [[ -f $manifest ]] || { echo "missing $manifest" >&2; exit 1; }
-[[ $(grep -Ec '^[[:space:]]*digest:' "$manifest") -eq 1 ]] || {
+[[ $(grep -Ec '^[[:space:]]*(-[[:space:]]*)?digest:' "$manifest") -eq 1 ]] || {
 	echo "$manifest must contain exactly one image digest" >&2
 	exit 1
 }
 
 readonly digest=${image##*@}
-sed -E -i.bak "s|^([[:space:]]*digest:).*$|\1 $digest|" "$manifest"
+sed -E -i.bak "s|^([[:space:]]*(-[[:space:]]*)?digest:).*$|\1 $digest|" "$manifest"
 rm -f -- "$manifest.bak"
 grep -Fq "digest: $digest" "$manifest"
 
