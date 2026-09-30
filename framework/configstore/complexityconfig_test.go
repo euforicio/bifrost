@@ -48,11 +48,11 @@ func TestComplexitySessionConfigDecoding(t *testing.T) {
 	require.ErrorContains(t, err, "requires enabled")
 }
 
-func TestComplexitySessionConfigRequiresSemanticWhenEnabled(t *testing.T) {
+func TestComplexitySessionConfigRequiresClassifierWhenEnabled(t *testing.T) {
 	cfg := testComplexityAnalyzerConfig()
 	cfg.Session = &ComplexitySessionConfig{Enabled: true}
 	normalized := cfg.Normalized()
-	require.ErrorContains(t, normalized.Validate(), "requires a semantic config block")
+	require.ErrorContains(t, normalized.Validate(), "requires a semantic or jev config block")
 
 	cfg.Session.Enabled = false
 	normalized = cfg.Normalized()
