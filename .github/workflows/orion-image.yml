@@ -78,6 +78,7 @@ jobs:
     timeout-minutes: 45
     outputs:
       image: ${{ steps.reference.outputs.image }}
+      variant: ${{ steps.tag.outputs.variant }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@fe104658747b27e96e4f7e80cd0a94068e53901d # v2.16.1
@@ -88,7 +89,10 @@ jobs:
             127.0.0.1:18884
             127.0.0.1:18885
             nodejs.org:443
+            api.github.com:443
             auth.docker.io:443
+            objects.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
             dl-cdn.alpinelinux.org:443
             fonts.googleapis.com:443
             fonts.gstatic.com:443
@@ -122,6 +126,7 @@ jobs:
           repository=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
           variant=${{ vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true' && 'cloudflare' || 'orion' }}
           echo "value=ghcr.io/${repository}:${variant}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "variant=${variant}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push checked-out sources
         id: build
@@ -133,26 +138,26 @@ jobs:
           build-args: |
             VERSION=0.0.0-${{ github.sha }}
             VCS_REF=${{ github.sha }}
-            CLOUDFLARE_STORAGE=${{ vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true' }}
+            CLOUDFLARE_STORAGE=${{ steps.tag.outputs.variant == 'cloudflare' }}
           tags: ${{ steps.tag.outputs.value }}
           push: true
           provenance: mode=max
           sbom: true
 
       - name: Set up Node for exact native image qualification
-        if: vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.tag.outputs.variant == 'cloudflare'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24.21.0'
       - name: Qualify exact Cloudflare image against native SQL and R2
-        if: vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true'
+        if: steps.tag.outputs.variant == 'cloudflare'
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           npm ci --prefix deploy/cloudflare
           node deploy/cloudflare/test-image.mjs "ghcr.io/euforicio/bifrost@${IMAGE_DIGEST}" "$GITHUB_SHA"
       - name: Boot-smoke immutable image
-        if: vars.CLOUDFLARE_PRODUCTION_ENABLED != 'true'
+        if: steps.tag.outputs.variant == 'orion'
         env:
           IMAGE: ${{ steps.tag.outputs.value }}@${{ steps.build.outputs.digest }}
         run: |
@@ -193,7 +198,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   promote:
-    if: vars.CLOUDFLARE_PRODUCTION_ENABLED != 'true'
+    if: github.ref == 'refs/heads/main' && needs.build.outputs.variant == 'orion'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -229,7 +234,7 @@ jobs:
     permissions:
       contents: read
       packages: read
-    if: github.ref == 'refs/heads/main' && vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true'
+    if: github.ref == 'refs/heads/main' && needs.build.outputs.variant == 'cloudflare'
     needs: [validate, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -237,6 +242,8 @@ jobs:
     env:
       CLOUDFLARE_ACCOUNT_ID: dd99a5f86972717d02d06b52cba6ab5d
     steps:
+      - name: Check out qualified application source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       - name: Require current application main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -247,6 +254,7 @@ jobs:
           repository: euforicio/orion-infra
           ref: main
           token: ${{ secrets.ORION_INFRA_TOKEN }}
+          path: infrastructure
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24.21.0'
@@ -260,20 +268,27 @@ jobs:
           name: bifrost-web
           path: ${{ runner.temp }}/bifrost-web
       - name: Install pinned deployment dependencies
+        working-directory: infrastructure
         run: |
           npm ci --prefix cloudflare
+      - name: Require recorded production cutover
+        working-directory: infrastructure
+        run: node cloudflare/scripts/require-production.mjs bifrost "$GITHUB_WORKSPACE"
       - name: Mirror checked immutable image to Cloudflare
+        working-directory: infrastructure
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           IMAGE: ${{ needs.build.outputs.image }}
         run: node cloudflare/scripts/mirror-image.mjs bifrost "$IMAGE" "$GITHUB_SHA" "$RUNNER_TEMP/bifrost-image.json"
       - name: Deploy checked frontend CDN assets
+        working-directory: infrastructure
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           node cloudflare/scripts/prepare-frontend.mjs bifrost "$RUNNER_TEMP/bifrost-web"
           (cd cloudflare && npx wrangler deploy --config frontends/bifrost/wrangler.jsonc)
       - name: Promote backend release
+        working-directory: infrastructure
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: node cloudflare/scripts/promote-release.mjs bifrost "$GITHUB_SHA" "$RUNNER_TEMP/bifrost-image.json"

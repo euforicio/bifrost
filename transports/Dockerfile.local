@@ -87,10 +87,11 @@
 
   # Getting arguments
   ARG VCS_REF=unknown
-  LABEL org.opencontainers.image.source="https://github.com/euforicio/bifrost" \
-        org.opencontainers.image.revision="${VCS_REF}"
-
   ARG CLOUDFLARE_STORAGE=false
+  LABEL org.opencontainers.image.source="https://github.com/euforicio/bifrost" \
+        org.opencontainers.image.revision="${VCS_REF}" \
+        io.rift.storage.cloudflare="${CLOUDFLARE_STORAGE}"
+
   ARG ARG_APP_PORT=8080
   ARG ARG_APP_HOST=0.0.0.0
   ARG ARG_LOG_LEVEL=info

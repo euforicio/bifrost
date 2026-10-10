@@ -21,7 +21,7 @@ try {
  for(const pkg of ['configstore','logstore','objectstore']) await run('go',['test','-c','-tags','cloudflare','-ldflags=-X github.com/ncruces/go-sqlite3/driver.driverName=cloudflare-sqlite','-o',join(directory,pkg+'.test'),'./'+pkg],{CGO_ENABLED:'0'});
  const modules=[];
  for(const name of ['qualification.js','storage.js','r2.js']) modules.push({type:'ESModule',path:join(root,'deploy/cloudflare',name),contents:await readFile(new URL(name,import.meta.url),'utf8')});
- const options=convertV4MiniflareOptions({modulesRoot:join(root,'deploy/cloudflare'),modules,port:18884,compatibilityDate:'2026-10-09',durableObjects:{FILES:{className:'SQLiteFiles',useSQLite:true}},r2Buckets:['BIFROST_DATA'],bindings:{STORAGE_TOKEN:token,BIFROST_R2_CAPABILITY:token,BIFROST_R2_BUCKET:'bifrost-data'},resourcePersistencePath:join(directory,'authority')});
+ const options=convertV4MiniflareOptions({modulesRoot:join(root,'deploy/cloudflare'),modules,port:18884,compatibilityDate:'2026-10-09',durableObjects:{FILES:{className:'SQLiteFiles',useSQLite:true}},r2Buckets:['BIFROST_DATA'],bindings:{STORAGE_TOKEN:token,REQUIRE_IMPORT:'false',BIFROST_R2_CAPABILITY:token,BIFROST_R2_BUCKET:'bifrost-data'},resourcePersistencePath:join(directory,'authority')});
  runtime=new Miniflare(options);
  for(const action of ['initialize','verify']) {
   if(action==='verify') {await runtime.dispose();runtime=new Miniflare(options);}

@@ -31,7 +31,7 @@ async function stopContainer() {
   });
 }
 const modules = await Promise.all(['qualification.js', 'storage.js', 'r2.js'].map(async file => ({ type: 'ESModule', path: join(root, file), contents: await readFile(join(root, file), 'utf8') })));
-const options = convertV4MiniflareOptions({ modulesRoot: root, modules, port: 18884, compatibilityDate: '2026-10-09', durableObjects: { FILES: { className: 'SQLiteFiles', useSQLite: true } }, r2Buckets: ['BIFROST_DATA'], bindings: { STORAGE_TOKEN: token, BIFROST_R2_CAPABILITY: token, BIFROST_R2_BUCKET: 'bifrost-data' }, resourcePersistencePath: join(directory, 'authority') });
+const options = convertV4MiniflareOptions({ modulesRoot: root, modules, port: 18884, compatibilityDate: '2026-10-09', durableObjects: { FILES: { className: 'SQLiteFiles', useSQLite: true } }, r2Buckets: ['BIFROST_DATA'], bindings: { STORAGE_TOKEN: token, REQUIRE_IMPORT: 'false', BIFROST_R2_CAPABILITY: token, BIFROST_R2_BUCKET: 'bifrost-data' }, resourcePersistencePath: join(directory, 'authority') });
 let runtime;
 const sizes = {};
 try {
@@ -39,6 +39,7 @@ try {
   const labels = JSON.parse(docker(['image', 'inspect', image, '--format', '{{json .Config.Labels}}']));
   assert.equal(labels['org.opencontainers.image.revision'], sha);
   assert.equal(labels['org.opencontainers.image.source'], 'https://github.com/euforicio/bifrost');
+  assert.equal(labels['io.rift.storage.cloudflare'], 'true');
   assert.equal(docker(['image', 'inspect', image, '--format', '{{.Os}}/{{.Architecture}}']).trim(), 'linux/amd64');
   for (let cycle = 0; cycle < 2; cycle++) {
     runtime = new Miniflare(options);

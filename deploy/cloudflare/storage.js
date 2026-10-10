@@ -73,6 +73,10 @@ export class SQLiteFiles extends DurableObject {
       const current=this.sql.exec('SELECT epoch,revision FROM authority WHERE id=1').one();
       if(current.epoch!==epoch || current.revision!==1 || this.readiness().size!==size) throw new Error('Import changed during verification');
       this.sql.exec('INSERT INTO import_receipt VALUES(1,?,?)',size,actual);
+      // The importer cannot mutate bytes covered by the verified receipt.
+      // A Container controller must activate a fresh generation to write.
+      this.sql.exec("UPDATE generation SET capability='' WHERE id=1");
+      this.sql.exec("UPDATE authority SET epoch=epoch+1,owner='' WHERE id=1");
     });
     return {verified:true};
   }
@@ -92,10 +96,15 @@ export class SQLiteFiles extends DurableObject {
     return /^[a-f0-9]{64}$/.test(supplied) && /^[a-f0-9]{64}$/.test(this.env.STORAGE_TOKEN || "") &&
       crypto.subtle.timingSafeEqual(new TextEncoder().encode(supplied),new TextEncoder().encode(this.env.STORAGE_TOKEN));
   }
+  importing(request) {
+    const supplied = request.headers.get("X-Migration-Capability") || "";
+    return /^[a-f0-9]{64}$/.test(supplied) && /^[a-f0-9]{64}$/.test(this.env.DEPLOYMENT_TOKEN || "") &&
+      crypto.subtle.timingSafeEqual(new TextEncoder().encode(supplied), new TextEncoder().encode(this.env.DEPLOYMENT_TOKEN));
+  }
   state(request) {
     this.checkGeneration(request);
     const state = this.sql.exec("SELECT * FROM authority WHERE id=1").one();
-    if (String(state.epoch)!==request.headers.get("X-Storage-Epoch") || state.owner!==request.headers.get("X-Storage-Owner")) throw new Conflict();
+    if (!uuid(state.owner) || String(state.epoch)!==request.headers.get("X-Storage-Epoch") || state.owner!==request.headers.get("X-Storage-Owner")) throw new Conflict();
     return state;
   }
 
@@ -105,6 +114,9 @@ export class SQLiteFiles extends DurableObject {
     try {
       this.checkGeneration(request);
       if (url.pathname==="/claim" && request.method==="POST") {
+        if (this.env.REQUIRE_IMPORT !== "false" && !this.readiness().verified_import && !this.importing(request)) {
+          return new Response("Verified database import required", { status: 503 });
+        }
         const owner=request.headers.get("X-Storage-Owner");
         if (!uuid(owner)) return new Response("Invalid owner",{status:400});
         return Response.json(this.ctx.storage.transactionSync(()=>{
