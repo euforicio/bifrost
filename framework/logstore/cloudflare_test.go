@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestCloudflareNativeMigrations(t *testing.T) {
@@ -49,6 +50,9 @@ func TestCloudflareNativeMigrations(t *testing.T) {
 		}
 		t.Log("Fenced native ping must terminate")
 		_ = s.Ping(ctx)
+		// Fencing schedules process termination on another goroutine.
+		// Give that exit time to run before reporting a surviving process.
+		time.Sleep(time.Second)
 		t.Fatal("Native ping returned after fencing")
 	}
 	db := s.(*RDBLogStore).ScopedDB(ctx)
