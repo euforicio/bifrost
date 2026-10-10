@@ -16,7 +16,6 @@
       "path": "cloudflare://logs"
     },
     "object_storage": {
-      "enabled": true,
       "type": "r2",
       "bucket": "bifrost-data",
       "prefix": "logs/",

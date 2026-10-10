@@ -177674,6 +177674,47 @@
           }
         }
       ]
+    },
+    {
+      "name": "129. Cloudflare storage health and release metadata (PR #10)",
+      "description": "Public readiness reports database ping status and build provenance. Native generation revocation is covered separately against real workerd and the shipped image; this case makes no provider inference request.",
+      "item": [
+        {
+          "name": "OpenAI gateway native-storage-health metadata - PR #10",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Native storage health includes readiness and build metadata', function () {",
+                  "  pm.expect(pm.response.code, pm.response.text()).to.equal(200);",
+                  "  var body = pm.response.json();",
+                  "  pm.expect(body.status, pm.response.text()).to.equal('ok');",
+                  "  pm.expect(body.components.db_pings, pm.response.text()).to.be.oneOf(['ok', 'disabled']);",
+                  "  pm.expect(body.build_version, pm.response.text()).to.be.a('string').and.not.empty;",
+                  "  var expected = pm.variables.get('expectedReleaseSha');",
+                  "  if (expected) { pm.expect(body.release_sha, pm.response.text()).to.equal(expected); }",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "health"
+              ]
+            }
+          }
+        }
+      ]
     }
   ]
 }

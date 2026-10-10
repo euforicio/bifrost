@@ -358,7 +358,7 @@ func (s *RDBConfigStore) UpdateClientConfig(ctx context.Context, config *ClientC
 
 // Ping checks if the database is reachable.
 func (s *RDBConfigStore) Ping(ctx context.Context) error {
-	return s.DB().WithContext(ctx).Exec("SELECT 1").Error
+	return s.DB().WithContext(ctx).Exec("SELECT 1 FROM config_client LIMIT 1").Error
 }
 
 // DB returns the current runtime database connection. The returned pointer is

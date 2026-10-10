@@ -3,6 +3,7 @@
 package configstore
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -11,8 +12,10 @@ import (
 	"github.com/maximhq/bifrost/core/schemas"
 	"github.com/maximhq/bifrost/framework/cloudflaresqlite"
 	"github.com/maximhq/bifrost/framework/encrypt"
+	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -22,7 +25,7 @@ func TestCloudflareNativeMigrations(t *testing.T) {
 		t.Skip("requires real Cloudflare SQLite authority")
 	}
 	action := os.Getenv("CLOUDFLARE_ACCEPTANCE_ACTION")
-	if action != "initialize" && action != "verify" && action != "production" && action != "production-local" {
+	if action != "initialize" && action != "verify" && action != "production" && action != "production-local" && action != "ping-fence" {
 		t.Fatal("explicit Cloudflare qualification or read-only production action required")
 	}
 	ctx := context.Background()
@@ -43,6 +46,28 @@ func TestCloudflareNativeMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close(ctx)
+	if err = s.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if action == "ping-fence" {
+		body, _ := json.Marshal(map[string]string{"capability": strings.Repeat("a", 64)})
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, os.Getenv("BIFROST_CLOUDFLARE_CONFIG_SQL_URL")+"/__activate", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("X-Storage-Capability", os.Getenv("SQLITE_STORAGE_TOKEN"))
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatal("Native fencing rejected")
+		}
+		t.Log("Fenced native ping must terminate")
+		_ = s.Ping(ctx)
+		t.Fatal("Native ping returned after fencing")
+	}
 	db := s.(*RDBConfigStore).ScopedDB(ctx)
 	if production {
 		providers, err := s.GetProvidersConfig(ctx)

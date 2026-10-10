@@ -81,6 +81,24 @@ try {
     assert.ok(healthy, 'Exact shipped image must open native SQL/R2 and report its compiled revision');
     const login = await fetch('http://127.0.0.1:18885/api/session/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: env.BIFROST_ADMIN_USERNAME, password }) });
     assert.equal(login.status, 200); assert.ok(login.headers.get('set-cookie')); await login.arrayBuffer();
+    if (cycle) {
+      const revoked = await runtime.dispatchFetch(`${origin}/config/__activate`, { method: 'POST', headers: { 'X-Storage-Capability': token }, body: JSON.stringify({ capability: randomBytes(32).toString('hex') }) });
+      assert.equal(revoked.status, 200); await revoked.arrayBuffer();
+      let failedClosed = false;
+      try {
+        const response = await fetch('http://127.0.0.1:18885/health', { signal: AbortSignal.timeout(12000) });
+        failedClosed = !response.ok; await response.arrayBuffer();
+      } catch { failedClosed = true; }
+      assert.ok(failedClosed, 'Shipped image health must reject a revoked database authority');
+      let terminated = false;
+      for (let attempt = 0; attempt < 15; attempt++) {
+        const state = JSON.parse(docker(['inspect', '--format', '{{json .State}}', name]));
+        if (!state.Running) { assert.equal(state.ExitCode, 1); terminated = true; break; }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      assert.ok(terminated, 'Shipped image must terminate after its native storage authority is fenced');
+      console.log('Exact shipped image health rejects generation revocation and exits with status 1');
+    }
     // Record the final durable size only after background writers have stopped.
     await stopContainer();
     for (const store of ['config', 'logs']) {
