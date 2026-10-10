@@ -684,7 +684,7 @@ func (s *RDBLogStore) BatchCreateIfNotExists(ctx context.Context, entries []*Log
 
 // Ping checks if the database is reachable.
 func (s *RDBLogStore) Ping(ctx context.Context) error {
-	return s.db.WithContext(ctx).Exec("SELECT 1").Error
+	return s.db.WithContext(ctx).Exec("SELECT 1 FROM logs LIMIT 1").Error
 }
 
 // Update updates a log entry in the database.
@@ -4861,6 +4861,9 @@ func (s *RDBLogStore) DeleteLogsBatch(ctx context.Context, cutoff time.Time, bat
 
 // Close closes the log store.
 func (s *RDBLogStore) Close(ctx context.Context) error {
+	if release, ok := s.db.Dialector.(interface{ Release() }); ok {
+		defer release.Release()
+	}
 	sqlDB, err := s.db.WithContext(ctx).DB()
 	if err != nil {
 		return err

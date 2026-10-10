@@ -3010,7 +3010,8 @@
               "type": "string",
               "enum": [
                 "s3",
-                "gcs"
+                "gcs",
+                "r2"
               ],
               "description": "Object storage backend type"
             },
@@ -10584,7 +10585,8 @@
               "type": "string",
               "enum": [
                 "s3",
-                "gcs"
+                "gcs",
+                "r2"
               ],
               "description": "Object storage backend type"
             },

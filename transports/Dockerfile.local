@@ -2,7 +2,7 @@
 # For pre-release CI builds where module versions aren't published yet
 
 # --- UI Build Stage: Build the React + Vite frontend ---
-  FROM node:25-alpine3.23@sha256:bdf2cca6fe3dabd014ea60163eca3f0f7015fbd5c7ee1b0e9ccb4ced6eb02ef4 AS ui-builder
+  FROM node:24.21.0-alpine3.23@sha256:9ec4a2e289874ed0d722e1772ec2de45d2801541db8612f3638b26f128c69ac2 AS ui-builder
   WORKDIR /app
 
   # Apply latest alpine security patches before installing packages
@@ -52,11 +52,16 @@
 
   # Build the binary with CGO enabled and static SQLite linking
   ARG VERSION=unknown
+  ARG CLOUDFLARE_STORAGE=false
   RUN cd /build/transports && \
+    tags="sqlite_static" && driver_flags="" && \
+    if [ "$CLOUDFLARE_STORAGE" = true ]; then \
+      tags="$tags,cloudflare"; driver_flags="-X github.com/ncruces/go-sqlite3/driver.driverName=cloudflare-sqlite"; \
+    fi && \
     go build \
-      -ldflags="-w -s -X main.Version=v${VERSION} -extldflags '-static'" \
+      -ldflags="-w -s -X main.Version=v${VERSION} ${driver_flags} -extldflags '-static'" \
       -a -trimpath \
-      -tags "sqlite_static" \
+      -tags "$tags" \
       -o /app/main \
       ./bifrost-http
 
@@ -78,7 +83,15 @@
   COPY --from=builder /app/main .
   COPY --from=builder /build/transports/docker-entrypoint.sh .
 
+  COPY deploy/cloudflare/config.json /app/cloudflare-config.json
+
   # Getting arguments
+  ARG VCS_REF=unknown
+  ARG CLOUDFLARE_STORAGE=false
+  LABEL org.opencontainers.image.source="https://github.com/euforicio/bifrost" \
+        org.opencontainers.image.revision="${VCS_REF}" \
+        io.rift.storage.cloudflare="${CLOUDFLARE_STORAGE}"
+
   ARG ARG_APP_PORT=8080
   ARG ARG_APP_HOST=0.0.0.0
   ARG ARG_LOG_LEVEL=info
@@ -103,7 +116,9 @@
     chown -R appuser:appuser /app && \
     chown -R appuser:0 "$APP_DIR" && \
     { [ "$APP_DIR" = "/app" ] || chmod -R g=rwX "$APP_DIR"; } && \
-    chmod +x /app/docker-entrypoint.sh
+    chmod +x /app/docker-entrypoint.sh && \
+    if [ "$CLOUDFLARE_STORAGE" = true ]; then cp /app/cloudflare-config.json "$APP_DIR/config.json"; fi && \
+    rm /app/cloudflare-config.json
   # Numeric USER (uid:gid) so kubelet can verify runAsNonRoot; group 0 grants
   # write access to the group-0-owned data dir under arbitrary OpenShift UIDs.
   USER 1000:0

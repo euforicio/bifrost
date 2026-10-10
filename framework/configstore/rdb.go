@@ -358,7 +358,7 @@ func (s *RDBConfigStore) UpdateClientConfig(ctx context.Context, config *ClientC
 
 // Ping checks if the database is reachable.
 func (s *RDBConfigStore) Ping(ctx context.Context) error {
-	return s.DB().WithContext(ctx).Exec("SELECT 1").Error
+	return s.DB().WithContext(ctx).Exec("SELECT 1 FROM config_client LIMIT 1").Error
 }
 
 // DB returns the current runtime database connection. The returned pointer is
@@ -7235,6 +7235,9 @@ func (s *RDBConfigStore) removeDuplicateKeysAndNullKeys(ctx context.Context) err
 
 // Close closes the SQLite config store.
 func (s *RDBConfigStore) Close(ctx context.Context) error {
+	if release, ok := s.DB().Dialector.(interface{ Release() }); ok {
+		defer release.Release()
+	}
 	sqlDB, err := s.DB().DB()
 	if err != nil {
 		return err

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"os"
 	"sync"
 	"time"
 
@@ -32,7 +33,7 @@ func (h *HealthHandler) RegisterRoutes(r *router.Router, middlewares ...schemas.
 func (h *HealthHandler) getHealth(ctx *fasthttp.RequestCtx) {
 	// If DB pings are disabled, just return OK
 	if h.config.ClientConfig.DisableDBPingsInHealth {
-		SendJSON(ctx, map[string]any{"status": "ok", "components": map[string]any{"db_pings": "disabled"}})
+		h.sendHealthy(ctx, "disabled")
 		return
 	}
 	// Pinging config store
@@ -86,5 +87,13 @@ func (h *HealthHandler) getHealth(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusServiceUnavailable, errors[0])
 		return
 	}
-	SendJSON(ctx, map[string]any{"status": "ok", "components": map[string]any{"db_pings": "ok"}})
+	h.sendHealthy(ctx, "ok")
+}
+
+func (h *HealthHandler) sendHealthy(ctx *fasthttp.RequestCtx, databasePings string) {
+	result := map[string]any{"status": "ok", "build_version": GetVersion(), "components": map[string]any{"db_pings": databasePings}}
+	if revision := os.Getenv("BIFROST_DEPLOYMENT_REVISION"); revision != "" {
+		result["release_sha"] = revision
+	}
+	SendJSON(ctx, result)
 }

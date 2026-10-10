@@ -1,0 +1,47 @@
+{
+  "$schema": "https://www.getbifrost.ai/schema",
+  "encryption_key": "env.BIFROST_ENCRYPTION_KEY",
+  "setup_token": "env.BIFROST_SETUP_TOKEN",
+  "config_store": {
+    "enabled": true,
+    "type": "sqlite",
+    "config": {
+      "path": "cloudflare://config"
+    }
+  },
+  "logs_store": {
+    "enabled": true,
+    "type": "sqlite",
+    "config": {
+      "path": "cloudflare://logs"
+    },
+    "object_storage": {
+      "type": "r2",
+      "bucket": "bifrost-data",
+      "prefix": "logs/",
+      "compress": true
+    },
+    "writer": {
+      "max_batch_size": 100,
+      "max_batch_bytes": 8388608,
+      "batch_interval": "5s",
+      "write_queue_capacity": 1000,
+      "deferred_usage_concurrency": 2
+    }
+  },
+  "client": {
+    "allowed_origins": [
+      "https://bifrost.riftlabs.app"
+    ],
+    "allow_direct_keys": false,
+    "enforce_auth_on_inference": true
+  },
+  "governance": {
+    "auth_config": {
+      "is_enabled": true,
+      "admin_username": "env.BIFROST_ADMIN_USERNAME",
+      "admin_password": "env.BIFROST_ADMIN_PASSWORD",
+      "disable_auth_on_inference": false
+    }
+  }
+}

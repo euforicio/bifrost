@@ -1,0 +1,11 @@
+{
+  "name": "bifrost-cloudflare-qualification",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "devDependencies": {
+    "miniflare": "5.20261006.1-alpha"
+  }
+}

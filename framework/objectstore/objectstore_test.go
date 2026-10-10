@@ -4,7 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/stretchr/testify/require"
+	"os"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -161,4 +165,50 @@ func TestConfigGetPrefix(t *testing.T) {
 	if got := c2.GetPrefix(); got != "bifrost" {
 		t.Fatalf("GetPrefix default: got %q, want %q", got, "bifrost")
 	}
+}
+
+// TestCloudflareR2Native exercises the real R2 binding, never a replacement
+// storage implementation. The external acceptance runner supplies its endpoint.
+func TestCloudflareR2Native(t *testing.T) {
+	if os.Getenv("BIFROST_CLOUDFLARE_R2_URL") == "" {
+		t.Skip("requires real R2 binding")
+	}
+	ctx := context.Background()
+	cfg := &Config{Type: StoreTypeR2, Bucket: schemas.SecretVar{Val: "bifrost-data"}, Compress: true}
+	store, err := NewCloudflareObjectStore(cfg)
+	require.NoError(t, err)
+	defer store.Close()
+	require.NoError(t, store.Ping(ctx))
+	prefix := "native-r2-acceptance/"
+	payload := bytes.Repeat([]byte("native-r2-data"), 10000)
+	require.NoError(t, store.Put(ctx, prefix+"unicode-π.json", payload, map[string]string{"purpose": "acceptance"}))
+	actual, err := store.Get(ctx, prefix+"unicode-π.json")
+	require.NoError(t, err)
+	require.Equal(t, payload, actual)
+	require.NoError(t, store.Put(ctx, prefix+"empty", []byte{}, nil))
+	actual, err = store.Get(ctx, prefix+"empty")
+	require.NoError(t, err)
+	require.Empty(t, actual)
+	var keys []string
+	for i := 0; i < 1001; i++ {
+		key := fmt.Sprintf("%spage/%04d", prefix, i)
+		require.NoError(t, store.Put(ctx, key, []byte("page"), nil))
+		keys = append(keys, key)
+	}
+	listed, err := store.ListByPrefix(ctx, prefix+"page/")
+	require.NoError(t, err)
+	require.Len(t, listed, 1001)
+	for _, object := range listed {
+		require.False(t, object.LastModified.IsZero(), "R2 upload timestamp must survive the wire format")
+	}
+	require.NoError(t, store.DeleteBatch(ctx, keys))
+	require.NoError(t, store.Delete(ctx, prefix+"empty"))
+	require.NoError(t, store.Delete(ctx, prefix+"unicode-π.json"))
+	listed, err = store.ListByPrefix(ctx, prefix)
+	require.NoError(t, err)
+	require.Empty(t, listed)
+	copy := *store
+	copy.token = strings.Repeat("0", 64)
+	require.Error(t, copy.Ping(ctx))
+	t.Log("Actual R2 gzip/empty/unicode roundtrips, 1001-object pagination, batch deletion and capability denial passed")
 }
