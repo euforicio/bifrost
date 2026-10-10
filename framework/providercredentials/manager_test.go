@@ -47,6 +47,12 @@ func newTestManager(t *testing.T, server *httptest.Server) (*Manager, *gorm.DB) 
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	require.NoError(t, err)
+	// Match the native SQLite store's single connection; shared-cache table
+	// locks otherwise fail immediately when refresh reads overlap writes.
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
 	require.NoError(t, db.AutoMigrate(&tables.TableProviderCredential{}))
 	m := NewManager(databaseStore{db: db}, WithHTTPClient(server.Client()), WithEndpoints(server.URL, server.URL+"/oauth2/device/code", server.URL+"/oauth2/token"))
 	return m, db
