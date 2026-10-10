@@ -67,3 +67,6 @@ temp/
 # Go workspaces (local only)
 go.work
 go.work.sum
+# Local Wrangler state and logs
+.wrangler/
+**/.wrangler/

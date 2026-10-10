@@ -259,3 +259,9 @@ ui/app/routeTree.gen.ts
 /bifrost-migration-cli
 
 tests/e2e/clis/reports
+
+/deploy/cloudflare/node_modules/
+
+# Local Wrangler state and logs
+.wrangler/
+**/.wrangler/

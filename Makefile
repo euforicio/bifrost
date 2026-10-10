@@ -71,6 +71,12 @@ endef
 
 all: help
 
+.PHONY: build-cloudflare
+build-cloudflare: build-ui ## Build Linux Bifrost with private Cloudflare durable SQL storage
+	@test -f go.work || { echo "Initialize the local Go workspace before building"; exit 1; }
+	mkdir -p build
+	cd transports/bifrost-http && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -tags cloudflare -ldflags='-X github.com/ncruces/go-sqlite3/driver.driverName=cloudflare-sqlite -X main.Version=$(VERSION)' -o ../../build/bifrost-cloudflare .
+
 # Include deployment recipes
 include recipes/fly.mk
 include recipes/ecs.mk

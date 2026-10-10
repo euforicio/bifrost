@@ -1,21 +1,12 @@
-name: Build and promote Orion image
+name: Validate, publish, and deploy
 
 on:
   push:
     branches: ["main"]
-    paths:
-      - ".dockerignore"
-      - ".github/workflows/orion-image.yml"
-      - "deploy/orion/**"
-      - "core/**"
-      - "framework/**"
-      - "plugins/**"
-      - "transports/**"
-      - "ui/**"
   workflow_dispatch:
 
 concurrency:
-  group: bifrost-orion-production
+  group: bifrost-production
   cancel-in-progress: false
 
 permissions:
@@ -34,6 +25,7 @@ jobs:
         with:
           egress-policy: block
           allowed-endpoints: >
+            127.0.0.1:18884
             api.github.com:443
             fonts.googleapis.com:443
             fonts.gstatic.com:443
@@ -58,7 +50,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "25"
+          node-version: "24.21.0"
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
@@ -67,9 +59,18 @@ jobs:
           source ./.github/workflows/scripts/setup-go-workspace.sh
           (cd core && go test ./providers/openaicodex ./providers/xai ./providers/cursor ./providers/fireworks ./providers/ollama)
           (cd framework && go test ./providercredentials ./configstore ./configstore/tables ./modelcatalog/datasheet)
+          (cd deploy/cloudflare && npm ci && npm test)
           (cd transports && go test ./bifrost-http/handlers ./bifrost-http/lib -run 'ProviderCredential|ProviderAccount|Account|RemoveProvider')
           node --test tests/e2e/api/runners/lib/provider-capabilities.test.mjs
           (cd ui && npm ci && npm run build-enterprise)
+
+      - name: Preserve checked frontend assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bifrost-web
+          path: ui/out
+          retention-days: 1
+          if-no-files-found: error
 
   build:
     needs: validate
@@ -84,6 +85,9 @@ jobs:
           egress-policy: block
           allowed-endpoints: >
             127.0.0.1:18080
+            127.0.0.1:18884
+            127.0.0.1:18885
+            nodejs.org:443
             auth.docker.io:443
             dl-cdn.alpinelinux.org:443
             fonts.googleapis.com:443
@@ -116,7 +120,8 @@ jobs:
         id: tag
         run: |
           repository=$(echo "${GITHUB_REPOSITORY}" | tr '[:upper:]' '[:lower:]')
-          echo "value=ghcr.io/${repository}:orion-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          variant=${{ vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true' && 'cloudflare' || 'orion' }}
+          echo "value=ghcr.io/${repository}:${variant}-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push checked-out sources
         id: build
@@ -125,16 +130,33 @@ jobs:
           context: .
           file: ./transports/Dockerfile.local
           platforms: linux/amd64
-          build-args: VERSION=0.0.0-${{ github.sha }}
+          build-args: |
+            VERSION=0.0.0-${{ github.sha }}
+            VCS_REF=${{ github.sha }}
+            CLOUDFLARE_STORAGE=${{ vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true' }}
           tags: ${{ steps.tag.outputs.value }}
           push: true
           provenance: mode=max
           sbom: true
 
+      - name: Set up Node for exact native image qualification
+        if: vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.21.0'
+      - name: Qualify exact Cloudflare image against native SQL and R2
+        if: vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true'
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          npm ci --prefix deploy/cloudflare
+          node deploy/cloudflare/test-image.mjs "ghcr.io/euforicio/bifrost@${IMAGE_DIGEST}" "$GITHUB_SHA"
       - name: Boot-smoke immutable image
+        if: vars.CLOUDFLARE_PRODUCTION_ENABLED != 'true'
         env:
           IMAGE: ${{ steps.tag.outputs.value }}@${{ steps.build.outputs.digest }}
         run: |
+          # shellcheck disable=SC2329
           cleanup() {
             docker logs bifrost-orion-smoke || true
             docker rm -f bifrost-orion-smoke || true
@@ -142,6 +164,7 @@ jobs:
           trap cleanup EXIT
           docker run --detach --name bifrost-orion-smoke \
             --publish 127.0.0.1:18080:8080 \
+            --env APP_DIR=/tmp/bifrost-boot-smoke \
             --env BIFROST_ENCRYPTION_KEY=test-only-orion-encryption-key \
             --env BIFROST_SETUP_TOKEN=test-only-orion-setup-token \
             "$IMAGE"
@@ -170,6 +193,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   promote:
+    if: vars.CLOUDFLARE_PRODUCTION_ENABLED != 'true'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -200,3 +224,56 @@ jobs:
         env:
           IMAGE: ${{ needs.build.outputs.image }}
         run: deploy/orion/orion-push.sh "$IMAGE" orion-infra "$GITHUB_ACTOR"
+
+  promote-cloudflare:
+    permissions:
+      contents: read
+      packages: read
+    if: github.ref == 'refs/heads/main' && vars.CLOUDFLARE_PRODUCTION_ENABLED == 'true'
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: cloudflare-production
+    env:
+      CLOUDFLARE_ACCOUNT_ID: dd99a5f86972717d02d06b52cba6ab5d
+    steps:
+      - name: Require current application main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: test "$(gh api repos/euforicio/bifrost/commits/main --jq .sha)" = "$GITHUB_SHA"
+      - name: Check out deployment infrastructure
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: euforicio/orion-infra
+          ref: main
+          token: ${{ secrets.ORION_INFRA_TOKEN }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.21.0'
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bifrost-web
+          path: ${{ runner.temp }}/bifrost-web
+      - name: Install pinned deployment dependencies
+        run: |
+          npm ci --prefix cloudflare
+      - name: Mirror checked immutable image to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          IMAGE: ${{ needs.build.outputs.image }}
+        run: node cloudflare/scripts/mirror-image.mjs bifrost "$IMAGE" "$GITHUB_SHA" "$RUNNER_TEMP/bifrost-image.json"
+      - name: Deploy checked frontend CDN assets
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          node cloudflare/scripts/prepare-frontend.mjs bifrost "$RUNNER_TEMP/bifrost-web"
+          (cd cloudflare && npx wrangler deploy --config frontends/bifrost/wrangler.jsonc)
+      - name: Promote backend release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node cloudflare/scripts/promote-release.mjs bifrost "$GITHUB_SHA" "$RUNNER_TEMP/bifrost-image.json"

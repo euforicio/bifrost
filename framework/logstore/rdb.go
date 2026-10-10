@@ -4861,6 +4861,9 @@ func (s *RDBLogStore) DeleteLogsBatch(ctx context.Context, cutoff time.Time, bat
 
 // Close closes the log store.
 func (s *RDBLogStore) Close(ctx context.Context) error {
+	if release, ok := s.db.Dialector.(interface{ Release() }); ok {
+		defer release.Release()
+	}
 	sqlDB, err := s.db.WithContext(ctx).DB()
 	if err != nil {
 		return err

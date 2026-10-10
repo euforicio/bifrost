@@ -12,12 +12,13 @@ type StoreType string
 
 const (
 	StoreTypeS3  StoreType = "s3"
+	StoreTypeR2  StoreType = "r2"
 	StoreTypeGCS StoreType = "gcs"
 )
 
 // Config holds the configuration for an object store.
 type Config struct {
-	Type   StoreType      `json:"type"` // "s3" or "gcs"
+	Type   StoreType         `json:"type"` // "s3", "gcs" or private Cloudflare "r2"
 	Bucket schemas.SecretVar `json:"bucket"`
 
 	// Common fields (apply to all store types)
@@ -31,7 +32,7 @@ type Config struct {
 	SecretAccessKey *schemas.SecretVar `json:"secret_access_key,omitempty"`
 	SessionToken    *schemas.SecretVar `json:"session_token,omitempty"`
 	RoleARN         *schemas.SecretVar `json:"role_arn,omitempty"`
-	ForcePathStyle  bool            `json:"force_path_style,omitempty"`
+	ForcePathStyle  bool               `json:"force_path_style,omitempty"`
 
 	// GCS fields (used when Type == "gcs")
 	Credentials     *schemas.SecretVar `json:"credentials,omitempty"`      // Deprecated: use credentials_json
@@ -56,6 +57,8 @@ func NewObjectStore(ctx context.Context, cfg *Config, logger schemas.Logger) (Ob
 	switch cfg.Type {
 	case StoreTypeS3:
 		return NewS3ObjectStore(ctx, cfg, logger)
+	case StoreTypeR2:
+		return NewCloudflareObjectStore(cfg)
 	case StoreTypeGCS:
 		return NewGCSObjectStore(ctx, cfg, logger)
 	default:

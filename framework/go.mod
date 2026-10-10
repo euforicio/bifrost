@@ -13,6 +13,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/maximhq/bifrost/core v1.10.2
+	github.com/ncruces/go-sqlite3 v0.32.0
 	github.com/philippgille/chromem-go v0.7.0
 	github.com/pinecone-io/go-pinecone/v5 v5.3.0
 	github.com/qdrant/go-client v1.16.2
@@ -126,6 +127,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mattn/go-sqlite3 v1.14.32 // indirect
 	github.com/molecule-man/go-brrr v1.0.1 // indirect
+	github.com/ncruces/julianday v1.0.0 // indirect
 	github.com/oapi-codegen/runtime v1.1.1 // indirect
 	github.com/oklog/ulid v1.3.1 // indirect
 	github.com/paulmach/orb v0.11.1 // indirect
@@ -141,6 +143,7 @@ require (
 	github.com/spf13/cast v1.10.0 // indirect
 	github.com/spiffe/go-spiffe/v2 v2.7.0 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
+	github.com/tetratelabs/wazero v1.11.0 // indirect
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect

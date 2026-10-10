@@ -7235,6 +7235,9 @@ func (s *RDBConfigStore) removeDuplicateKeysAndNullKeys(ctx context.Context) err
 
 // Close closes the SQLite config store.
 func (s *RDBConfigStore) Close(ctx context.Context) error {
+	if release, ok := s.DB().Dialector.(interface{ Release() }); ok {
+		defer release.Release()
+	}
 	sqlDB, err := s.DB().DB()
 	if err != nil {
 		return err
