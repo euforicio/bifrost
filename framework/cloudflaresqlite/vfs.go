@@ -127,12 +127,6 @@ func OpenWithOptions(endpoint, token string, options Options) (*sql.DB, func(), 
 			}
 			return authorize(action, name, value)
 		})
-	}, func(*sqlite3.Conn) error {
-		// Keep registration until explicit release so a recycled connection calls
-		// this VFS, fails closed, and notifies the process rather than opening anew.
-		f.failed.Store(true)
-		cleanup()
-		return nil
 	})
 	if err != nil {
 		vfs.Unregister(name)
@@ -141,6 +135,8 @@ func OpenWithOptions(endpoint, token string, options Options) (*sql.DB, func(), 
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
+	// database/sql can discard a rolled-back connection after context cancellation.
+	// Keep the cache and authority until explicit release; a reopen rechecks fencing.
 	release := func() { _ = db.Close(); vfs.Unregister(name); cleanup() }
 	if err := db.Ping(); err != nil {
 		release()

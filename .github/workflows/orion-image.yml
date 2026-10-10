@@ -280,6 +280,14 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           IMAGE: ${{ needs.build.outputs.image }}
         run: node cloudflare/scripts/mirror-image.mjs bifrost "$IMAGE" "$GITHUB_SHA" "$RUNNER_TEMP/bifrost-image.json"
+      - name: Promote backend release
+        working-directory: infrastructure
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node cloudflare/scripts/promote-release.mjs bifrost "$GITHUB_SHA" "$RUNNER_TEMP/bifrost-image.json"
+      - name: Verify checked backend before frontend deployment
+        working-directory: infrastructure
+        run: node cloudflare/scripts/verify-product-release.mjs bifrost "$GITHUB_SHA"
       - name: Deploy checked frontend CDN assets
         working-directory: infrastructure
         env:
@@ -287,8 +295,3 @@ jobs:
         run: |
           node cloudflare/scripts/prepare-frontend.mjs bifrost "$RUNNER_TEMP/bifrost-web"
           (cd cloudflare && npx wrangler deploy --config frontends/bifrost/wrangler.jsonc)
-      - name: Promote backend release
-        working-directory: infrastructure
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node cloudflare/scripts/promote-release.mjs bifrost "$GITHUB_SHA" "$RUNNER_TEMP/bifrost-image.json"
