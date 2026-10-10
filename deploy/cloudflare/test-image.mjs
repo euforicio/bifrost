@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import assert from 'node:assert/strict';
 
@@ -17,10 +17,18 @@ const root = fileURLToPath(new URL('./', import.meta.url));
 const token = randomBytes(32).toString('hex');
 const name = `bifrost-native-${randomBytes(8).toString('hex')}`;
 const password = randomBytes(32).toString('hex');
+const privateValues = [token, password];
 function docker(args, required = true) {
   const result = spawnSync('docker', args, { encoding: 'utf8', timeout: 120000 });
   if (required && result.status !== 0) throw new Error('Image qualification Docker operation failed; private output withheld');
   return result.stdout;
+}
+async function stopContainer() {
+  await new Promise((resolve, reject) => {
+    const child = spawn('docker', ['stop', '--time', '30', name], { stdio: 'ignore', timeout: 40000 });
+    child.on('error', reject);
+    child.on('exit', code => code === 0 ? resolve() : reject(new Error('Native image graceful stop failed')));
+  });
 }
 const modules = await Promise.all(['qualification.js', 'storage.js', 'r2.js'].map(async file => ({ type: 'ESModule', path: join(root, file), contents: await readFile(join(root, file), 'utf8') })));
 const options = convertV4MiniflareOptions({ modulesRoot: root, modules, port: 18884, compatibilityDate: '2026-10-09', durableObjects: { FILES: { className: 'SQLiteFiles', useSQLite: true } }, r2Buckets: ['BIFROST_DATA'], bindings: { STORAGE_TOKEN: token, BIFROST_R2_CAPABILITY: token, BIFROST_R2_BUCKET: 'bifrost-data' }, resourcePersistencePath: join(directory, 'authority') });
@@ -43,6 +51,7 @@ try {
       }
     }
     const generation = randomBytes(32).toString('hex');
+    privateValues.push(generation);
     for (const store of ['config', 'logs']) {
       const activated = await runtime.dispatchFetch(`${origin}/${store}/__activate`, { method: 'POST', headers: { 'X-Storage-Capability': token }, body: JSON.stringify({ capability: generation }) });
       assert.equal(activated.status, 200); await activated.arrayBuffer();
@@ -71,6 +80,8 @@ try {
     assert.ok(healthy, 'Exact shipped image must open native SQL/R2 and report its compiled revision');
     const login = await fetch('http://127.0.0.1:18885/api/session/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: env.BIFROST_ADMIN_USERNAME, password }) });
     assert.equal(login.status, 200); assert.ok(login.headers.get('set-cookie')); await login.arrayBuffer();
+    // Record the final durable size only after background writers have stopped.
+    await stopContainer();
     for (const store of ['config', 'logs']) {
       const response = await runtime.dispatchFetch(`${origin}/${store}/__readiness`, { headers: { 'X-Storage-Capability': token } });
       assert.equal(response.status, 200); const state = await response.json();
@@ -82,6 +93,13 @@ try {
     await runtime.dispose(); runtime = undefined;
   }
   console.log('Exact Cloudflare image passed native SQL/R2 startup, compiled revision, admin login and database retention across image/workerd replacement');
+} catch (error) {
+  const logs = spawnSync('docker', ['logs', '--tail', '200', name], { encoding: 'utf8', timeout: 10000 });
+  let diagnostics = (logs.stdout || '') + (logs.stderr || '');
+  for (const value of privateValues) diagnostics = diagnostics.replaceAll(value, '[REDACTED]');
+  console.error('Native qualification startup diagnostics:\n' + diagnostics);
+  console.error('Container exit code: ' + docker(['inspect', '--format', '{{.State.ExitCode}}', name], false).trim());
+  throw error;
 } finally {
   docker(['rm', '--force', name], false);
   if (runtime) await runtime.dispose();
