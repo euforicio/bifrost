@@ -44,3 +44,7 @@ try {
  assert.match(output,/--- PASS: TestCloudflareR2Native/);assert.doesNotMatch(output,/--- SKIP:/);console.log(output.trim());
  console.log('Actual Bifrost migrations, transactions, timestamp precision, R2 and workerd replacement passed');
 } finally {if(runtime)await runtime.dispose();await rm(directory,{recursive:true,force:true});}
+
+// A fresh process avoids reusing sockets from the disposed qualification runtime.
+// The cost runtime retains port 18884, already allowed by the hardened CI runner.
+console.log((await run(process.execPath,[join(root,'deploy/cloudflare/scripts/test-durable-sqlite-cost.mjs')])).trim());

@@ -176,10 +176,16 @@ export class SQLiteFiles extends DurableObject {
           return {revision:state.revision};
         }
         if (input.revision!==state.revision || this.sql.exec("SELECT COUNT(*) AS count FROM staged WHERE id=?",input.id).one().count!==pending.count) throw new Conflict();
+        if (this.sql.exec("SELECT 1 FROM staged WHERE id=? AND offset>=? LIMIT 1",input.id,pending.size).toArray().length) throw new Invalid();
+        // Committed pages already cover the previous file without gaps. Shrink
+        // only removes its tail; growth must stage every new, aligned offset.
+        // Count that bounded growth instead of scanning the whole database on
+        // every commit (including ordinary one-page updates).
+        const previousSize=this.sql.exec("SELECT size FROM files WHERE name='main.db'").toArray()[0]?.size || 0;
+        if (pending.size>previousSize && this.sql.exec("SELECT COUNT(*) AS count FROM staged WHERE id=? AND offset>=?",input.id,previousSize).one().count!==(pending.size-previousSize)/4096) throw new Invalid();
         this.sql.exec("INSERT INTO files VALUES('main.db',?) ON CONFLICT(name) DO UPDATE SET size=excluded.size",pending.size);
         this.sql.exec("DELETE FROM pages WHERE file='main.db' AND offset>=?",pending.size);
         this.sql.exec("INSERT INTO pages(file,offset,bytes) SELECT 'main.db',offset,bytes FROM staged WHERE id=? ON CONFLICT(file,offset) DO UPDATE SET bytes=excluded.bytes",input.id);
-        if (this.sql.exec("SELECT COUNT(*) AS count FROM pages WHERE file='main.db'").one().count!==pending.size/4096) throw new Invalid();
         this.sql.exec("UPDATE authority SET revision=revision+1,last_id=? WHERE id=1",input.id);
         this.sql.exec("DELETE FROM pending WHERE id=?",input.id);
         return {revision:state.revision+1};
