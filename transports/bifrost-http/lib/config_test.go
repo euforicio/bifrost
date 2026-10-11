@@ -21585,6 +21585,12 @@ func TestLoadConfig_ClientConfigSyncPreservesClientMetadata(t *testing.T) {
 
 	config1, err := LoadConfig(ctx, tempDir)
 	require.NoError(t, err)
+	// This test exercises metadata reconciliation, not background catalog sync.
+	// Stop its writer before the metadata transaction upgrades its SQLite read lock.
+	if config1.ModelCatalog != nil {
+		require.NoError(t, config1.ModelCatalog.Cleanup())
+		config1.ModelCatalog = nil
+	}
 	require.NoError(t, config1.ConfigStore.UpdateClientMetadata(ctx, map[string]any{"onboarding_dismissed": true}))
 	config1.Close(ctx)
 
