@@ -66,7 +66,7 @@ try {
  await commit(initial);
  const update=await begin(size,[page(4096,2)]);
  await json('/__cost');await commit(update);
- const cost=await json('/__cost');assert.ok(cost.rowsRead<64,JSON.stringify(cost));
+ const cost=await json('/__cost');assert.ok(cost.rowsRead>=8 && cost.rowsRead<64,JSON.stringify(cost));
  const content=await request('/range?name=main.db&offset=4096&length=4096');
  assert.equal(content.status,200);
  assert.deepEqual(Buffer.from(await content.arrayBuffer()),Buffer.alloc(4096,2));
