@@ -61,6 +61,8 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
           (cd transports && govulncheck -tags sqlite_static,cloudflare ./bifrost-http)
           npm audit --prefix ui --package-lock-only --audit-level=low
+          (cd core && go test ./providers/openai -run 'StripsGeminiResidueFromResponsesInput|MantleGPTOSSReplaysAssistantTextAsInput')
+          (cd transports && go test ./bifrost-http/lib)
           (cd core && go test ./providers/openaicodex ./providers/xai ./providers/cursor ./providers/fireworks ./providers/ollama)
           (cd framework && go test ./providercredentials ./configstore ./configstore/tables ./modelcatalog/datasheet)
           (cd deploy/cloudflare && npm ci && npm test)

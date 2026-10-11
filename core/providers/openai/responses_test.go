@@ -2783,7 +2783,7 @@ func TestToOpenAIResponsesRequest_StripsGeminiResidueFromResponsesInput(t *testi
 				ID: schemas.Ptr("msg_replay"), Type: &messageType, Role: &assistant,
 				Status: schemas.Ptr("completed"),
 				Content: &schemas.ResponsesMessageContent{ContentBlocks: []schemas.ResponsesMessageContentBlock{{
-					Type: schemas.ResponsesOutputMessageContentTypeRefusal, Refusal: schemas.Ptr("cannot answer"),
+					Type: schemas.ResponsesOutputMessageContentTypeRefusal, ResponsesOutputMessageContentRefusal: &schemas.ResponsesOutputMessageContentRefusal{Refusal: "cannot answer"},
 				}}},
 			},
 			wantWire: func(t *testing.T, item map[string]json.RawMessage) {
