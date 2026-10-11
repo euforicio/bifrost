@@ -291,7 +291,17 @@ export default function SecurityView() {
 				toast.error(message);
 			}
 		}
-	}, [bifrostConfig, localConfig, authConfig, showPasswordSection, updateCoreConfig, isFirstTimeSetup, setupToken, authorizedBySetupToken]);
+	}, [
+		bifrostConfig,
+		localValues.vk_rotation_cooldown,
+		localConfig,
+		authConfig,
+		showPasswordSection,
+		updateCoreConfig,
+		isFirstTimeSetup,
+		setupToken,
+		authorizedBySetupToken,
+	]);
 
 	return (
 		<div className="mx-auto w-full max-w-4xl space-y-4">

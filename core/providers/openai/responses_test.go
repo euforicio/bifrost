@@ -2761,6 +2761,23 @@ func TestToOpenAIResponsesRequest_StripsGeminiResidueFromResponsesInput(t *testi
 		origMutable bool // if true, assert original input still has the field
 	}{
 		{
+			name: "assistant output_text preserves required output-item status",
+			input: schemas.ResponsesMessage{
+				ID: schemas.Ptr("msg_replay"), Type: &messageType, Role: &assistant,
+				Status: schemas.Ptr("completed"),
+				Content: &schemas.ResponsesMessageContent{ContentBlocks: []schemas.ResponsesMessageContentBlock{{
+					Type: schemas.ResponsesOutputMessageContentTypeText, Text: schemas.Ptr("previous answer"),
+				}}},
+			},
+			wantWire: func(t *testing.T, item map[string]json.RawMessage) {
+				var status string
+				if err := json.Unmarshal(item["status"], &status); err != nil || status != "completed" {
+					t.Errorf("assistant output item requires completed status, got %s", item["status"])
+				}
+			},
+			origMutable: true,
+		},
+		{
 			name: "status stripped from message",
 			input: schemas.ResponsesMessage{
 				Type:   &messageType,

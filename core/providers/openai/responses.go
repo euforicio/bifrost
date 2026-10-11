@@ -665,9 +665,22 @@ func ToOpenAIResponsesRequest(ctx *schemas.BifrostContext, bifrostReq *schemas.B
 			message.Role = nil
 		}
 
-		// Gemini streaming sets status on all item types, but OpenAI rejects status on input.
-		// Strip it from all items. message is a value copy, so the caller's input is untouched.
-		message.Status = nil
+		// Input messages and non-message items reject output-item status. Replayed
+		// assistant output_text/refusal messages are ResponseOutputMessageParam,
+		// whose status is required by strict Responses validators. Keep that field
+		// only for output-shaped assistant history; the message is a value copy.
+		assistantOutput := false
+		if message.Role != nil && *message.Role == schemas.ResponsesInputMessageRoleAssistant && message.Content != nil {
+			for _, block := range message.Content.ContentBlocks {
+				if block.Type == schemas.ResponsesOutputMessageContentTypeText || block.Type == schemas.ResponsesOutputMessageContentTypeRefusal {
+					assistantOutput = true
+					break
+				}
+			}
+		}
+		if !assistantOutput {
+			message.Status = nil
+		}
 
 		// Gemini streaming generates non-standard IDs for reasoning items (msg_<id>_reasoning_N,
 		// reasoning_N) and function_call_output items (func_resp_<id>). OpenAI rejects these.

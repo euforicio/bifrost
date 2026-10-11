@@ -150540,6 +150540,15 @@
                   "  var json = pm.response.json() || {};",
                   "  pm.expect(json.content, 'expected an Anthropic content array').to.be.an('array');",
                   "  pm.expect(json.content.length, 'expected at least one content block').to.be.above(0);",
+                  "});",
+                  "var replayWire = (pm.response.json().extra_fields || {}).raw_request;",
+                  "if (typeof replayWire === 'string') { replayWire = JSON.parse(replayWire); }",
+                  "pm.test('replayed assistant output items retain required status on strict Responses wire', function () {",
+                  "  pm.expect(replayWire, 'raw request must be captured').to.be.an('object');",
+                  "  pm.expect(replayWire.input).to.be.an('array');",
+                  "  var assistantItems = replayWire.input.filter(function (item) { return item.role === 'assistant' && Array.isArray(item.content) && item.content.some(function (part) { return part.type === 'output_text' || part.type === 'refusal'; }); });",
+                  "  pm.expect(assistantItems.length, 'fixture must replay output-shaped assistant history').to.be.above(0);",
+                  "  assistantItems.forEach(function (item) { pm.expect(item.status, 'output item status is required').to.equal('completed'); });",
                   "});"
                 ]
               }
@@ -150551,6 +150560,10 @@
               {
                 "key": "Content-Type",
                 "value": "application/json"
+              },
+              {
+                "key": "x-bf-send-back-raw-request",
+                "value": "true"
               }
             ],
             "body": {
@@ -150691,7 +150704,6 @@
               "script": {
                 "type": "text/javascript",
                 "exec": [
-                  "if ([401, 403, 429, 500, 502, 503, 504].indexOf(pm.response.code) !== -1) { return; }",
                   "pm.test('bedrock nova-lite chat without max_tokens: 2xx', function () {",
                   "  pm.expect(pm.response.code, 'failed: ' + pm.response.text()).to.be.below(400);",
                   "});",
