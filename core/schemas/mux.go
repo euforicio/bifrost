@@ -1127,6 +1127,17 @@ func (r *BifrostResponse) NormalizedUsage() *BifrostLLMUsage {
 		return r.RerankResponse.Usage
 	case r.DecisionResponse != nil && r.DecisionResponse.Usage != nil:
 		return r.DecisionResponse.Usage
+	case r.SystemOneResponse != nil && r.SystemOneResponse.Usage != nil:
+		u := r.SystemOneResponse.Usage
+		out := &BifrostLLMUsage{}
+		if u.InputTokens != nil {
+			out.PromptTokens = *u.InputTokens
+		}
+		if u.OutputTokens != nil {
+			out.CompletionTokens = *u.OutputTokens
+		}
+		out.TotalTokens = out.PromptTokens + out.CompletionTokens
+		return out
 	case r.TranscriptionResponse != nil && r.TranscriptionResponse.Usage != nil:
 		u := r.TranscriptionResponse.Usage
 		out := &BifrostLLMUsage{}
@@ -1249,10 +1260,11 @@ func (cr *BifrostChatRequest) ToResponsesRequest() *BifrostResponsesRequest {
 		}
 
 		// Handle Reasoning from reasoning_effort
-		if cr.Params.Reasoning != nil && (cr.Params.Reasoning.Enabled != nil || cr.Params.Reasoning.Effort != nil || cr.Params.Reasoning.MaxTokens != nil) {
+		if cr.Params.Reasoning != nil && (cr.Params.Reasoning.Enabled != nil || cr.Params.Reasoning.Effort != nil || cr.Params.Reasoning.MaxTokens != nil || cr.Params.Reasoning.Type != nil) {
 			brr.Params.Reasoning = &ResponsesParametersReasoning{
 				Effort:    cr.Params.Reasoning.Effort,
 				MaxTokens: cr.Params.Reasoning.MaxTokens,
+				Type:      cr.Params.Reasoning.Type,
 			}
 		}
 
@@ -1348,6 +1360,7 @@ func (brr *BifrostResponsesRequest) ToChatRequest() *BifrostChatRequest {
 			bcr.Params.Reasoning = &ChatReasoning{
 				Effort:    brr.Params.Reasoning.Effort,
 				MaxTokens: brr.Params.Reasoning.MaxTokens,
+				Type:      brr.Params.Reasoning.Type,
 			}
 		}
 

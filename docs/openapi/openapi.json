@@ -37678,8 +37678,10 @@
           "content": "**Required Permissions**\n\n| Permission | Granted via |\n| --- | --- |\n| `Settings:Update` | RBAC role or API key scope |\n\n[How permissions work](/api/procuring-api-keys#required-permissions)\n"
         },
         "summary": "Update proxy configuration",
-        "description": "Updates the global proxy configuration.\n",
-        "tags": ["Configuration"],
+        "description": "Updates the global proxy configuration.\nSetting a new proxy url or turning on skip_tls_verify requires a genuinely\nauthenticated admin session - it is refused with 403 if dashboard authentication is\ndisabled or unconfigured, even though other management endpoints remain reachable in\nthat state. Saving other fields with the stored url, disabling the proxy, or turning\nskip_tls_verify off is allowed.\n",
+        "tags": [
+          "Configuration"
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -37756,6 +37758,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "A new proxy url was supplied or skip_tls_verify was turned on, and dashboard authentication is disabled or unconfigured (the request was not genuinely authenticated)"
           },
           "500": {
             "description": "Internal server error",
@@ -38729,8 +38734,11 @@
           "content": "<Note>\n  This endpoint is available in [Bifrost Enterprise](https://www.getmaxim.ai/bifrost/enterprise) only.\n</Note>\n\n**Required Permissions**\n\n| Permission | Granted via |\n| --- | --- |\n| `VirtualKeys:View` | RBAC role or API key scope |\n\n[How permissions work](/api/procuring-api-keys#required-permissions)\n"
         },
         "summary": "Get the calling user's virtual-key creation policy",
-        "description": "Resolves the access profile that would govern a virtual key the **calling** user creates,\nreturning its name or none. Whether governance applies at all is decided separately from the\n`VirtualKeys:CreateStandalone` permission (see `/api/governance/users/me/permissions`); this\nendpoint only resolves the profile, and the create form combines the two.\n\nSelf-scoped: it always describes the caller and takes no user ID. Returns\n`{\"has_access_profile\": false}` when the caller has no per-user identity (local admin) or holds\nno active access profile. When several of their profiles qualify, the highest-ranked one governs.\n",
-        "tags": ["Users", "Virtual Keys"],
+        "description": "Resolves the access profile that would govern a virtual key the **calling** user creates,\nreturning its name or none. Whether governance applies at all is decided separately from the\n`VirtualKeys:CreateStandalone` permission (see `/api/governance/users/me/permissions`); this\nendpoint only resolves the profile, and the create form combines the two.\n\nSelf-scoped: it always describes the caller and takes no user ID. Returns\n`{\"has_access_profile\": false}` when the caller has no per-user identity (local admin) or holds\nno active access profile. When several of their profiles qualify, the highest-ranked one governs.\nHolding no profile does not by itself block a caller from creating a key: given\n`VirtualKeys:Create`, the key is created ungoverned.\n",
+        "tags": [
+          "Users",
+          "Virtual Keys"
+        ],
         "security": [
           {
             "ManagementBearerAuth": []
@@ -40642,6 +40650,88 @@
         }
       }
     },
+    "/api/session/setup": {
+      "post": {
+        "operationId": "startSetupSession",
+        "x-mint": {
+          "content": "**Required Permissions**\n\n| Permission | Granted via |\n| --- | --- |\n| None | The setup token itself - OSS only, while dashboard auth is not active |\n\n[How permissions work](/api/procuring-api-keys#required-permissions)\n"
+        },
+        "summary": "Start a setup session",
+        "description": "OSS only. While dashboard auth is not active (no admin account, or auth disabled),\ntrades the operator's setup token, sent in the `X-Bifrost-Setup-Token` header, for an\nHttpOnly, `SameSite=Strict` cookie named `bifrost_setup_session`. The cookie carries no\npart of the token. It authenticates management API calls in place of the header for\n12 hours, until dashboard auth is enabled, or until `POST /api/session/logout` clears it.\nChanging the setup token invalidates every issued cookie.\n",
+        "tags": [
+          "Session"
+        ],
+        "parameters": [
+          {
+            "name": "X-Bifrost-Setup-Token",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The setup token configured via `setup_token` in config.json or `BIFROST_SETUP_TOKEN`."
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Setup session started; the cookie is set with `Set-Cookie`.",
+            "headers": {
+              "Set-Cookie": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`bifrost_setup_session=<signed value>; Path=/; HttpOnly; SameSite=Strict` (plus `Secure` over TLS)."
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "expires_at": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "When the setup session cookie expires."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The setup token header is missing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The setup token is wrong, or no setup token is configured on the server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The setup lock is not active (dashboard auth is enabled, or this is Bifrost Enterprise).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BifrostError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/providers": {
       "get": {
         "operationId": "listProviders",
@@ -40688,8 +40778,10 @@
           "content": "**Required Permissions**\n\n| Permission | Granted via |\n| --- | --- |\n| `ModelProvider:Create` | RBAC role or API key scope |\n\n[How permissions work](/api/procuring-api-keys#required-permissions)\n"
         },
         "summary": "Add a new provider",
-        "description": "Adds a new provider with the specified configuration.\n",
-        "tags": ["Providers"],
+        "description": "Adds a new provider with the specified configuration.\nSetting network_config.base_url or network_config.allow_private_network requires a\ngenuinely authenticated admin session - it is refused with 403 if dashboard\nauthentication is disabled or unconfigured, even though other management endpoints\nremain reachable in that state. allow_private_network is guarded even without a base\nURL, because it also governs which addresses key-level URLs (Ollama/SGL/VLLM) may reach.\nThe same applies to settings that let a third party read credentials in flight:\nproxy_config.url, proxy_config.ca_cert_pem, network_config.ca_cert_pem,\nnetwork_config.insecure_skip_verify, and any absolute (scheme and host)\ncustom_provider_config.request_path_overrides value.\n",
+        "tags": [
+          "Providers"
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -40728,6 +40820,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "network_config.base_url, allow_private_network, a proxy URL, a CA certificate, insecure_skip_verify, or an absolute request path override was supplied and dashboard authentication is disabled or unconfigured (the request was not genuinely authenticated)"
           },
           "409": {
             "description": "Provider already exists",
@@ -40829,8 +40924,10 @@
           "content": "**Required Permissions**\n\n| Permission | Granted via |\n| --- | --- |\n| `ModelProvider:Update` | RBAC role or API key scope |\n\n[How permissions work](/api/procuring-api-keys#required-permissions)\n"
         },
         "summary": "Update a provider",
-        "description": "Updates a provider's configuration. Expects ALL fields to be provided,\nincluding both edited and non-edited fields. Partial updates are not supported.\n",
-        "tags": ["Providers"],
+        "description": "Updates a provider's configuration. Expects ALL fields to be provided,\nincluding both edited and non-edited fields. Partial updates are not supported.\nChanging network_config.base_url, or turning on network_config.allow_private_network\n(with or without a base URL), requires a genuinely authenticated admin session - it is\nrefused with 403 if dashboard authentication is disabled or unconfigured, even though\nother management endpoints remain reachable in that state. The same applies to setting\nor changing proxy_config.url, proxy_config.ca_cert_pem, network_config.ca_cert_pem, or\nan absolute (scheme and host) custom_provider_config.request_path_overrides value, and\nto turning on network_config.insecure_skip_verify. Sending the stored values back\nunchanged (including redacted placeholders), clearing the base URL, proxy or an\noverride, path-only overrides, or turning allow_private_network or\ninsecure_skip_verify off is allowed.\n",
+        "tags": [
+          "Providers"
+        ],
         "parameters": [
           {
             "name": "provider",
@@ -40880,6 +40977,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "network_config.base_url, a proxy URL, a CA certificate, or an absolute request path override was changed, or allow_private_network or insecure_skip_verify was turned on, and dashboard authentication is disabled or unconfigured (the request was not genuinely authenticated)"
           },
           "500": {
             "description": "Internal server error",
@@ -41041,8 +41141,10 @@
           "content": "**Required Permissions**\n\n| Permission | Granted via |\n| --- | --- |\n| `ModelProvider:Create` | RBAC role or API key scope |\n\n[How permissions work](/api/procuring-api-keys#required-permissions)\n"
         },
         "summary": "Create a key for a provider",
-        "description": "Creates a new API key for the specified provider. The key `id` is auto-generated\nif omitted. `enabled` defaults to `true` if omitted. `value` is required and must\nnot be empty. Keys cannot be created on keyless providers.\n",
-        "tags": ["Providers"],
+        "description": "Creates a new API key for the specified provider. The key `id` is auto-generated\nif omitted. `enabled` defaults to `true` if omitted. `value` is required and must\nnot be empty. Keys cannot be created on keyless providers.\nSetting any field that chooses the host Bifrost sends this key's credentials to\nrequires a genuinely authenticated admin session - it is refused with 403 if dashboard\nauthentication is disabled or unconfigured, even though other management endpoints\nremain reachable in that state.\nGuarded fields: ollama_key_config.url, sgl_key_config.url, vllm_key_config.url,\nazure_key_config.endpoint, databricks_key_config.workspace_url,\ngithub_copilot_key_config.github_domain,\nbedrock_key_config.endpoints.*, bedrock_mantle_key_config.endpoints.*, and\naliases.<name>.endpoint.\n",
+        "tags": [
+          "Providers"
+        ],
         "parameters": [
           {
             "name": "provider",
@@ -41092,6 +41194,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "A key endpoint field was set, changed, or removed and dashboard authentication is disabled or unconfigured (the request was not genuinely authenticated)"
           },
           "404": {
             "description": "Provider not found",
@@ -41212,8 +41317,10 @@
           "content": "**Required Permissions**\n\n| Permission | Granted via |\n| --- | --- |\n| `ModelProvider:Update` | RBAC role or API key scope |\n\n[How permissions work](/api/procuring-api-keys#required-permissions)\n"
         },
         "summary": "Update a key for a provider",
-        "description": "Updates an existing key. Send the full key object. Redacted values sent back\nunchanged are automatically preserved (the server merges them with the stored\nraw values).\n",
-        "tags": ["Providers"],
+        "description": "Updates an existing key. Send the full key object. Redacted values sent back\nunchanged are automatically preserved (the server merges them with the stored\nraw values).\nSetting, changing, or removing any field that chooses the host Bifrost sends this\nkey's credentials to requires a genuinely authenticated admin session - it is refused\nwith 403 if dashboard authentication is disabled or unconfigured, even though other\nmanagement endpoints remain reachable in that state. Sending the stored values back\nunchanged is allowed.\nGuarded fields: ollama_key_config.url, sgl_key_config.url, vllm_key_config.url,\nazure_key_config.endpoint, databricks_key_config.workspace_url,\ngithub_copilot_key_config.github_domain,\nbedrock_key_config.endpoints.*, bedrock_mantle_key_config.endpoints.*, and\naliases.<name>.endpoint.\n",
+        "tags": [
+          "Providers"
+        ],
         "parameters": [
           {
             "name": "provider",
@@ -41272,6 +41379,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "A key endpoint field was set, changed, or removed and dashboard authentication is disabled or unconfigured (the request was not genuinely authenticated)"
           },
           "404": {
             "description": "Provider or key not found",
@@ -94568,7 +94678,7 @@
       "ManagementBearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Management API authentication for `/api/*` endpoints. Use the `Authorization` header\nwith `Bearer <token>`, where `<token>` is one of:\n\n- a Bifrost management API key,\n- a dashboard session token issued by `POST /api/session/login`,\n- base64 of `<admin-username>:<admin-password>` (legacy equivalent of `BasicAuth`).\n\nVirtual keys (`sk-bf-*`) and the `x-api-key` header are not accepted on management APIs -\nthe sole exception is `GET /api/governance/virtual-keys/quota`, which is virtual-key-only.\n\nAuthentication alone is not sufficient in Bifrost Enterprise: each operation page shows a\n**Required Permissions** table (`Resource:Operation`, for example `Dashboard:View`) above\nits Authorizations section, and the caller's RBAC role or management API key scopes must\ninclude what it lists, otherwise the request is rejected with `403 Forbidden`.\n\nA local admin — authenticated with the admin password, or any caller on a deployment with\ndashboard auth disabled — bypasses these checks and can call every management endpoint.\nSee [Required permissions](/api/procuring-api-keys#required-permissions) for how\npermissions are derived and which endpoints are exempt.\n"
+        "description": "Management API authentication for `/api/*` endpoints. Use the `Authorization` header\nwith `Bearer <token>`, where `<token>` is one of:\n\n- a Bifrost management API key,\n- a dashboard session token issued by `POST /api/session/login`,\n- base64 of `<admin-username>:<admin-password>` (legacy equivalent of `BasicAuth`).\n\nVirtual keys (`sk-bf-*`) and the `x-api-key` header are not accepted on management APIs -\nthe sole exception is `GET /api/governance/virtual-keys/quota`, which is virtual-key-only.\n\nAuthentication alone is not sufficient in Bifrost Enterprise: each operation page shows a\n**Required Permissions** table (`Resource:Operation`, for example `Dashboard:View`) above\nits Authorizations section, and the caller's RBAC role or management API key scopes must\ninclude what it lists, otherwise the request is rejected with `403 Forbidden`.\n\nA local admin — authenticated with the admin password, or any caller on a deployment with\ndashboard auth disabled — bypasses these checks and can call every management endpoint.\n\n**OSS setup lock.** On Bifrost OSS, while dashboard auth is not active (no admin account,\nor auth disabled), every management endpoint except the public ones (`/health`,\n`/api/version`, `/api/session/is-auth-enabled`, `/api/session/login`, ...) requires the\noperator's setup token in the `X-Bifrost-Setup-Token` header, in place of `Authorization`.\nThe token is set with `setup_token` in `config.json` or the `BIFROST_SETUP_TOKEN`\nenvironment variable. A missing header returns `401`, a wrong token `403`. The header\nstops working once dashboard auth is enabled. The dashboard instead trades the token once\nfor an HttpOnly `bifrost_setup_session` cookie via `POST /api/session/setup`.\nSee [Required permissions](/api/procuring-api-keys#required-permissions) for how\npermissions are derived and which endpoints are exempt.\n"
       },
       "BasicAuth": {
         "type": "http",
@@ -106549,10 +106659,31 @@
         "description": "Auth enabled status response",
         "properties": {
           "is_auth_enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Whether dashboard/admin session authentication is enabled."
           },
           "has_valid_token": {
             "type": "boolean"
+          },
+          "auth_type": {
+            "type": "string",
+            "enum": [
+              "none",
+              "password"
+            ],
+            "description": "Dashboard session auth mode."
+          },
+          "inference_auth_enforced": {
+            "type": "boolean",
+            "description": "Whether enforce_auth_on_inference is on. This is a separate control from is_auth_enabled. It requires a valid inference credential (virtual key, API key, or user token) on every inference route, including the /v1/* routes and the provider SDK integration routes. A locked dashboard (is_auth_enabled: true) does not by itself protect inference. Check this field too."
+          },
+          "setup_required": {
+            "type": "boolean",
+            "description": "OSS only. True while dashboard auth is not active (no admin account, or auth disabled). In that state every non-public /api call needs the operator's setup token in the X-Bifrost-Setup-Token header. Always false on Bifrost Enterprise."
+          },
+          "setup_token_configured": {
+            "type": "boolean",
+            "description": "OSS only. Whether the operator configured a setup token (setup_token in config.json or the BIFROST_SETUP_TOKEN environment variable). When setup_required is true and this is false, every /api call is rejected until a token is configured and Bifrost is restarted."
           }
         }
       },
@@ -111471,6 +111602,14 @@
             "type": "number",
             "minimum": 0
           },
+          "input_cost_per_token_ultrafast": {
+            "type": "number",
+            "minimum": 0
+          },
+          "output_cost_per_token_ultrafast": {
+            "type": "number",
+            "minimum": 0
+          },
           "input_cost_per_token_flex": {
             "type": "number",
             "minimum": 0
@@ -111553,6 +111692,14 @@
             "type": "number",
             "minimum": 0
           },
+          "input_cost_per_token_above_272k_tokens_ultrafast": {
+            "type": "number",
+            "minimum": 0
+          },
+          "output_cost_per_token_above_272k_tokens_ultrafast": {
+            "type": "number",
+            "minimum": 0
+          },
           "cache_creation_input_token_cost": {
             "type": "number",
             "minimum": 0
@@ -111589,6 +111736,10 @@
             "type": "number",
             "minimum": 0
           },
+          "cache_read_input_token_cost_ultrafast": {
+            "type": "number",
+            "minimum": 0
+          },
           "cache_read_input_token_cost_flex": {
             "type": "number",
             "minimum": 0
@@ -111609,6 +111760,10 @@
             "type": "number",
             "minimum": 0
           },
+          "cache_read_input_token_cost_above_272k_tokens_ultrafast": {
+            "type": "number",
+            "minimum": 0
+          },
           "cache_creation_input_token_cost_above_272k_tokens": {
             "type": "number",
             "minimum": 0
@@ -111622,6 +111777,19 @@
             "minimum": 0
           },
           "cache_creation_input_token_cost_priority": {
+            "type": "number",
+            "minimum": 0
+          },
+          "cache_creation_input_token_cost_above_272k_tokens_priority": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Cache creation above 272k context for priority (OpenAI Fast mode) requests."
+          },
+          "cache_creation_input_token_cost_ultrafast": {
+            "type": "number",
+            "minimum": 0
+          },
+          "cache_creation_input_token_cost_above_272k_tokens_ultrafast": {
             "type": "number",
             "minimum": 0
           },
