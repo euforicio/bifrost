@@ -2778,6 +2778,23 @@ func TestToOpenAIResponsesRequest_StripsGeminiResidueFromResponsesInput(t *testi
 			origMutable: true,
 		},
 		{
+			name: "assistant refusal preserves required output-item status",
+			input: schemas.ResponsesMessage{
+				ID: schemas.Ptr("msg_replay"), Type: &messageType, Role: &assistant,
+				Status: schemas.Ptr("completed"),
+				Content: &schemas.ResponsesMessageContent{ContentBlocks: []schemas.ResponsesMessageContentBlock{{
+					Type: schemas.ResponsesOutputMessageContentTypeRefusal, Refusal: schemas.Ptr("cannot answer"),
+				}}},
+			},
+			wantWire: func(t *testing.T, item map[string]json.RawMessage) {
+				var status string
+				if err := json.Unmarshal(item["status"], &status); err != nil || status != "completed" {
+					t.Errorf("assistant output item requires completed status, got %s", item["status"])
+				}
+			},
+			origMutable: true,
+		},
+		{
 			name: "status stripped from message",
 			input: schemas.ResponsesMessage{
 				Type:   &messageType,
@@ -4003,7 +4020,8 @@ func TestToOpenAIResponsesRequest_MantleGPTOSSReplaysAssistantTextAsInput(t *tes
 			require.NoError(t, json.Unmarshal(body, &wire))
 			require.Len(t, wire.Input, 3, "body: %s", body)
 			var replayed struct {
-				Role    string `json:"role"`
+				Role    string  `json:"role"`
+				Status  *string `json:"status"`
 				Content []struct {
 					Type        string          `json:"type"`
 					Text        string          `json:"text"`
@@ -4016,7 +4034,11 @@ func TestToOpenAIResponsesRequest_MantleGPTOSSReplaysAssistantTextAsInput(t *tes
 			require.Equal(t, tc.wantType, replayed.Content[0].Type, "input[1]: %s", wire.Input[1])
 			require.Equal(t, "Hello! How can I help you today?", replayed.Content[0].Text)
 			if tc.wantType == "input_text" {
+				require.Nil(t, replayed.Status, "input_text must not carry output status")
 				require.Nil(t, replayed.Content[0].Annotations, "input_text carries no annotations: %s", wire.Input[1])
+			} else {
+				require.NotNil(t, replayed.Status)
+				require.Equal(t, "completed", *replayed.Status)
 			}
 
 			require.Equal(t, schemas.ResponsesOutputMessageContentTypeText, bifrostReq.Input[1].Content.ContentBlocks[0].Type,
