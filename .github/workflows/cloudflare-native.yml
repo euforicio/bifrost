@@ -41,6 +41,7 @@ jobs:
             release-assets.githubusercontent.com:443
             storage.googleapis.com:443
             sum.golang.org:443
+            vuln.go.dev:443
       - name: Check out exact qualification source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -49,6 +50,20 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24.21.0'
+      - name: Set up patched Go compiler
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.27.2'
+          cache-dependency-path: transports/go.sum
+      - name: Check actual production workspace dependencies
+        run: |
+          go work init ./core ./framework ./transports
+          for plugin_dir in ./plugins/*/; do
+            if [ -f "$plugin_dir/go.mod" ]; then go work use "$plugin_dir"; fi
+          done
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          (cd transports && govulncheck ./bifrost-http)
+          npm audit --prefix ui --package-lock-only --audit-level=low
       - name: Set up Docker Buildx
         uses: step-security/setup-buildx-action@f931205d68723ad9589fd2a7e2ece238bf9de341 # v4.0.0
       - name: Build production native variant for qualification
