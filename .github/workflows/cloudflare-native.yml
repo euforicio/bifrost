@@ -51,10 +51,10 @@ jobs:
         with:
           node-version: '24.21.0'
       - name: Set up patched Go compiler
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.2'
-          cache-dependency-path: transports/go.sum
+          cache: false
       - name: Check actual production workspace dependencies
         run: |
           go work init ./core ./framework ./transports
@@ -62,7 +62,7 @@ jobs:
             if [ -f "$plugin_dir/go.mod" ]; then go work use "$plugin_dir"; fi
           done
           go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
-          (cd transports && govulncheck ./bifrost-http)
+          (cd transports && govulncheck -tags sqlite_static,cloudflare ./bifrost-http)
           npm audit --prefix ui --package-lock-only --audit-level=low
       - name: Set up Docker Buildx
         uses: step-security/setup-buildx-action@f931205d68723ad9589fd2a7e2ece238bf9de341 # v4.0.0

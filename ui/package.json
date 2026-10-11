@@ -103,7 +103,6 @@
 		"esbuild": "0.28.1",
 		"follow-redirects": "1.16.0",
 		"tar": "7.5.3",
-		"seroval": "1.6.3",
 		"tinypool": "2.1.2",
 		"source-map-js": "1.2.2"
 	},
