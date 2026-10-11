@@ -102,9 +102,9 @@
 		"dompurify": "3.4.16",
 		"esbuild": "0.28.1",
 		"follow-redirects": "1.16.0",
+		"source-map-js": "1.2.2",
 		"tar": "7.5.3",
-		"tinypool": "2.1.2",
-		"source-map-js": "1.2.2"
+		"tinypool": "2.1.2"
 	},
 	"allowScripts": {
 		"core-js@3.49.0": true,

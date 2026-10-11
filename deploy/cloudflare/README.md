@@ -59,3 +59,22 @@ Freeze all source writers before the final read-only export; run the current
 canonical PostgreSQL migrations first. The converter rejects an incomplete source
 migration ledger instead of skipping a data migration. Keep the encrypted source
 backup and verify byte-level native imports before enabling production writers.
+
+## Stable upstream release
+
+This fork includes the stable open-source `transports/v2.2.6` release
+(`8b4fce4f1709d66f9208d02f50552da522535f9e`, published 2026-10-06).
+The production transport uses core 1.11.2, framework 1.8.1 and the matching
+plugin releases, built from local workspace sources to retain Cloudflare storage
+and fork-specific provider features. Development-branch features already in the
+fork remain available; this does not opt production into unreleased upstream work.
+
+The upgrade adds two pricing migrations to the existing migration ledger,
+without replacing configuration, provider credentials or inference logs.
+Retain the existing encryption key, setup token and admin credentials.
+When MCP OAuth discovery is enabled, its configuration must specify an explicit
+`oauth2_server_config.issuer_url`; header-only MCP deployments need no issuer.
+The new management setup lock applies when dashboard authentication is disabled;
+production keeps dashboard authentication and inference authentication enabled.
+Automatic main-merge deployment still qualifies the immutable native image and
+promotes the backend before its frontend assets.

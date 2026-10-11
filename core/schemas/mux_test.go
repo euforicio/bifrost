@@ -1742,7 +1742,7 @@ func TestNormalizedUsageCoversEveryUsageBearingFamily(t *testing.T) {
 // normalizedUsageFamilies lists what NormalizedUsage reads.
 var normalizedUsageFamilies = []string{
 	"TextCompletionResponse", "ChatResponse", "ResponsesResponse", "CompactionResponse",
-	"EmbeddingResponse", "RerankResponse", "DecisionResponse", "TranscriptionResponse",
+	"EmbeddingResponse", "RerankResponse", "DecisionResponse", "SystemOneResponse", "TranscriptionResponse",
 	"SpeechResponse", "ImageGenerationResponse", "PassthroughResponse",
 }
 
@@ -1757,6 +1757,13 @@ func TestNormalizedUsageDerivesTotalWhenReportedZero(t *testing.T) {
 		resp      *BifrostResponse
 		wantTotal int
 	}{
+		{
+			"system one, reported tokens",
+			&BifrostResponse{SystemOneResponse: &BifrostSystemOneResponse{
+				Usage: &SystemOneUsage{InputTokens: i64(7), OutputTokens: i64(3)},
+			}},
+			10,
+		},
 		{
 			"transcription, total reported zero",
 			&BifrostResponse{TranscriptionResponse: &BifrostTranscriptionResponse{
@@ -1795,5 +1802,24 @@ func TestNormalizedUsageDerivesTotalWhenReportedZero(t *testing.T) {
 				t.Errorf("TotalTokens = %d, want %d", u.TotalTokens, tc.wantTotal)
 			}
 		})
+	}
+}
+
+// reasoning.type must survive the chat<->responses conversion used when a
+// provider only implements one of the two APIs.
+func TestReasoningTypeSurvivesChatResponsesConversion(t *testing.T) {
+	chat := &BifrostChatRequest{
+		Model:  "claude-sonnet-5-5",
+		Params: &ChatParameters{Reasoning: &ChatReasoning{Type: Ptr("between_tools")}},
+	}
+	responses := chat.ToResponsesRequest()
+	if responses.Params == nil || responses.Params.Reasoning == nil || responses.Params.Reasoning.Type == nil ||
+		*responses.Params.Reasoning.Type != "between_tools" {
+		t.Fatalf("chat->responses dropped reasoning.type: %+v", responses.Params)
+	}
+	back := responses.ToChatRequest()
+	if back.Params == nil || back.Params.Reasoning == nil || back.Params.Reasoning.Type == nil ||
+		*back.Params.Reasoning.Type != "between_tools" {
+		t.Fatalf("responses->chat dropped reasoning.type: %+v", back.Params)
 	}
 }
