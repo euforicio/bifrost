@@ -317,9 +317,9 @@ export function RoutingRuleSheet({ open, onOpenChange, editingRule, onSuccess }:
 		const submitPromise =
 			isEditing && editingRule
 				? updateRoutingRule({
-					id: editingRule.id,
-					data: payload,
-				}).unwrap()
+						id: editingRule.id,
+						data: payload,
+					}).unwrap()
 				: createRoutingRule(payload).unwrap();
 
 		submitPromise

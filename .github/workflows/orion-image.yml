@@ -37,6 +37,7 @@ jobs:
             release-assets.githubusercontent.com:443
             storage.googleapis.com:443
             sum.golang.org:443
+            vuln.go.dev:443
 
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -44,7 +45,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.0"
+          go-version: "1.27.2"
           cache: false
 
       - name: Set up Node.js
@@ -57,6 +58,11 @@ jobs:
       - name: Validate provider account implementation
         run: |
           source ./.github/workflows/scripts/setup-go-workspace.sh
+          go install golang.org/x/vuln/cmd/govulncheck@v1.7.0
+          (cd transports && govulncheck -tags sqlite_static,cloudflare ./bifrost-http)
+          npm audit --prefix ui --package-lock-only --audit-level=low
+          (cd core && go test ./providers/openai -run 'StripsGeminiResidueFromResponsesInput|MantleGPTOSSReplaysAssistantTextAsInput')
+          (cd transports && go test ./bifrost-http/lib)
           (cd core && go test ./providers/openaicodex ./providers/xai ./providers/cursor ./providers/fireworks ./providers/ollama)
           (cd framework && go test ./providercredentials ./configstore ./configstore/tables ./modelcatalog/datasheet)
           (cd deploy/cloudflare && npm ci && npm test)

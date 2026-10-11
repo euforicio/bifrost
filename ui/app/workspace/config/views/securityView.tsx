@@ -1,4 +1,3 @@
-import PageTitle from "@/components/pageTitle";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,20 +9,33 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { IS_ENTERPRISE } from "@/lib/constants/config";
-import { getErrorMessage, useGetCoreConfigQuery, useUpdateCoreConfigMutation } from "@/lib/store";
+import { getErrorMessage, useGetCoreConfigQuery, useIsAuthEnabledQuery, useUpdateCoreConfigMutation } from "@/lib/store";
 import { AuthConfig, CoreConfig, DefaultCoreConfig } from "@/lib/types/config";
 import { SecretVar } from "@/lib/types/schemas";
 import { parseArrayFromText } from "@/lib/utils/array";
 import { formatCooldown } from "@/lib/utils/duration";
-import { getPasswordPolicyFailures, validateOrigins } from "@/lib/utils/validation";
+import { getApiBaseUrl } from "@/lib/utils/port";
+import { validateOrigins } from "@/lib/utils/validation";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { useGetAuthTypeQuery } from "@enterprise/lib/store/apis/scimApi";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
-// Go duration string: one or more <number><unit> segments, e.g. "5m", "1h30m".
 const COOLDOWN_PATTERN = /^(\d+(\.\d+)?(ns|us|µs|ms|s|m|h))+$/;
+
+const PASSWORD_REQUIREMENTS = [
+	{ label: "at least 12 characters", test: (password: string) => password.length >= 12 },
+	{ label: "one uppercase letter", test: (password: string) => /[A-Z]/.test(password) },
+	{ label: "one lowercase letter", test: (password: string) => /[a-z]/.test(password) },
+	{ label: "one number", test: (password: string) => /\d/.test(password) },
+	{ label: "one special character", test: (password: string) => /[^A-Za-z0-9]/.test(password) },
+];
+
+const getPasswordPolicyFailures = (password?: string) => {
+	if (!password) return [];
+	return PASSWORD_REQUIREMENTS.filter((requirement) => !requirement.test(password)).map((requirement) => requirement.label);
+};
 
 export default function SecurityView() {
 	const hasSettingsUpdateAccess = useRbac(RbacResource.Settings, RbacOperation.Update);
@@ -34,7 +46,7 @@ export default function SecurityView() {
 	const [localConfig, setLocalConfig] = useState<CoreConfig>(DefaultCoreConfig);
 	const showPasswordSection = !IS_ENTERPRISE || (!authTypeLoading && !authTypeError && authType?.type !== "sso");
 	const passwordInputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
-	const passwordUnchangedRef = useRef(true);
+	const inferenceAuthTouchedRef = useRef(false);
 
 	const [localValues, setLocalValues] = useState<{
 		allowed_origins: string;
@@ -63,9 +75,23 @@ export default function SecurityView() {
 	// configured via setup_token in config.json (or BIFROST_SETUP_TOKEN), so this
 	// field only needs to show up that once.
 	const isFirstTimeSetup = !bifrostConfig?.auth_config;
+	// OSS setup lock: while it is active, this page only loads because the browser holds
+	// the HttpOnly setup session cookie from the login setup view. Every request (the
+	// save below included) carries it, and the server accepts it as first-admin proof,
+	// so the token is never asked for again here.
+	const { data: authState } = useIsAuthEnabledQuery(undefined, { skip: IS_ENTERPRISE });
+	const authorizedBySetupToken = isFirstTimeSetup && !IS_ENTERPRISE && !!authState?.setup_required;
+	// The config layout gates this query on loading, not on error, so a failed
+	// GET /api/config?from_db=true still renders this form with no config (the
+	// dashboard shell's own config request can succeed). isFirstTimeSetup then
+	// reads true for every instance, and a later successful refetch would overwrite
+	// any toggle made in the meantime, leaving dashboard auth on with inference
+	// auth reset to the stored value.
+	const isConfigLoading = !bifrostConfig;
 
 	useEffect(() => {
 		if (bifrostConfig && config) {
+			inferenceAuthTouchedRef.current = false;
 			setLocalConfig(config);
 			setLocalValues({
 				allowed_origins: config?.allowed_origins?.join(", ") || "",
@@ -76,7 +102,6 @@ export default function SecurityView() {
 			});
 		}
 		if (bifrostConfig?.auth_config) {
-			passwordUnchangedRef.current = true;
 			setAuthConfig(bifrostConfig.auth_config);
 		}
 	}, [config, bifrostConfig]);
@@ -116,6 +141,7 @@ export default function SecurityView() {
 		const deleteExpiredVirtualKeysChanged = localConfig.delete_expired_virtual_keys !== config.delete_expired_virtual_keys;
 		const dualCredentialConflictBehaviorChanged =
 			(localConfig.dual_credential_conflict_behavior || "prefer_idp") !== (config.dual_credential_conflict_behavior || "prefer_idp");
+
 		const vkRotationCooldownChanged = formatCooldown(localConfig.vk_rotation_cooldown) !== formatCooldown(config.vk_rotation_cooldown);
 
 		return (
@@ -169,23 +195,28 @@ export default function SecurityView() {
 	}, []);
 
 	const handleConfigChange = useCallback((field: keyof CoreConfig, value: boolean) => {
+		if (field === "enforce_auth_on_inference") inferenceAuthTouchedRef.current = true;
 		setLocalConfig((prev) => ({ ...prev, [field]: value }));
 	}, []);
 
 	const handleVkRotationCooldownChange = useCallback((value: string) => {
 		setLocalValues((prev) => ({ ...prev, vk_rotation_cooldown: value }));
-		// The backend accepts Go duration strings; empty input means 0 (disabled).
 		setLocalConfig((prev) => ({ ...prev, vk_rotation_cooldown: value.trim() === "" ? 0 : value.trim() }));
 	}, []);
 
-	const handleAuthToggle = useCallback((checked: boolean) => {
-		setAuthConfig((prev) => ({ ...prev, is_enabled: checked }));
-	}, []);
+	const handleAuthToggle = useCallback(
+		(checked: boolean) => {
+			setAuthConfig((prev) => ({ ...prev, is_enabled: checked }));
+			if (!isFirstTimeSetup || inferenceAuthTouchedRef.current) return;
+			// Untouched preselection follows the dashboard toggle both ways, so canceling setup restores the stored value.
+			setLocalConfig((prev) => ({ ...prev, enforce_auth_on_inference: checked || (config?.enforce_auth_on_inference ?? false) }));
+		},
+		[isFirstTimeSetup, config?.enforce_auth_on_inference],
+	);
 
 	const handleAuthFieldChange = useCallback((field: "admin_username" | "admin_password", value: SecretVar) => {
 		if (field === "admin_password") {
-			passwordUnchangedRef.current = false;
-			const passwordPolicyFailures = !value.ref && value.value ? getPasswordPolicyFailures(value.value, false) : [];
+			const passwordPolicyFailures = !value.ref && value.value ? getPasswordPolicyFailures(value.value) : [];
 			setPasswordError(passwordPolicyFailures.length > 0 ? `Password must include ${passwordPolicyFailures.join(", ")}.` : "");
 		}
 		setAuthConfig((prev) => ({ ...prev, [field]: value }));
@@ -208,9 +239,14 @@ export default function SecurityView() {
 			}
 			const hasUsername = authConfig.admin_username?.value || authConfig.admin_username?.ref;
 			const hasPassword = authConfig.admin_password?.value || authConfig.admin_password?.ref;
+			const passwordChanged = authConfig.admin_password?.value !== bifrostConfig?.auth_config?.admin_password?.value;
 			const passwordPolicyFailures =
-				showPasswordSection && authConfig.is_enabled && !authConfig.admin_password?.ref && authConfig.admin_password?.value
-					? getPasswordPolicyFailures(authConfig.admin_password.value, passwordUnchangedRef.current)
+				showPasswordSection &&
+				authConfig.is_enabled &&
+				!authConfig.admin_password?.ref &&
+				authConfig.admin_password?.value &&
+				passwordChanged
+					? getPasswordPolicyFailures(authConfig.admin_password.value)
 					: [];
 
 			if (passwordPolicyFailures.length > 0) {
@@ -219,7 +255,7 @@ export default function SecurityView() {
 				passwordInputRef.current?.focus({ preventScroll: true });
 				return;
 			}
-			if (isFirstTimeSetup && authConfig.is_enabled && !setupToken.trim()) {
+			if (isFirstTimeSetup && authConfig.is_enabled && !authorizedBySetupToken && !setupToken.trim()) {
 				setSetupTokenErrorMessage(
 					"Enter the setup token configured by your operator to create the first admin account. It's set via setup_token in config.json or the BIFROST_SETUP_TOKEN environment variable.",
 				);
@@ -234,13 +270,19 @@ export default function SecurityView() {
 					? {
 							auth_config: {
 								...(authConfig.is_enabled && hasUsername && hasPassword ? authConfig : { ...authConfig, is_enabled: false }),
-								...(isFirstTimeSetup ? { setup_token: setupToken.trim() } : {}),
+								...(isFirstTimeSetup && !authorizedBySetupToken ? { setup_token: setupToken.trim() } : {}),
 							},
 						}
 					: {}),
 			}).unwrap();
 			setSetupToken("");
 			toast.success("Security settings updated successfully.");
+			// Dashboard auth is now on, so the OSS setup lock is lifted. Expire the setup
+			// session cookie (logout clears it) and sign in with the new admin account.
+			if (showPasswordSection && authConfig.is_enabled && hasUsername && hasPassword && authorizedBySetupToken) {
+				await fetch(`${getApiBaseUrl()}/session/logout`, { method: "POST", credentials: "include" }).catch(() => undefined);
+				window.location.href = "/login";
+			}
 		} catch (error) {
 			const message = getErrorMessage(error);
 			if (isFirstTimeSetup && message.toLowerCase().includes("setup token")) {
@@ -251,18 +293,22 @@ export default function SecurityView() {
 		}
 	}, [
 		bifrostConfig,
-		localConfig,
 		localValues.vk_rotation_cooldown,
+		localConfig,
 		authConfig,
 		showPasswordSection,
 		updateCoreConfig,
 		isFirstTimeSetup,
 		setupToken,
+		authorizedBySetupToken,
 	]);
 
 	return (
 		<div className="mx-auto w-full max-w-4xl space-y-4">
-			<PageTitle title="Security Settings">Configure security and access control settings.</PageTitle>
+			<div>
+				<h2 className="text-lg font-semibold tracking-tight">Security Settings</h2>
+				<p className="text-muted-foreground text-sm">Configure security and access control settings.</p>
+			</div>
 
 			<div className="space-y-4">
 				{/* Password Protect the Dashboard */}
@@ -294,13 +340,14 @@ export default function SecurityView() {
 										admin API calls.
 									</p>
 								</div>
-								<Switch id="auth-enabled" checked={authConfig.is_enabled} onCheckedChange={handleAuthToggle} />
+								<Switch id="auth-enabled" checked={authConfig.is_enabled} disabled={isConfigLoading} onCheckedChange={handleAuthToggle} />
 							</div>
 							<div className="space-y-4">
 								<div className="space-y-2">
 									<Label htmlFor="admin-username">Username</Label>
 									<SecretVarInput
 										id="admin-username"
+										autoComplete="username"
 										type="text"
 										placeholder="Enter admin username or env.VAR_NAME"
 										value={authConfig.admin_username}
@@ -313,6 +360,10 @@ export default function SecurityView() {
 									<SecretVarInput
 										ref={passwordInputRef}
 										id="admin-password"
+										// new-password: password managers offer to save or generate here instead of
+										// filling a password saved for this host, which would silently replace what
+										// the operator typed.
+										autoComplete="new-password"
 										aria-invalid={!!passwordError}
 										aria-describedby={passwordError ? "admin-password-error" : undefined}
 										type="password"
@@ -330,7 +381,12 @@ export default function SecurityView() {
 										</p>
 									) : null}
 								</div>
-								{isFirstTimeSetup && authConfig.is_enabled ? (
+								{isFirstTimeSetup && authConfig.is_enabled && authorizedBySetupToken ? (
+									<p className="text-muted-foreground text-xs" data-testid="security-setup-token-authorized">
+										Authorized with the setup token entered on the setup screen. Saving creates the admin account, after which the setup
+										token stops working.
+									</p>
+								) : isFirstTimeSetup && authConfig.is_enabled ? (
 									<div className="space-y-2">
 										<Label htmlFor="setup-token">Setup token</Label>
 										<Input
@@ -343,9 +399,9 @@ export default function SecurityView() {
 											onChange={(e) => setSetupToken(e.target.value)}
 										/>
 										<p className="text-muted-foreground text-xs">
-											No admin account exists yet, so this instance is reachable without a password. To finish setup, ask your operator for
-											the setup token configured via <code>setup_token</code> in <code>config.json</code> (or the{" "}
-											<code>BIFROST_SETUP_TOKEN</code> environment variable) and paste it here.
+											No admin account exists yet, so management APIs only accept the setup token. Enter the token configured via{" "}
+											<code>setup_token</code> in <code>config.json</code> (or the <code>BIFROST_SETUP_TOKEN</code> environment variable) to
+											create the admin account. Once it is enabled, the setup token stops working.
 										</p>
 									</div>
 								) : null}
@@ -373,16 +429,27 @@ export default function SecurityView() {
 							>
 								documentation
 							</a>{" "}
-							for details.
+							to set up a virtual key before enabling this. Calls without a valid credential will return 401.
 						</p>
 					</div>
 					<Switch
 						id="enforce-auth-on-inference"
 						data-testid="enforce-auth-on-inference-switch"
 						checked={localConfig.enforce_auth_on_inference}
+						disabled={isConfigLoading}
 						onCheckedChange={(checked) => handleConfigChange("enforce_auth_on_inference", checked)}
 					/>
 				</div>
+				{(authConfig.is_enabled || authType?.type === "sso") && !config?.enforce_auth_on_inference && (
+					<Alert variant="destructive" data-testid="inference-auth-off-warning">
+						<AlertTriangle className="h-4 w-4" />
+						<AlertDescription>
+							The dashboard is authentication protected, but this is a separate control: anyone who can reach this gateway can still call
+							inference endpoints (e.g. chat completions) with no credential at all, spending your provider budget and reading provider-side
+							state your key has access to. Turn this on unless you've deliberately chosen to leave inference open.
+						</AlertDescription>
+					</Alert>
+				)}
 				{/* Dual Credential Conflict Behavior */}
 				{IS_ENTERPRISE && (
 					<div className="flex items-center justify-between space-x-2 rounded-sm border p-4">
@@ -408,7 +475,7 @@ export default function SecurityView() {
 							<SelectTrigger
 								id="dual-credential-conflict-behavior"
 								data-testid="dual-credential-conflict-behavior-select"
-								className="w-full sm:w-[180px]"
+								className="w-[180px]"
 							>
 								<SelectValue />
 							</SelectTrigger>
@@ -468,8 +535,8 @@ export default function SecurityView() {
 						</label>
 						<p className="text-muted-foreground text-sm">
 							When enabled, a daily cleanup job deletes every virtual key whose expiry has passed and posts a notification listing the
-							removed keys. Each key can override this from its <b>Delete after expire</b> switch: a key set to off is kept, and a key
-							set to on is deleted even while this is disabled.
+							removed keys. Each key can override this from its <b>Delete after expire</b> switch: a key set to off is kept, and a key set
+							to on is deleted even while this is disabled.
 						</p>
 					</div>
 					<Switch
