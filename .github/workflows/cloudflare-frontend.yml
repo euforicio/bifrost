@@ -1,0 +1,87 @@
+name: Resume Cloudflare frontend after queued backend landing
+on:
+  workflow_dispatch:
+    inputs:
+      release_run:
+        description: Successful original main release run ID; backend must already serve that exact SHA
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: bifrost-production
+  cancel-in-progress: false
+  queue: max
+jobs:
+  qualify:
+    if: github.ref == 'refs/heads/main' && vars.CLOUDFLARE_RELEASE_QUEUE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      source_sha: ${{ steps.release.outputs.source_sha }}
+      infra_sha: ${{ steps.release.outputs.infra_sha }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: euforicio/orion-infra
+          ref: main
+          token: ${{ secrets.ORION_INFRA_TOKEN }}
+          persist-credentials: false
+          path: infrastructure
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.21.0'
+      - id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INFRA_QUEUE_TOKEN: ${{ secrets.ORION_INFRA_TOKEN }}
+          RELEASE_RUN: ${{ inputs.release_run }}
+        run: node infrastructure/cloudflare/scripts/require-release-run.mjs bifrost "$RELEASE_RUN"
+  deploy:
+    if: vars.CLOUDFLARE_RELEASE_QUEUE_ENABLED == 'true'
+    needs: qualify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: cloudflare-production
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ needs.qualify.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: euforicio/orion-infra
+          ref: ${{ needs.qualify.outputs.infra_sha }}
+          token: ${{ secrets.ORION_INFRA_TOKEN }}
+          persist-credentials: false
+          path: infrastructure
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24.21.0'
+      - run: npm ci --prefix infrastructure/cloudflare
+      - name: Require cutover and the checked native backend
+        env:
+          SOURCE_SHA: ${{ needs.qualify.outputs.source_sha }}
+        run: |
+          node infrastructure/cloudflare/scripts/require-production.mjs bifrost "$GITHUB_WORKSPACE"
+          node infrastructure/cloudflare/scripts/verify-product-release.mjs bifrost "$SOURCE_SHA"
+      - name: Fetch the original checked frontend assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: bifrost-web
+          path: ${{ runner.temp }}/bifrost-web
+          run-id: ${{ inputs.release_run }}
+          github-token: ${{ github.token }}
+      - name: Recheck source and backend before publishing checked frontend
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INFRA_QUEUE_TOKEN: ${{ secrets.ORION_INFRA_TOKEN }}
+          RELEASE_RUN: ${{ inputs.release_run }}
+          SOURCE_SHA: ${{ needs.qualify.outputs.source_sha }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          node infrastructure/cloudflare/scripts/require-release-run.mjs bifrost "$RELEASE_RUN"
+          node infrastructure/cloudflare/scripts/verify-product-release.mjs bifrost "$SOURCE_SHA"
+          node infrastructure/cloudflare/scripts/prepare-frontend.mjs bifrost "$RUNNER_TEMP/bifrost-web"
+          (cd infrastructure/cloudflare && npx wrangler deploy --config frontends/bifrost/wrangler.jsonc)
