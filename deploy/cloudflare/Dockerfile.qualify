@@ -1,9 +1,0 @@
-# Linux host networking keeps workerd and the exact release container on one host,
-# including when the operator uses Docker through Colima on macOS.
-FROM node:24.21.0-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20
-RUN apt-get update && apt-get install -y --no-install-recommends docker.io ca-certificates && rm -rf /var/lib/apt/lists/*
-WORKDIR /qualification
-COPY deploy/cloudflare/package.json deploy/cloudflare/package-lock.json ./
-RUN npm ci
-COPY deploy/cloudflare/test-image.mjs deploy/cloudflare/qualification.js deploy/cloudflare/storage.js deploy/cloudflare/r2.js ./
-ENTRYPOINT ["node", "test-image.mjs"]
