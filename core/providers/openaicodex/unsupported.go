@@ -183,3 +183,7 @@ func (p unsupportedProvider) PassthroughStream(*schemas.BifrostContext, schemas.
 func (p unsupportedProvider) Decision(*schemas.BifrostContext, schemas.Key, *schemas.BifrostDecisionRequest) (*schemas.BifrostDecisionResponse, *schemas.BifrostError) {
 	return nil, p.unsupported(schemas.DecisionRequest)
 }
+
+func (p unsupportedProvider) ModelRetrieve(*schemas.BifrostContext, schemas.Key, *schemas.BifrostModelRetrieveRequest) (*schemas.BifrostModelRetrieveResponse, *schemas.BifrostError) {
+	return nil, p.unsupported(schemas.ModelRetrieveRequest)
+}

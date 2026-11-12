@@ -3,6 +3,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { ModelProvider } from "@/lib/types/config";
 import { toast } from "sonner";
 import ProviderKeyForm from "../views/providerKeyForm";
+import { useTranslation } from "react-i18next";
 
 interface Props {
 	show: boolean;
@@ -13,6 +14,7 @@ interface Props {
 }
 
 export default function AddNewKeySheet({ show, onCancel, provider, keyId, providerName }: Props) {
+	const { t } = useTranslation("models");
 	const isEditing = keyId !== null;
 	const resolvedProviderName = (providerName ?? provider.name).toLowerCase();
 	const isVLLM = resolvedProviderName === "vllm";

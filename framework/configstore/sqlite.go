@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework/storehooks"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -35,7 +36,7 @@ func newSqliteConfigStore(ctx context.Context, config *SQLiteConfig, logger sche
 			}
 			_ = f.Close()
 		}
-		dsn := fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=NORMAL&_cache_size=10000&_busy_timeout=60000&_wal_autocheckpoint=1000&_foreign_keys=1", config.Path)
+		dsn := fmt.Sprintf("%s?_journal_mode=WAL&_synchronous=NORMAL&_cache_size=10000&_busy_timeout=60000&_wal_autocheckpoint=1000&_foreign_keys=1&_txlock=immediate", config.Path)
 		logger.Debug("opening DB with dsn: %s", dsn)
 		dialector = sqlite.Open(dsn)
 	}
@@ -60,6 +61,7 @@ func newSqliteConfigStore(ctx context.Context, config *SQLiteConfig, logger sche
 	// fields are rewritten to vault refs before persistence and owned vault
 	// secrets are cleaned up on delete.
 	RegisterVaultCallbacks(db)
+	storehooks.PoolOpened(storehooks.RoleConfig, db)
 	s := &RDBConfigStore{logger: logger}
 	s.db.Store(db)
 	// SQLite has no server-side prepared-plan cache, and opening a second

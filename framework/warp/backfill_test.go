@@ -17,6 +17,7 @@ import (
 	"github.com/maximhq/bifrost/framework/logstore"
 	"github.com/maximhq/bifrost/framework/modelcatalog"
 	"github.com/maximhq/bifrost/framework/modelcatalog/datasheet"
+	"github.com/maximhq/bifrost/framework/sidekiq"
 	"github.com/stretchr/testify/require"
 )
 
@@ -203,7 +204,7 @@ func TestWarpBackfillCancellationDuringIndexingNotCounted(t *testing.T) {
 	defer cancel()
 	cancelID := logs[2].ID
 	cancelDuringIndex := func(bctx *schemas.BifrostContext, request *schemas.BifrostEmbeddingRequest) (*schemas.BifrostEmbeddingResponse, *schemas.BifrostError) {
-		if request.Input != nil && request.Input.Text != nil && strings.Contains(*request.Input.Text, cancelID) {
+		if strings.Contains(embeddingRequestText(request), cancelID) {
 			cancel()
 			return nil, &schemas.BifrostError{Error: &schemas.ErrorField{Message: "caller cancelled"}}
 		}
@@ -657,7 +658,7 @@ func TestWarpBackfillSuccessResetsConsecutiveFailures(t *testing.T) {
 	// nothing about which call lands "first" or "the Nth" is deterministic.
 	successID := logs[len(logs)/2].ID
 	flaky := func(ctx *schemas.BifrostContext, request *schemas.BifrostEmbeddingRequest) (*schemas.BifrostEmbeddingResponse, *schemas.BifrostError) {
-		if request.Input != nil && request.Input.Text != nil && strings.Contains(*request.Input.Text, successID) {
+		if strings.Contains(embeddingRequestText(request), successID) {
 			return backfillEmbeddingExecutor(ctx, request)
 		}
 		return failingBackfillEmbeddingExecutor(ctx, request)
@@ -710,7 +711,7 @@ func TestWarpBackfillDoesNotCountVanishedLogsAsFailures(t *testing.T) {
 		WithConfigStore(&recordingStore{row: validWarpConfigRow()}), WithLogReader(reader),
 		WithVectorStore(newFakeWarpVectorStore()),
 		WithEmbeddingExecutor(func(ctx *schemas.BifrostContext, request *schemas.BifrostEmbeddingRequest) (*schemas.BifrostEmbeddingResponse, *schemas.BifrostError) {
-			if strings.Contains(*request.Input.Text, "poison entry") {
+			if strings.Contains(embeddingRequestText(request), "poison entry") {
 				return nil, &schemas.BifrostError{Error: &schemas.ErrorField{Message: "embedding failed"}}
 			}
 			return backfillEmbeddingExecutor(ctx, request)
@@ -843,7 +844,7 @@ func TestWarpBackfillResumesFromFailedRunCheckpoint(t *testing.T) {
 	// order regardless of completion order.
 	successID := logs[0].ID
 	firstThenFailing := func(ctx *schemas.BifrostContext, request *schemas.BifrostEmbeddingRequest) (*schemas.BifrostEmbeddingResponse, *schemas.BifrostError) {
-		if request.Input != nil && request.Input.Text != nil && strings.Contains(*request.Input.Text, successID) {
+		if strings.Contains(embeddingRequestText(request), successID) {
 			return backfillEmbeddingExecutor(ctx, request)
 		}
 		return failingBackfillEmbeddingExecutor(ctx, request)
@@ -901,4 +902,42 @@ func TestWarpBackfillResumesFromFailedRunCheckpoint(t *testing.T) {
 	require.NoError(t, sonic.Unmarshal([]byte(restartedJSON), &restarted))
 	require.Zero(t, restarted.Scanned)
 	require.Nil(t, restarted.CursorTime)
+}
+
+func TestSummarizeBackfillMeta(t *testing.T) {
+	got := SummarizeBackfillMeta(`{"total":200,"scanned":50,"indexed":40}`)
+	require.Equal(t, sidekiq.JobSummary{Done: 50, Total: 200}, got)
+
+	require.Equal(t, sidekiq.JobSummary{}, SummarizeBackfillMeta(`{not json`), "malformed metadata yields an empty summary")
+}
+
+// enqueueOnlySidekiqStore accepts a job and claims none of them, so a test can
+// see whether a kind was registered without the job running.
+type enqueueOnlySidekiqStore struct{ sidekiq.Store }
+
+func (enqueueOnlySidekiqStore) CreateSidekiqJob(context.Context, *tables.TableSidekiqJob) error {
+	return nil
+}
+
+func (enqueueOnlySidekiqStore) ClaimSidekiqJob(context.Context, string, string, time.Time) (bool, error) {
+	return false, nil
+}
+
+// Topic clustering reads vectors that are already indexed and needs no
+// embedding executor, so a deployment without one still accepts a topics run
+// (BuildTopicsJobMeta does). Registering it behind the backfill's guard left
+// that run with no handler.
+func TestRegisterBackfillRegistersTopicsWithoutAnIndexer(t *testing.T) {
+	service := NewService(nil,
+		WithConfigStore(&recordingStore{row: validWarpConfigRow()}), WithLogReader(&backfillLogReader{}),
+		WithVectorStore(newFakeWarpVectorStore()))
+	defer service.Shutdown()
+	require.Nil(t, service.indexer, "no embedding executor, so nothing indexes")
+
+	runner := sidekiq.New(enqueueOnlySidekiqStore{}, nil, 1, "")
+	defer runner.Shutdown()
+	service.RegisterBackfill(runner)
+
+	require.NoError(t, runner.Enqueue(context.Background(), "topics-1", TopicsJobKind, "{}", ""))
+	require.Error(t, runner.Enqueue(context.Background(), "backfill-1", BackfillJobKind, "{}", ""), "the backfill does need the indexer")
 }

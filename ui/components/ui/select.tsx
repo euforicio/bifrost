@@ -58,10 +58,7 @@ function SelectContent({ className, children, position = "popper", ...props }: R
 			>
 				<SelectScrollUpButton />
 				<SelectPrimitive.Viewport
-					className={cn(
-						"!pointer-events-auto p-1",
-						position === "popper" && "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)] scroll-my-1",
-					)}
+					className={cn("!pointer-events-auto p-1", position === "popper" && "h-[var(--radix-select-trigger-height)] w-full scroll-my-1")}
 				>
 					{children}
 				</SelectPrimitive.Viewport>

@@ -1,8 +1,10 @@
+import { readStoredWarpModelKey, storeWarpModelKey } from "@/components/warp/warpComposer.utils";
 import type { WarpQuestion, WarpUsage } from "@/components/warp/warpStream.utils";
+import { WarpStreamSession } from "@/components/warp/warpStreamSession";
 import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { FEATURE_FLAGS } from "@/lib/constants/featureFlags";
-import { createContext, useCallback, useContext, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 /** One turn in an Warp conversation. */
 export interface WarpTurn {
@@ -72,8 +74,17 @@ interface WarpContextValue {
 	open: () => void;
 	close: () => void;
 	toggle: () => void;
-	/** Completed turns. The in-flight answer lives in the panel, not here. */
+	/** Completed turns. The in-flight answer lives in `stream`, not here. */
 	turns: WarpTurn[];
+	/**
+	 * The one in-flight request, created once for the provider's lifetime.
+	 *
+	 * Owned here so closing the dock - which unmounts the panel - lets the
+	 * answer finish and land in `turns` instead of aborting it. The panel
+	 * subscribes to it for token updates; this value's identity never changes,
+	 * so the tokens never travel through context.
+	 */
+	stream: WarpStreamSession;
 	appendTurn: (turn: WarpTurn) => void;
 	replaceTurns: (turns: WarpTurn[]) => void;
 	clear: () => void;
@@ -97,6 +108,21 @@ interface WarpContextValue {
 	question: WarpQuestion | null;
 	setQuestion: (question: WarpQuestion | null) => void;
 	setConversationId: (id: string) => void;
+	/**
+	 * The model this viewer picked, as a warpModelKey, or null for none.
+	 *
+	 * A preference, not a setting: the panel resolves it against the models the
+	 * operator exposes on every read (resolveWarpModel). Provider state so it
+	 * survives the dock closing, like the rest of the thread.
+	 */
+	selectedModelKey: string | null;
+	selectModel: (key: string) => void;
+	/** Opens the dock and hands it a question to send, for callers outside the panel such as the ⌘K palette. */
+	ask: (text: string) => void;
+	/** Bumped by each ask, so a mounted panel knows to call takeHandoff. */
+	handoffSeq: number;
+	/** Returns the oldest handed-over question and removes it, so each can be sent only once. */
+	takeHandoff: () => string | null;
 }
 
 const WarpContext = createContext<WarpContextValue | null>(null);
@@ -106,9 +132,10 @@ const WarpContext = createContext<WarpContextValue | null>(null);
  * so far.
  *
  * It deliberately holds only slow-moving values. The token-by-token answer stays
- * in local state inside the panel, because a context update re-renders every
- * consumer — including the topbar button — and doing that on every streamed
- * chunk would make the whole dashboard chrome repaint dozens of times a second.
+ * in the stream session, which the panel subscribes to directly, because a
+ * context update re-renders every consumer — including the topbar button — and
+ * doing that on every streamed chunk would make the whole dashboard chrome
+ * repaint dozens of times a second.
  *
  * The conversation is in memory only. It survives navigation between views,
  * which is the point of the dock, but not a reload. Server-side persistence is a
@@ -129,25 +156,62 @@ export function WarpProvider({ children }: { children: React.ReactNode }) {
 	const isWarpEnabled = isWarpFlagOn && hasWarpSessionAccess && hasWarpConfigReadAccess;
 	const [isOpen, setIsOpen] = useState(false);
 	const [turns, setTurns] = useState<WarpTurn[]>([]);
-	const [conversationId, setConversationId] = useState("");
+	const [conversationId, setConversationIdState] = useState("");
 	const [question, setQuestion] = useState<WarpQuestion | null>(null);
+	const [selectedModelKey, setSelectedModelKey] = useState<string | null>(readStoredWarpModelKey);
+	// A ref, not state: taking one must remove it at once, or a second effect pass sees it again and sends it twice.
+	// A list, so a second question asked while the first waits for a busy panel is not overwritten.
+	const handoff = useRef<string[]>([]);
+	const [handoffSeq, setHandoffSeq] = useState(0);
+	// One session for the provider's lifetime. The sink only closes over state
+	// setters, which are stable, so nothing here goes stale across renders.
+	const [stream] = useState(
+		() =>
+			new WarpStreamSession({
+				// A turn with neither text nor error is a stop that produced nothing;
+				// filing it would leave an invisible empty row in the transcript.
+				commitTurn: (turn) => {
+					if (turn.content || turn.error) setTurns((current) => [...current, turn]);
+				},
+				setConversationId: setConversationIdState,
+				setQuestion,
+			}),
+	);
+	// Through the session, so its own copy - what send() files under - moves too.
+	const setConversationId = stream.setConversationId;
 
 	const open = useCallback(() => setIsOpen(true), []);
 	const close = useCallback(() => setIsOpen(false), []);
 	const toggle = useCallback(() => setIsOpen((current) => !current), []);
 	const appendTurn = useCallback((turn: WarpTurn) => setTurns((current) => [...current, turn]), []);
 	const replaceTurns = useCallback((next: WarpTurn[]) => setTurns(next), []);
+	const ask = useCallback((text: string) => {
+		handoff.current.push(text);
+		setHandoffSeq((n) => n + 1);
+		setIsOpen(true);
+	}, []);
+	const takeHandoff = useCallback(() => {
+		return handoff.current.shift() ?? null;
+	}, []);
+	// Closing the dock before the panel sent it drops the question, so it can't fire on some later open.
+	useEffect(() => {
+		if (!isOpen) handoff.current = [];
+	}, [isOpen]);
+	const selectModel = useCallback((key: string) => {
+		setSelectedModelKey(key);
+		storeWarpModelKey(key);
+	}, []);
 	// Clearing starts a new thread as well as a new transcript, or the next
 	// question would be appended to the conversation just discarded.
 	const clear = useCallback(() => {
 		setTurns([]);
-		setConversationId("");
+		stream.setConversationId("");
 		// The pending question goes with the transcript that produced it. Leaving
 		// it set kept the question card on screen above an empty thread, and
 		// answering it sent the reply into a new conversation without any of the
 		// context that made it a sensible question.
 		setQuestion(null);
-	}, []);
+	}, [stream]);
 
 	const value = useMemo(
 		() => ({
@@ -156,6 +220,7 @@ export function WarpProvider({ children }: { children: React.ReactNode }) {
 			close,
 			toggle,
 			turns,
+			stream,
 			appendTurn,
 			replaceTurns,
 			clear,
@@ -163,8 +228,31 @@ export function WarpProvider({ children }: { children: React.ReactNode }) {
 			setConversationId,
 			question,
 			setQuestion,
+			selectedModelKey,
+			selectModel,
+			ask,
+			handoffSeq,
+			takeHandoff,
 		}),
-		[isOpen, open, close, toggle, turns, appendTurn, replaceTurns, clear, conversationId, question],
+		[
+			isOpen,
+			open,
+			close,
+			toggle,
+			turns,
+			stream,
+			appendTurn,
+			replaceTurns,
+			clear,
+			conversationId,
+			setConversationId,
+			question,
+			selectedModelKey,
+			selectModel,
+			ask,
+			handoffSeq,
+			takeHandoff,
+		],
 	);
 	return <WarpContext.Provider value={isWarpEnabled ? value : null}>{children}</WarpContext.Provider>;
 }

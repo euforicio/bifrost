@@ -144,7 +144,7 @@ func TestComplexityJevFallbackAndPrimaryValidation(t *testing.T) {
 		normalized := cfg.Normalized()
 		err := normalized.Validate()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "semantic or jev")
+		assert.Contains(t, err.Error(), "semantic, decision, or jev")
 	})
 }
 

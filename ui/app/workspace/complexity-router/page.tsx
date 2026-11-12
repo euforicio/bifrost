@@ -1,3 +1,5 @@
+import { Switch } from "@/components/ui/switch";
+import { cn } from "@/lib/utils";
 import PageTitle from "@/components/pageTitle";
 import FullPageLoader from "@/components/fullPageLoader";
 import {
@@ -13,9 +15,6 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scrollArea";
-import { TagInput } from "@/components/ui/tagInput";
-import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import { EmbeddingSupportedProviders } from "@/lib/constants/logs";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -30,34 +29,46 @@ import {
 	useResetComplexityAnalyzerConfigMutation,
 	useUpdateComplexityAnalyzerConfigMutation,
 } from "@/lib/store/apis/governanceApi";
-import {
-	KeywordListKey,
-	MAX_LLM_PROMPT_CHARACTERS,
-	MAX_SEMANTIC_PHRASES,
-	TIER_PHRASE_LIST_DEFINITIONS,
-} from "@/lib/types/complexityRouter";
+import { MAX_SEMANTIC_PHRASES } from "@/lib/types/complexityRouter";
 import { ModelProvider } from "@/lib/types/config";
 import { DBKey } from "@/lib/types/governance";
-import { cn } from "@/lib/utils";
 import { RbacOperation, RbacResource, useRbac } from "@enterprise/lib";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ExternalLink, Info, LoaderCircle, RotateCcw, Save, Settings2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, ArrowRight, ExternalLink, LoaderCircle, RotateCcw, Save, Settings2, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Controller, useForm } from "react-hook-form";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
+import { useTranslation, Trans } from "react-i18next";
 import {
 	AnalyzerFormValues,
 	analyzerConfigSchema,
 	countCanonicalSemanticPhrases,
 	DEFAULT_FORM_VALUES,
 	jevTimeoutFieldValue,
+	getDecisionProviderState,
+	isDecisionGuidanceDefault,
+	isDecisionGuidanceEmpty,
+	decisionCriteriaFromDefaults,
+	isRouterConfigured,
+	decisionGuidanceFormValues,
 	toAnalyzerPayload,
 	toFormValues,
 	shouldSeedLLMPrompt,
 } from "./formSchema";
 import { ClassifierStatusBadge } from "./views/classifierStatusBadge";
 import EmbeddingConfigSheet from "./views/embeddingConfigSheet";
+import DecisionSettingsSheet from "./views/decisionSettingsSheet";
 import { FieldLabel, SectionHeading } from "./views/formPrimitives";
+import {
+	ClassifierChoice,
+	DecisionFields,
+	DecisionGuidanceSection,
+	LLMPromptSection,
+	PhraseTierGrid,
+	SessionRoutingCard,
+	StepRail,
+	DecisionProviderAlert,
+} from "./views/sections";
 
 // Embedding-capable providers gate this page, matching the local cache screen's
 // rule: built-ins are listed in EmbeddingSupportedProviders, custom providers
@@ -120,8 +131,13 @@ function testIdPart(value: string) {
 }
 
 export default function ComplexityRouterPage() {
+	const { t } = useTranslation("models");
+	const { t: tc } = useTranslation("common");
+	const { t: tcpx } = useTranslation("models", { keyPrefix: "routing.complexityUi" });
 	const canUpdate = useRbac(RbacResource.RoutingRules, RbacOperation.Update);
-	const { data, isLoading, isFetching, error, refetch } = useGetComplexityAnalyzerConfigQuery();
+	const { data, isLoading, isFetching, error, refetch } = useGetComplexityAnalyzerConfigQuery(undefined, {
+		refetchOnMountOrArgChange: true,
+	});
 	const [updateConfig, { isLoading: isSaving }] = useUpdateComplexityAnalyzerConfigMutation();
 	const [resetConfig, { isLoading: isResetting }] = useResetComplexityAnalyzerConfigMutation();
 	const [retrySemanticWarmup, { isLoading: isRetryingWarmup }] = useRetryComplexitySemanticWarmupMutation();
@@ -129,12 +145,21 @@ export default function ComplexityRouterPage() {
 	const [submitError, setSubmitError] = useState<string | null>(null);
 	const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
 	const [embeddingSheetOpen, setEmbeddingSheetOpen] = useState(false);
+	const [decisionSheetOpen, setDecisionSheetOpen] = useState(false);
+	// The open step. Null follows the saved config: a router with nothing set
+	// up opens on the classifier choice, an existing one straight on its setup.
+	const [openStep, setOpenStep] = useState<"classifier" | "setup" | null>(null);
+	// Whether a classifier has been picked on this visit. A new router's form
+	// defaults to "semantic", which is not a choice the operator made.
+	const [picked, setPicked] = useState(false);
 	// An intentionally empty draft can equal the saved default and be non-dirty.
 	// Track interaction separately so status refreshes never refill it.
 	const promptEdited = useRef(false);
 
-	const { data: providersData, isLoading: providersLoading } = useGetProvidersQuery();
-	const { data: allKeys, isLoading: keysLoading } = useGetAllKeysQuery();
+	// Refetched on every visit: provider and key fixes happen on the providers
+	// page, and a cached list would keep describing the state before them.
+	const { data: providersData, isLoading: providersLoading } = useGetProvidersQuery(undefined, { refetchOnMountOrArgChange: true });
+	const { data: allKeys, isLoading: keysLoading } = useGetAllKeysQuery(undefined, { refetchOnMountOrArgChange: true });
 	const embeddingProviders = useMemo(
 		() => (providersData || []).filter((provider) => supportsEmbedding(provider) && hasEnabledKey(provider, allKeys || [])),
 		[providersData, allKeys],
@@ -171,9 +196,11 @@ export default function ComplexityRouterPage() {
 	// both: gating on one alone flashes "no provider configured" on every load.
 	const isProviderListLoading = providersLoading || keysLoading;
 
+	const liveClassifier = watch("classifier");
 	const liveSemantic = watch("semantic");
 	const liveLLM = watch("llm");
 	const liveJev = watch("jev");
+	const liveDecisionProvider = watch("decision.provider");
 	const liveSession = watch("session");
 	const liveKeywords = watch("keywords");
 
@@ -196,8 +223,38 @@ export default function ComplexityRouterPage() {
 		[allKeys, liveJev?.provider],
 	);
 
+	const enabledKeyIdsForDecisionProvider = useMemo(
+		() => (allKeys || []).filter((key) => key.provider === liveDecisionProvider && key.enabled !== false).map((key) => key.key_id),
+		[allKeys, liveDecisionProvider],
+	);
+	// The decision model authenticates through its provider, so that provider's
+	// state is what the decision model can be expected to do.
+	const decisionProviderState = useMemo(
+		() => getDecisionProviderState(providersData, allKeys, liveDecisionProvider),
+		[providersData, allKeys, liveDecisionProvider],
+	);
+	const decisionProviderReady = decisionProviderState === "configured";
+
 	const isClassifierConfigured = Boolean(liveSemantic?.provider && liveSemantic?.embedding_model);
-	const isLLMFallbackEnabled = liveSemantic?.fallback === "llm";
+	const isLLMFallbackEnabled = liveClassifier === "semantic" && liveSemantic?.fallback === "llm";
+	const isDecisionFallbackEnabled = liveClassifier === "semantic" && liveSemantic?.fallback === "decision";
+	const isDecisionInUse = liveClassifier === "decision" || isDecisionFallbackEnabled;
+	// The embedding and llm fallback fields both live behind the same sheet, so a
+	// pending edit to either would otherwise be invisible from the page.
+	// react-hook-form keeps reverted fields in dirtyFields with a false value, so
+	// the flags are what matter, not the key count.
+	const hasUnsavedDecisionSettingsChanges = Boolean(
+		dirtyFields.decision?.provider ||
+		dirtyFields.decision?.model ||
+		dirtyFields.decision?.previous_message_count ||
+		dirtyFields.decision?.timeout ||
+		dirtyFields.decision?.min_confidence,
+	);
+	const hasUnsavedEmbeddingConfigChanges =
+		Object.values(dirtyFields.semantic ?? {}).some(Boolean) || Object.values(dirtyFields.llm ?? {}).some(Boolean);
+	const hasClassifier = isRouterConfigured(data) || picked;
+	// Read-only operators cannot choose, so they always land on the setup step.
+	const step = openStep ?? (canUpdate && !hasClassifier ? "classifier" : "setup");
 	const isJevFallbackEnabled = liveSemantic?.fallback === "jev";
 	const isJevConfigured = Boolean(liveJev?.provider && liveJev?.model);
 
@@ -211,10 +268,11 @@ export default function ComplexityRouterPage() {
 	// that had already recovered. It polls slowly because it is waiting on a
 	// human, where warming is polled fast to keep the progress bar moving.
 	const [statusPollInterval, setStatusPollInterval] = useState(0);
-	// Also fetched as soon as the llm fallback is enabled in the form, before any
-	// save: the endpoint carries llm_default_prompt, which seeds the prompt field
-	// and powers "Reset to default" — gating on the saved config alone left a
-	// newly enabled fallback with no default prompt until after the first save.
+	// Also fetched as soon as the llm fallback or the decision model is enabled in the form,
+	// before any save: the endpoint carries llm_default_prompt and decision_defaults,
+	// which seed those editors and power "Reset to default" — gating on the
+	// saved config alone left a newly enabled classifier with no defaults until
+	// after the first save.
 	const {
 		data: semanticStatus,
 		isLoading: statusLoading,
@@ -222,18 +280,13 @@ export default function ComplexityRouterPage() {
 		isError: statusIsError,
 		refetch: refetchStatus,
 	} = useGetComplexitySemanticStatusQuery(undefined, {
-		skip: !data?.semantic && !data?.llm && !data?.jev && !isLLMFallbackEnabled && !isJevFallbackEnabled && !isJevConfigured,
+		skip:
+			!data?.semantic && !data?.llm && !isLLMFallbackEnabled && !isDecisionInUse && !data?.jev && !isJevFallbackEnabled && !isJevConfigured,
 		pollingInterval: statusPollInterval,
 	});
 	useEffect(() => {
 		setStatusPollInterval(semanticStatus?.state === "warming" ? 2000 : semanticStatus?.state === "failed" ? 10000 : 0);
 	}, [semanticStatus?.state]);
-	// The embedding and llm fallback fields both live behind the same sheet, so a
-	// pending edit to either would otherwise be invisible from the page.
-	// react-hook-form keeps reverted fields in dirtyFields with a false value, so
-	// the flags are what matter, not the key count.
-	const hasUnsavedEmbeddingConfigChanges =
-		Object.values(dirtyFields.semantic ?? {}).some(Boolean) || Object.values(dirtyFields.llm ?? {}).some(Boolean);
 
 	const totalPhrases = useMemo(
 		() =>
@@ -256,6 +309,15 @@ export default function ComplexityRouterPage() {
 	// Shipped guidance initializes untouched drafts; an empty edited prompt is
 	// valid and means "use default guidance" when saved.
 	const defaultLLMPrompt = semanticStatus?.llm_default_prompt ?? "";
+	const decisionDefaults = semanticStatus?.decision_defaults;
+	const liveDecisionCriteria = useWatch({ control, name: "decision.criteria" });
+	// The decision model's Restore defaults only refills the form: it saves like any other edit
+	// and Discard undoes it, so unlike the semantic restore it needs no dialog.
+	const isDecisionGuidanceAtDefaults = !decisionDefaults || isDecisionGuidanceDefault(liveDecisionCriteria, decisionDefaults);
+	const restoreDecisionDefaults = () => {
+		if (!decisionDefaults) return;
+		setValue("decision.criteria", decisionCriteriaFromDefaults(decisionDefaults), { shouldDirty: true, shouldValidate: true });
+	};
 	const livePrompt = liveLLM?.prompt ?? "";
 
 	// Saving re-runs warmup, but what it costs depends on what changed, because
@@ -324,9 +386,18 @@ export default function ComplexityRouterPage() {
 
 	useEffect(() => {
 		if (!data || isDirty || promptEdited.current) return;
-		reset(toFormValues(data));
+		reset(toFormValues(data, decisionDefaults));
 		setSubmitError(null);
-	}, [data, isDirty, reset]);
+	}, [data, isDirty, reset, decisionDefaults]);
+
+	// Status usually lands after the config, so guidance the form hydrated
+	// without defaults is filled in once they arrive. Only still-empty guidance
+	// is touched, so an operator's edits are never overwritten.
+	useEffect(() => {
+		if (!data || !decisionDefaults || !isDecisionGuidanceEmpty(getValues("decision"))) return;
+		const seeded = decisionGuidanceFormValues(data.decision, decisionDefaults);
+		setValue("decision.criteria", seeded.criteria, { shouldDirty: false });
+	}, [data, decisionDefaults, getValues, setValue]);
 
 	// Run after saved-data hydration and read the current form value, not the
 	// previous render's value, when config and status arrive together.
@@ -337,7 +408,7 @@ export default function ComplexityRouterPage() {
 
 	const handleDiscard = () => {
 		promptEdited.current = false;
-		if (data) reset(toFormValues(data));
+		if (data) reset(toFormValues(data, decisionDefaults));
 		setSubmitError(null);
 	};
 
@@ -348,11 +419,11 @@ export default function ComplexityRouterPage() {
 			.unwrap()
 			.then((defaults) => {
 				promptEdited.current = false;
-				reset(toFormValues(defaults));
-				toast.success("Reset to defaults", { position: "top-right" });
+				reset(toFormValues(defaults, decisionDefaults));
+				toast.success(t("routing.resetToDefaults"), { position: "top-right" });
 			})
 			.catch((err) => {
-				setSubmitError(`Couldn’t restore the default phrases. ${getErrorMessage(err)}`);
+				setSubmitError(tcpx("restoreFailed", { error: getErrorMessage(err) }));
 			});
 	};
 
@@ -361,13 +432,11 @@ export default function ComplexityRouterPage() {
 		retrySemanticWarmup()
 			.unwrap()
 			.then(() => {
-				toast.success("Semantic warmup restarted", { position: "top-right" });
+				toast.success(tcpx("warmupRestarted"), { position: "top-right" });
 				void refetchStatus();
 			})
 			.catch((err) => {
-				toast.error(`Couldn’t retry semantic warmup. ${getErrorMessage(err)}`, {
-					position: "top-right",
-				});
+				toast.error(tcpx("warmupRetryFailed", { error: getErrorMessage(err) }), { position: "top-right" });
 			});
 	};
 
@@ -393,26 +462,32 @@ export default function ComplexityRouterPage() {
 			.unwrap()
 			.then((res) => {
 				promptEdited.current = false;
-				reset(toFormValues(res));
+				reset(toFormValues(res, decisionDefaults));
 				setEmbeddingSheetOpen(false);
-				toast.success("Configuration saved", { position: "top-right" });
+				setDecisionSheetOpen(false);
+				toast.success(t("routing.configSaved"), { position: "top-right" });
 			})
 			.catch((err) => {
-				setSubmitError(`Couldn’t save the Complexity Router configuration. ${getErrorMessage(err)}`);
+				setSubmitError(tcpx("saveFailed", { error: getErrorMessage(err) }));
 			});
 	};
 
 	// Saving from inside the sheet still submits the whole configuration, so a
 	// phrase error would report behind it. Close the sheet in that case,
-	// otherwise the message is hidden under the overlay. An llm error opens the
-	// sheet instead: selecting the llm classifier without configuring it fails
-	// on fields that live in the sheet the operator may never have opened.
+	// otherwise the message is hidden under the overlay. An llm or decision-model fallback
+	// error opens the sheet instead: those fields live in it, and the operator
+	// may never have opened it.
 	const submit = handleSubmit(onValid, (formErrors) => {
-		if (formErrors.semantic || formErrors.llm) {
-			setEmbeddingSheetOpen(true);
-		} else {
-			setEmbeddingSheetOpen(false);
-		}
+		// Decision-model guidance errors sit on the page, so only the sheet's decision-model fields open it.
+		const decisionSheetError = Boolean(
+			formErrors.decision?.provider ||
+			formErrors.decision?.model ||
+			formErrors.decision?.previous_message_count ||
+			formErrors.decision?.timeout ||
+			formErrors.decision?.min_confidence,
+		);
+		setEmbeddingSheetOpen(Boolean(formErrors.semantic || formErrors.llm || (decisionSheetError && liveClassifier === "semantic")));
+		setDecisionSheetOpen(decisionSheetError && liveClassifier === "decision");
 	});
 
 	if (isLoading && !data) {
@@ -422,10 +497,10 @@ export default function ComplexityRouterPage() {
 	if (error && !data) {
 		return (
 			<div className="mx-auto w-full max-w-7xl space-y-4 px-4 pt-6 sm:px-6 sm:pt-8 lg:px-14">
-				<p className="text-sm font-medium">Couldn’t load the Complexity Router configuration.</p>
+				<p className="text-sm font-medium">{t("routing.complexityLoadFailed")}</p>
 				<p className="text-muted-foreground text-sm">{getErrorMessage(error)}</p>
 				<Button data-testid="complexity-router-fetch-retry-button" type="button" variant="outline" size="sm" onClick={() => refetch()}>
-					Retry
+					{tc("retry")}
 				</Button>
 			</div>
 		);
@@ -434,17 +509,23 @@ export default function ComplexityRouterPage() {
 	if (!data) {
 		return (
 			<div className="mx-auto w-full max-w-7xl space-y-4 px-4 pt-6 sm:px-6 sm:pt-8 lg:px-14">
-				<p className="text-muted-foreground font-mono text-sm">No complexity router configuration is available.</p>
+				<p className="text-muted-foreground font-mono text-sm">{t("routing.complexityUnavailable")}</p>
 				<Button data-testid="complexity-router-fetch-retry-button" type="button" variant="outline" size="sm" onClick={() => refetch()}>
-					Retry
+					{tc("retry")}
 				</Button>
 			</div>
 		);
 	}
 
-	const keywordErrors = errors.keywords;
-	const hasErrors = Boolean(keywordErrors || errors.semantic || errors.llm || errors.jev || errors.session);
-	const canSave = canUpdate && isDirty && !isResetting && !(isSubmitted && hasErrors);
+	const hasErrors = Boolean(
+		errors.jev || errors.keywords || errors.semantic || errors.decision || errors.llm || errors.session || errors.classifier,
+	);
+	const isSemantic = liveClassifier === "semantic";
+	// Saving the decision model as the classifier or the fallback while its provider cannot serve it
+	// would route every classified request into a failing call, so it waits
+	// until that provider is fixed.
+	const blockedOnDecisionProvider = isDecisionInUse && !isProviderListLoading && !decisionProviderReady;
+	const canSave = canUpdate && isDirty && !isResetting && !(isSubmitted && hasErrors) && !blockedOnDecisionProvider;
 
 	// Rendered on the page and again inside the sheet: the re-embed cost is a
 	// consequence of saving, and either surface can trigger the save.
@@ -452,480 +533,504 @@ export default function ComplexityRouterPage() {
 	// can cause one lives there, and the sheet has its own Save. Adding phrases
 	// is a page-level edit and is reported on the page instead, so the two
 	// surfaces no longer repeat the same sentence at each other.
-	const reembedAllWarning = willReembedAll ? (
-		<Alert variant="warning" data-testid="complexity-router-reembed-warning">
-			<TriangleAlert className="h-4 w-4" />
-			<AlertDescription>
-				Saving will embed all {totalPhrases} reference phrases through the selected provider. Changing the provider or model invalidates
-				every stored vector, so the whole list is embedded again. This uses embedding tokens and may take a short time.
-			</AlertDescription>
-		</Alert>
-	) : null;
+	const reembedAllWarning =
+		isSemantic && willReembedAll ? (
+			<Alert variant="warning" data-testid="complexity-router-reembed-warning">
+				<TriangleAlert className="h-4 w-4" />
+				<AlertDescription>{tcpx("reembedAll", { count: totalPhrases })}</AlertDescription>
+			</Alert>
+		) : null;
 
 	// Phrases already embedded on this gateway are reused, so the bill is the
 	// new text alone rather than the whole list.
 	const newPhraseWarning =
-		!willReembedAll && newPhraseCount > 0 ? (
+		isSemantic && !willReembedAll && newPhraseCount > 0 ? (
 			<Alert variant="warning" data-testid="complexity-router-new-phrase-warning">
 				<TriangleAlert className="h-4 w-4" />
-				<AlertDescription>
-					Saving will embed {newPhraseCount} new reference phrase{newPhraseCount === 1 ? "" : "s"} through the selected provider. The other{" "}
-					{reusedPhraseCount} reuse the embeddings this gateway already holds.
-				</AlertDescription>
+				<AlertDescription>{tcpx("newPhraseWarning", { count: newPhraseCount, reused: reusedPhraseCount })}</AlertDescription>
 			</Alert>
 		) : null;
 
 	const reembedWarning = reembedAllWarning ?? newPhraseWarning;
 
+	// Rendered wherever the decision model runs: under its settings as the primary classifier,
+	// or in the fallback slot the llm prompt otherwise uses.
+	const decisionGuidance = (variant: "primary" | "fallback") => (
+		<DecisionGuidanceSection
+			control={control}
+			setValue={setValue}
+			errors={errors.decision}
+			canUpdate={canUpdate}
+			defaults={decisionDefaults}
+			defaultsLoading={statusLoading || statusFetching}
+			variant={variant}
+		/>
+	);
+
+	const decisionSettings = (
+		<div className="space-y-4" data-testid="complexity-router-decision-settings">
+			{!isProviderListLoading && <DecisionProviderAlert state={decisionProviderState} provider={liveDecisionProvider} />}
+			<DecisionFields
+				control={control}
+				register={register}
+				setValue={setValue}
+				errors={errors.decision}
+				canUpdate={canUpdate}
+				providers={providersData ?? []}
+				providerKeyIds={enabledKeyIdsForDecisionProvider}
+			/>
+		</div>
+	);
+
+	// Selecting a card only selects it; Next moves on, as in the Virtual MCP
+	// wizard. The switch is an unsaved edit like any other, so Save commits it
+	// and Discard reverts it.
+	const selectClassifier = (next: AnalyzerFormValues["classifier"]) => {
+		if (next !== liveClassifier) setValue("classifier", next, { shouldDirty: true });
+		setPicked(true);
+	};
+	// Next never waits on the decision provider: the picker that can switch to a ready one lives in
+	// the next step, so gating here would strand a setup without Typesafe. Step 2 shows the provider
+	// problem and Save stays blocked until it is fixed.
+	const canContinue = hasClassifier;
+	const goToConfiguration = () => {
+		setOpenStep("setup");
+		// Semantic cannot classify without an embedding model, so go straight to
+		// the one place that sets it.
+		if (isSemantic && !isClassifierConfigured) setEmbeddingSheetOpen(true);
+	};
+
+	const steps = [
+		{ key: "classifier", title: tcpx("stepClassifier"), enabled: canUpdate },
+		{ key: "setup", title: tcpx("stepSetup"), enabled: hasClassifier },
+	];
+	const stepIndex = step === "classifier" ? 0 : 1;
+
 	return (
 		<>
-			<form className="no-padding-parent own-scroll-parent flex h-full min-h-0 w-full flex-col" onSubmit={submit} noValidate>
-				{/* The footer is a sibling of the scroll area rather than a sticky child
-				    of it. Radix wraps scrolled content in a display:table element, and
-				    position:sticky is unreliable inside table boxes: it parked the footer
-				    partway up the scrollport and left dead space beneath it. */}
-				<ScrollArea className="min-h-0 flex-1 px-4 pt-3 sm:px-6 lg:px-14">
-					<div className="mx-auto w-full max-w-7xl space-y-4 pb-8">
-						{/* ── Page header ── */}
-						{/* PageTitle renders nothing inline (its badge/description are
-						    portalled into the topbar), so this row is just the action
-						    buttons. Tight vertical spacing here keeps it from reading as
-						    dead air above the phrase lists, which are the page's real
-						    work surface. */}
-						<div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-end">
-							<PageTitle title="Complexity Router" beta>
-								Each request is embedded and takes the tier of the nearest reference phrase, filling the{" "}
-								<code className="bg-muted rounded-sm px-1 py-0.5 font-mono text-xs">complexity_tier</code> field that routing rules target.
-								{isLLMFallbackEnabled ? " Requests matching no phrase confidently fall back to the LLM classifier." : ""}
-								{isJevFallbackEnabled ? " Requests matching no phrase confidently fall back to the Jev classifier." : ""}
-								{!isClassifierConfigured && isJevConfigured
-									? " With no embedding classifier, Jev classifies the latest user message as SIMPLE, MEDIUM, or COMPLEX."
-									: ""}
-								{liveSession.enabled ? " Session-aware routing keeps the highest tier reached during the active session." : ""}
-							</PageTitle>
+			{/* no-padding-parent drops the shell's wide side padding so the step
+			    rail sits near the card's left edge, and the width it frees goes
+			    to the step content on the right. */}
+			<form className="no-padding-parent flex h-full min-h-0 w-full flex-col p-4" onSubmit={submit} noValidate>
+				{/* PageTitle renders nothing inline; its badge and description are
+				    portalled into the topbar. */}
+				<PageTitle title={t("routing.complexityTitle")} beta>
+					<Trans
+						t={t}
+						i18nKey={liveClassifier === "decision" ? "routing.complexityUi.descriptionDecision" : "routing.complexityUi.description"}
+						components={{ code: <code className="bg-muted rounded-sm px-1 py-0.5 font-mono text-xs" /> }}
+					/>
+					{isLLMFallbackEnabled ? ` ${tcpx("descriptionLlm")}` : ""}
+					{isSemantic && liveSemantic?.fallback === "decision" ? ` ${tcpx("descriptionDecisionFallback")}` : ""}
+					{liveSession.enabled ? ` ${tcpx("descriptionSession")}` : ""}
+				</PageTitle>
 
-							{/* Status and embedding setup ride in the header rather than as
-							    sections of their own: both are checked occasionally, while the
-							    phrase lists below are the page's actual work surface. */}
-							<div className="flex shrink-0 flex-wrap items-center gap-2">
-								<ClassifierStatusBadge
-									status={semanticStatus}
-									isLoading={statusLoading}
-									isNotConfigured={!isClassifierConfigured}
-									isNotSaved={isClassifierConfigured && !data.semantic}
-									hasUnsavedChanges={willReembed}
-									hasEmbeddingProviders={embeddingProviders.length > 0}
-									statusUnavailable={statusIsError && !semanticStatus}
-									statusRefreshFailed={statusIsError && Boolean(semanticStatus)}
-									isRetryingStatus={statusFetching}
-									canRetryWarmup={canUpdate}
-									isRetryingWarmup={isRetryingWarmup}
-									onConfigure={() => setEmbeddingSheetOpen(true)}
-									onRetryStatus={() => void refetchStatus()}
-									onRetryWarmup={handleRetrySemanticWarmup}
-								/>
-								<Button
-									type="button"
-									variant="outline"
-									size="sm"
-									onClick={() => setEmbeddingSheetOpen(true)}
-									data-testid="complexity-router-embedding-config-button"
-								>
-									<Settings2 className="size-3.5" />
-									{isClassifierConfigured ? "Edit embedding configuration" : "Configure embedding"}
-									{hasUnsavedEmbeddingConfigChanges && (
-										<span
-											className="size-1.5 rounded-full bg-amber-500"
-											role="status"
-											aria-label="Unsaved embedding configuration changes"
+				{/* Same shape as the Edge inventory page: a slim step nav on the
+				    left, the open step on the right. It spans the full content width
+				    rather than a centred max-width, which on wide screens left an
+				    empty band beside the nav and squeezed the phrase lists. */}
+				<div className="flex min-h-0 w-full grow flex-col gap-4 md:flex-row md:gap-8">
+					<StepRail steps={steps} currentIndex={stepIndex} onSelect={(index) => setOpenStep(index === 0 ? "classifier" : "setup")} />
+
+					<div className="flex min-h-0 min-w-0 flex-1 flex-col">
+						{/* The footer is a sibling of the scroll area rather than a sticky
+						    child of it. Radix wraps scrolled content in a display:table
+						    element, and position:sticky is unreliable inside table boxes. */}
+						<ScrollArea className="min-h-0 flex-1">
+							<div className="space-y-6 pb-8">
+								{/* ── Step header ── */}
+								{/* Status and embedding setup ride on the right: both are
+								    checked occasionally, while the phrase lists below are the
+								    real work surface. The row never wraps on wide screens: the
+								    status badge changes width as the classifier warms, and
+								    wrapping made the buttons jump below the title and back. */}
+								<div className="flex w-full flex-col gap-3 md:flex-row md:items-start md:justify-between">
+									<div className="min-w-0 md:flex-1">
+										<h2 className="text-lg font-semibold">{steps[stepIndex].title}</h2>
+										<p className="text-muted-foreground text-sm">
+											{step === "classifier"
+												? tcpx("stepClassifierDesc")
+												: isSemantic
+													? tcpx("stepSemanticDesc")
+													: tcpx("stepDecisionDesc")}
+										</p>
+									</div>
+									<div className="flex shrink-0 flex-wrap items-center gap-2 md:flex-nowrap">
+										{step === "setup" && isSemantic && (
+											<>
+												<ClassifierStatusBadge
+													status={semanticStatus}
+													semanticFallback={data.semantic?.fallback ?? "none"}
+													isLoading={statusLoading}
+													isNotConfigured={!isClassifierConfigured}
+													isNotSaved={isClassifierConfigured && !data.semantic}
+													hasUnsavedChanges={willReembed}
+													hasEmbeddingProviders={embeddingProviders.length > 0}
+													statusUnavailable={statusIsError && !semanticStatus}
+													statusRefreshFailed={statusIsError && Boolean(semanticStatus)}
+													isRetryingStatus={statusFetching}
+													canRetryWarmup={canUpdate}
+													isRetryingWarmup={isRetryingWarmup}
+													onConfigure={() => setEmbeddingSheetOpen(true)}
+													onRetryStatus={() => void refetchStatus()}
+													onRetryWarmup={handleRetrySemanticWarmup}
+												/>
+												<Button
+													type="button"
+													variant="outline"
+													size="sm"
+													onClick={() => setEmbeddingSheetOpen(true)}
+													data-testid="complexity-router-embedding-config-button"
+												>
+													<Settings2 className="size-3.5" />
+													{isClassifierConfigured ? tcpx("editEmbedding") : tcpx("configureEmbedding")}
+													{hasUnsavedEmbeddingConfigChanges && (
+														<span className="size-1.5 rounded-full bg-amber-500" role="status" aria-label={tcpx("unsavedEmbeddingAria")} />
+													)}
+												</Button>
+											</>
+										)}
+										{step === "setup" && !isSemantic && (
+											<Button
+												type="button"
+												variant="outline"
+												size="sm"
+												onClick={() => setDecisionSheetOpen(true)}
+												data-testid="complexity-router-decision-settings-button"
+											>
+												<Settings2 className="size-3.5" />
+												{tcpx("editModelConfiguration")}
+												{hasUnsavedDecisionSettingsChanges && (
+													<span className="size-1.5 rounded-full bg-amber-500" role="status" aria-label={tcpx("unsavedModelAria")} />
+												)}
+											</Button>
+										)}
+										<Button asChild variant="outline" size="sm" data-testid="complexity-router-docs-link">
+											<a href={"https://docs.getbifrost.ai/features/complexity-router"} target="_blank" rel="noopener noreferrer">
+												<ExternalLink className="size-3.5" />
+												{t("routing.complexityDocs")}
+											</a>
+										</Button>
+									</div>
+								</div>
+
+								{/* ── Step 1: classifier ── */}
+								{step === "classifier" && (
+									<ClassifierChoice value={hasClassifier ? liveClassifier : undefined} onChange={selectClassifier} />
+								)}
+
+								{/* ── Step 2: semantic ── */}
+								{step === "setup" && isSemantic && (
+									<div className="space-y-3">
+										<SectionHeading
+											title={tcpx("phraseMappingTitle")}
+											aside={
+												<span
+													className="text-muted-foreground font-mono text-[11px] tabular-nums"
+													data-testid="complexity-router-phrase-total"
+												>
+													{isClassifierConfigured
+														? tcpx("phrasesCap", { count: totalPhrases, max: MAX_SEMANTIC_PHRASES })
+														: tcpx("phraseCount", { count: totalPhrases })}
+												</span>
+											}
 										/>
+										<PhraseTierGrid control={control} errors={errors.keywords} />
+									</div>
+								)}
+
+								{/* ── Step 2: decision model ── */}
+								{/* The page holds the tier guidance; set-once settings, and any problem
+								    with the decision provider, live in the model configuration sheet, as
+								    the embedding configuration does for semantic. */}
+								{step === "setup" && !isSemantic && decisionGuidance("primary")}
+
+								{step === "setup" && <SessionRoutingCard control={control} errors={errors.session} canUpdate={canUpdate} />}
+
+								{/* ── Fallback Classification Prompt ── */}
+								{/* Below the phrase lists rather than in the sheet: prompt text
+								    needs width and iteration, and the sheet holds set-once
+								    plumbing. Visible only while the fallback is on, because that
+								    is the only time it runs. */}
+								{step === "setup" && isLLMFallbackEnabled && (
+									<LLMPromptSection
+										control={control}
+										error={errors.llm?.prompt}
+										canUpdate={canUpdate}
+										defaultPrompt={defaultLLMPrompt}
+										livePrompt={livePrompt}
+										onEdit={() => {
+											promptEdited.current = true;
+										}}
+										onReset={() => {
+											promptEdited.current = true;
+											setValue("llm.prompt", defaultLLMPrompt, { shouldDirty: true });
+										}}
+									/>
+								)}
+
+								{/* Same slot as the llm prompt: only one fallback can be on. */}
+								{step === "setup" && isDecisionFallbackEnabled && decisionGuidance("fallback")}
+
+								{/* ── Jev classifier ── */}
+								<div className="bg-card space-y-4 rounded-sm border p-4" data-testid="complexity-router-jev-section">
+									<div className="space-y-1">
+										<SectionHeading
+											title="Jev classifier"
+											description="TypeSafe System One classifies the latest user message as SIMPLE, MEDIUM, or COMPLEX. Used as the primary classifier when embeddings are not configured, or as the semantic fallback when that option is selected."
+										/>
+										<p className="text-muted-foreground text-xs leading-relaxed">
+											State is always the latest user message. Choice confidence below the threshold leaves{" "}
+											<code className="bg-muted rounded-sm px-1 py-0.5 font-mono text-[11px]">complexity_tier</code> unpublished. A missing
+											API key fails closed.
+										</p>
+									</div>
+
+									{systemOneProviders.length === 0 && (
+										<Alert variant="warning" data-testid="complexity-router-no-jev-providers">
+											<TriangleAlert className="h-4 w-4" />
+											<AlertDescription>
+												Add the TypeSafe provider with <span className="font-mono">env.TYPESAFE_API_KEY</span> to use Jev.
+											</AlertDescription>
+										</Alert>
 									)}
-								</Button>
-								<Button asChild variant="outline" size="sm" data-testid="complexity-router-docs-link">
-									<a href={"https://docs.getbifrost.ai/features/governance/complexity-router"} target="_blank" rel="noopener noreferrer">
-										<ExternalLink className="size-3.5" />
-										Docs
-									</a>
-								</Button>
-							</div>
-						</div>
 
-						{/* The missing-provider warning lives in the embedding sheet, next to
-						    the control it is about. On the page it pushed the phrase lists —
-						    the only thing here an operator can act on without leaving — below
-						    the fold; the header badge already carries the state. */}
-
-						{/* ── Phrase to Tier Mapping ── */}
-						<div className="space-y-3">
-							<SectionHeading
-								title="Phrase to Tier Mapping"
-								description="A request takes the tier of its nearest phrase."
-								aside={
-									<span className="text-muted-foreground font-mono text-[11px] tabular-nums" data-testid="complexity-router-phrase-total">
-										{isClassifierConfigured ? `${totalPhrases} / ${MAX_SEMANTIC_PHRASES} phrases` : `${totalPhrases} phrases`}
-									</span>
-								}
-							/>
-
-							<Alert variant="info" data-testid="complexity-router-phrase-defaults-callout">
-								<Info className="h-4 w-4" />
-								<AlertDescription>
-									The added reference phrases are examples to help you get started. We recommend auditing, refining and adding your own
-									reference phrases.
-								</AlertDescription>
-							</Alert>
-
-							{/* Root-level phrase issues such as cross-tier duplicates have no single
-							    field to attach to, so they render above the lists. */}
-							{keywordErrors?.message && (
-								<p className="text-destructive text-xs" data-testid="complexity-router-keywords-error">
-									{keywordErrors.message}
-								</p>
-							)}
-
-							{/* One column per tier, side by side: the three lists are read against
-							    each other, and equal-width columns keep a phrase's tier obvious
-							    from its position. */}
-							<div className="grid items-stretch gap-3 md:grid-cols-3">
-								{TIER_PHRASE_LIST_DEFINITIONS.map(({ key, label, description }) => {
-									const fieldError = keywordErrors?.[key as KeywordListKey];
-									const errorId = `keywords-${key}-error`;
-									return (
-										<div key={key} className="bg-card relative flex flex-col overflow-hidden rounded-sm border">
+									<div className="grid gap-4 sm:grid-cols-2">
+										<div className="space-y-2">
+											<FieldLabel htmlFor="jev-provider">Jev provider</FieldLabel>
 											<Controller
 												control={control}
-												name={`keywords.${key}` as const}
-												rules={{
-													validate: (value) => (value.length > 0 ? true : `${label} phrases cannot be empty`),
-												}}
+												name="jev.provider"
 												render={({ field }) => (
-													<div className="flex flex-1 flex-col space-y-2 p-4 pl-5">
-														<div className="flex items-center justify-between">
-															<span className="text-xs font-medium">{label}</span>
-															<span className="text-muted-foreground font-mono text-[11px] tabular-nums">
-																{field.value.length} {field.value.length === 1 ? "phrase" : "phrases"}
-															</span>
-														</div>
-														<p className="text-muted-foreground grow text-xs leading-relaxed">{description}</p>
-														<TagInput
-															data-testid={`complexity-router-keywords-${testIdPart(key)}-input`}
-															value={field.value}
-															onValueChange={field.onChange}
-															listHeight={PHRASE_LIST_HEIGHT}
-															submitOnComma={false}
-															placeholder="Type a reference phrase and press Enter"
-															aria-invalid={fieldError ? true : undefined}
-															aria-describedby={fieldError ? errorId : undefined}
-															className={cn(fieldError && "border-destructive")}
-														/>
-														{fieldError && (
-															<p id={errorId} className="text-destructive text-xs">
-																{fieldError.message}
-															</p>
-														)}
-													</div>
+													<ProviderSelector
+														source="values"
+														values={systemOneProviderNames}
+														inputId="jev-provider"
+														data-testid="complexity-router-jev-provider-select"
+														value={field.value || ""}
+														onChange={(value: string) => {
+															if (value === field.value) return;
+															field.onChange(value);
+															setValue("jev.model", "", { shouldDirty: true });
+														}}
+														disabled={!canUpdate || systemOneProviders.length === 0}
+														placeholder="Select provider"
+													/>
 												)}
 											/>
+											{errors.jev?.provider && <p className="text-destructive text-xs">{errors.jev.provider.message}</p>}
 										</div>
-									);
-								})}
-							</div>
-						</div>
 
-						{/* ── Session-aware routing ── */}
-						<div className="bg-card flex items-center justify-between gap-6 rounded-sm border p-4">
-							<div className="space-y-1">
-								<FieldLabel htmlFor="complexity-router-session-enabled">Session-aware routing</FieldLabel>
-								<p className="text-muted-foreground max-w-3xl text-xs leading-relaxed">
-									Keep each session at its highest complexity tier for 24 hours of inactivity. Harder turns can move up; easier turns stay
-									put to reduce model changes. Requests without a session ID route independently.
-								</p>
-								{errors.session?.enabled && (
-									<p id="complexity-router-session-enabled-error" className="text-destructive text-xs">
-										{errors.session.enabled.message}
-									</p>
-								)}
-							</div>
-							<Controller
-								control={control}
-								name="session.enabled"
-								render={({ field }) => (
-									<Switch
-										id="complexity-router-session-enabled"
-										data-testid="complexity-router-session-enabled-switch"
-										checked={field.value}
-										onCheckedChange={field.onChange}
-										disabled={!canUpdate}
-										aria-invalid={errors.session?.enabled ? true : undefined}
-										aria-describedby={errors.session?.enabled ? "complexity-router-session-enabled-error" : undefined}
-									/>
-								)}
-							/>
-						</div>
-
-						{/* ── Jev classifier ── */}
-						<div className="bg-card space-y-4 rounded-sm border p-4" data-testid="complexity-router-jev-section">
-							<div className="space-y-1">
-								<SectionHeading
-									title="Jev classifier"
-									description="TypeSafe System One classifies the latest user message as SIMPLE, MEDIUM, or COMPLEX. Used as the primary classifier when embeddings are not configured, or as the semantic fallback when that option is selected."
-								/>
-								<p className="text-muted-foreground text-xs leading-relaxed">
-									State is always the latest user message. Choice confidence below the threshold leaves{" "}
-									<code className="bg-muted rounded-sm px-1 py-0.5 font-mono text-[11px]">complexity_tier</code> unpublished. A missing API
-									key fails closed.
-								</p>
-							</div>
-
-							{systemOneProviders.length === 0 && (
-								<Alert variant="warning" data-testid="complexity-router-no-jev-providers">
-									<TriangleAlert className="h-4 w-4" />
-									<AlertDescription>
-										Add the TypeSafe provider with <span className="font-mono">env.TYPESAFE_API_KEY</span> to use Jev.
-									</AlertDescription>
-								</Alert>
-							)}
-
-							<div className="grid gap-4 sm:grid-cols-2">
-								<div className="space-y-2">
-									<FieldLabel htmlFor="jev-provider">Jev provider</FieldLabel>
-									<Controller
-										control={control}
-										name="jev.provider"
-										render={({ field }) => (
-											<ProviderSelector
-												source="values"
-												values={systemOneProviderNames}
-												inputId="jev-provider"
-												data-testid="complexity-router-jev-provider-select"
-												value={field.value || ""}
-												onChange={(value: string) => {
-													if (value === field.value) return;
-													field.onChange(value);
-													setValue("jev.model", "", { shouldDirty: true });
-												}}
-												disabled={!canUpdate || systemOneProviders.length === 0}
-												placeholder="Select provider"
+										<div className="space-y-2">
+											<FieldLabel htmlFor="jev-model">Jev model</FieldLabel>
+											<Controller
+												control={control}
+												name="jev.model"
+												render={({ field }) => (
+													<ModelSelector
+														inputId="jev-model"
+														data-testid="complexity-router-jev-model-select"
+														allowCustomModel
+														provider={liveJev?.provider || undefined}
+														keys={enabledKeyIdsForJevProvider}
+														value={field.value ?? ""}
+														onChange={(model) => {
+															field.onChange(model);
+														}}
+														placeholder={liveJev?.provider ? "Search or type jev-latest…" : "Select a provider first"}
+														disabled={!canUpdate || !liveJev?.provider}
+													/>
+												)}
 											/>
-										)}
-									/>
-									{errors.jev?.provider && <p className="text-destructive text-xs">{errors.jev.provider.message}</p>}
-								</div>
+											{errors.jev?.model ? <p className="text-destructive text-xs">{errors.jev.model.message}</p> : null}
+										</div>
+									</div>
 
-								<div className="space-y-2">
-									<FieldLabel htmlFor="jev-model">Jev model</FieldLabel>
-									<Controller
-										control={control}
-										name="jev.model"
-										render={({ field }) => (
-											<ModelSelector
-												inputId="jev-model"
-												data-testid="complexity-router-jev-model-select"
-												allowCustomModel
-												provider={liveJev?.provider || undefined}
-												keys={enabledKeyIdsForJevProvider}
-												value={field.value ?? ""}
-												onChange={(model) => {
-													field.onChange(model);
-												}}
-												placeholder={liveJev?.provider ? "Search or type jev-latest…" : "Select a provider first"}
-												disabled={!canUpdate || !liveJev?.provider}
+									<div className="grid gap-4 sm:grid-cols-2">
+										<div className="space-y-2">
+											<FieldLabel
+												htmlFor="jev-timeout"
+												tooltip="Ceiling on the System One classification call. On timeout no complexity tier is published."
+											>
+												Classification timeout (ms)
+											</FieldLabel>
+											<Controller
+												control={control}
+												name="jev.timeout"
+												render={({ field }) => (
+													<Input
+														id="jev-timeout"
+														data-testid="complexity-router-jev-timeout-input"
+														type="number"
+														min={1}
+														step={100}
+														disabled={!canUpdate || !isJevConfigured}
+														value={jevTimeoutFieldValue(field.value)}
+														onChange={(event) => {
+															const raw = event.target.value;
+															field.onChange(raw === "" ? "" : `${raw}ms`);
+														}}
+														aria-invalid={errors.jev?.timeout ? true : undefined}
+														className={cn("font-mono", errors.jev?.timeout && "border-destructive focus-visible:ring-destructive")}
+													/>
+												)}
 											/>
-										)}
-									/>
-									{errors.jev?.model ? <p className="text-destructive text-xs">{errors.jev.model.message}</p> : null}
-								</div>
-							</div>
+											{errors.jev?.timeout && <p className="text-destructive text-xs">{errors.jev.timeout.message}</p>}
+										</div>
 
-							<div className="grid gap-4 sm:grid-cols-2">
-								<div className="space-y-2">
-									<FieldLabel
-										htmlFor="jev-timeout"
-										tooltip="Ceiling on the System One classification call. On timeout no complexity tier is published."
-									>
-										Classification timeout (ms)
-									</FieldLabel>
-									<Controller
-										control={control}
-										name="jev.timeout"
-										render={({ field }) => (
+										<div className="space-y-2">
+											<FieldLabel
+												htmlFor="jev-min-confidence"
+												tooltip="Choice.confidence floor. Below it the classifier leaves complexity_tier unpublished. This is Jev's documented confidence, not an invented similarity score."
+											>
+												Minimum confidence
+											</FieldLabel>
 											<Input
-												id="jev-timeout"
-												data-testid="complexity-router-jev-timeout-input"
+												id="jev-min-confidence"
+												data-testid="complexity-router-jev-min-confidence-input"
 												type="number"
-												min={1}
-												step={100}
+												min={0.01}
+												max={0.99}
+												step={0.05}
 												disabled={!canUpdate || !isJevConfigured}
-												value={jevTimeoutFieldValue(field.value)}
-												onChange={(event) => {
-													const raw = event.target.value;
-													field.onChange(raw === "" ? "" : `${raw}ms`);
-												}}
-												aria-invalid={errors.jev?.timeout ? true : undefined}
-												className={cn("font-mono", errors.jev?.timeout && "border-destructive focus-visible:ring-destructive")}
+												aria-invalid={errors.jev?.min_confidence ? true : undefined}
+												className={cn("font-mono", errors.jev?.min_confidence && "border-destructive focus-visible:ring-destructive")}
+												{...register("jev.min_confidence", { valueAsNumber: true })}
 											/>
-										)}
-									/>
-									{errors.jev?.timeout && <p className="text-destructive text-xs">{errors.jev.timeout.message}</p>}
-								</div>
+											{errors.jev?.min_confidence ? (
+												<p className="text-destructive text-xs">{errors.jev.min_confidence.message}</p>
+											) : (
+												<p className="text-muted-foreground text-xs leading-relaxed">Between 0 and 1. Default 0.6.</p>
+											)}
+										</div>
+									</div>
 
-								<div className="space-y-2">
-									<FieldLabel
-										htmlFor="jev-min-confidence"
-										tooltip="Choice.confidence floor. Below it the classifier leaves complexity_tier unpublished. This is Jev's documented confidence, not an invented similarity score."
-									>
-										Minimum confidence
-									</FieldLabel>
-									<Input
-										id="jev-min-confidence"
-										data-testid="complexity-router-jev-min-confidence-input"
-										type="number"
-										min={0.01}
-										max={0.99}
-										step={0.05}
-										disabled={!canUpdate || !isJevConfigured}
-										aria-invalid={errors.jev?.min_confidence ? true : undefined}
-										className={cn("font-mono", errors.jev?.min_confidence && "border-destructive focus-visible:ring-destructive")}
-										{...register("jev.min_confidence", { valueAsNumber: true })}
-									/>
-									{errors.jev?.min_confidence ? (
-										<p className="text-destructive text-xs">{errors.jev.min_confidence.message}</p>
-									) : (
-										<p className="text-muted-foreground text-xs leading-relaxed">Between 0 and 1. Default 0.6.</p>
-									)}
-								</div>
-							</div>
-
-							<div className="flex items-center justify-between gap-6">
-								<FieldLabel
-									htmlFor="jev-count-toward-budgets"
-									tooltip="Bills each System One classification to the same budgets as the request that triggered it. Cost is always reported to telemetry either way."
-								>
-									Count classification cost toward budgets
-								</FieldLabel>
-								<Controller
-									control={control}
-									name="jev.count_toward_budgets"
-									render={({ field }) => (
-										<Switch
-											id="jev-count-toward-budgets"
-											data-testid="complexity-router-jev-budgets-switch"
-											checked={field.value ?? false}
-											onCheckedChange={field.onChange}
-											disabled={!canUpdate || !isJevConfigured}
+									<div className="flex items-center justify-between gap-6">
+										<FieldLabel
+											htmlFor="jev-count-toward-budgets"
+											tooltip="Bills each System One classification to the same budgets as the request that triggered it. Cost is always reported to telemetry either way."
+										>
+											Count classification cost toward budgets
+										</FieldLabel>
+										<Controller
+											control={control}
+											name="jev.count_toward_budgets"
+											render={({ field }) => (
+												<Switch
+													id="jev-count-toward-budgets"
+													data-testid="complexity-router-jev-budgets-switch"
+													checked={field.value ?? false}
+													onCheckedChange={field.onChange}
+													disabled={!canUpdate || !isJevConfigured}
+												/>
+											)}
 										/>
-									)}
-								/>
-							</div>
-						</div>
+									</div>
+								</div>
 
-						{/* ── Fallback Classification Prompt ── */}
-						{/* A second tuning surface below the phrase lists rather than a
-						    field in the embedding sheet: prompt text needs width and
-						    iteration, and the sheet holds set-once plumbing. Visible only
-						    while the fallback is on, because that is the only time it runs. */}
-						{isLLMFallbackEnabled && (
-							<div className="space-y-3">
-								<SectionHeading
-									title="Fallback Classification Prompt"
-									description="Customize the classification model's system prompt; a default is provided when no phrase matches."
-									aside={
+								{step === "setup" && reembedWarning}
+
+								{submitError && (
+									<div
+										role="alert"
+										className="border-destructive/40 bg-destructive/10 text-destructive rounded-sm border px-3 py-2 font-mono text-sm"
+									>
+										{submitError}
+									</div>
+								)}
+							</div>
+						</ScrollArea>
+
+						{/* ── Action footer ── */}
+						<div className="flex flex-wrap items-center justify-end gap-2.5 border-t pt-4">
+							{step === "classifier" ? (
+								<Button
+									type="button"
+									size="sm"
+									onClick={goToConfiguration}
+									disabled={!canContinue}
+									data-testid="complexity-router-next-button"
+								>
+									{tc("next")}
+									<ArrowRight className="h-3.5 w-3.5" />
+								</Button>
+							) : (
+								<>
+									{canUpdate && (
 										<Button
 											type="button"
 											variant="ghost"
 											size="sm"
-											onClick={() => {
-												promptEdited.current = true;
-												setValue("llm.prompt", defaultLLMPrompt, { shouldDirty: true });
-											}}
-											disabled={!canUpdate || !defaultLLMPrompt || livePrompt === defaultLLMPrompt}
-											data-testid="complexity-router-llm-prompt-reset-button"
+											onClick={() => setOpenStep("classifier")}
+											data-testid="complexity-router-back-button"
+										>
+											<ArrowLeft className="h-3.5 w-3.5" />
+											{tc("back")}
+										</Button>
+									)}
+									{/* The provider warning sits inside the model configuration sheet, so the
+									    page says why Save is off. Otherwise an unsaved classifier switch
+									    is called out, since the page has no leave guard. */}
+									<p
+										className="mr-auto text-xs text-amber-700 dark:text-amber-400"
+										role="status"
+										data-testid="complexity-router-footer-note"
+									>
+										{blockedOnDecisionProvider
+											? isSemantic
+												? tcpx("footerDecisionIsFallback")
+												: tcpx("footerDecisionNeedsProvider")
+											: liveClassifier !== toFormValues(data).classifier
+												? tcpx("footerClassifierChanged", {
+														classifier: isSemantic ? tcpx("classifierNameSemantic") : tcpx("classifierNameDecision"),
+													})
+												: ""}
+									</p>
+									{/* Each classifier restores only its own defaults: the semantic
+									    phrase lists, or the decision model's tier guidance. */}
+									{!isSemantic && (
+										<Button
+											data-testid="complexity-router-decision-restore-defaults-button"
+											type="button"
+											variant="ghost"
+											size="sm"
+											onClick={restoreDecisionDefaults}
+											disabled={!canUpdate || isSaving || isDecisionGuidanceAtDefaults}
 										>
 											<RotateCcw className="h-3.5 w-3.5" />
-											Reset to default
+											{t("routing.restoreDefaults")}
 										</Button>
-									}
-								/>
-								<Controller
-									control={control}
-									name="llm.prompt"
-									render={({ field }) => (
-										<Textarea
-											data-testid="complexity-router-llm-prompt-input"
-											rows={8}
-											maxLength={MAX_LLM_PROMPT_CHARACTERS}
-											value={field.value}
-											onChange={(event) => {
-												promptEdited.current = true;
-												field.onChange(event);
-											}}
-											onBlur={field.onBlur}
-											ref={field.ref}
-											disabled={!canUpdate}
-											aria-invalid={errors.llm?.prompt ? true : undefined}
-											className={cn(
-												"font-mono text-xs leading-relaxed",
-												errors.llm?.prompt && "border-destructive focus-visible:ring-destructive",
-											)}
-										/>
 									)}
-								/>
-								{errors.llm?.prompt ? (
-									<p className="text-destructive text-xs">{errors.llm.prompt.message}</p>
-								) : (
-									<p className="text-muted-foreground text-xs leading-relaxed">
-										Leave blank to use default guidance. Bifrost always appends a fixed response-format section (the tier names and the JSON
-										answer contract), so edits here refine what the tiers mean but cannot break routing.{" "}
-										<span className="font-mono tabular-nums">
-											{livePrompt.length}/{MAX_LLM_PROMPT_CHARACTERS}
-										</span>
-									</p>
-								)}
-							</div>
-						)}
-
-						{reembedWarning}
-
-						{/* ── Submit error ── */}
-						{submitError && (
-							<div
-								role="alert"
-								className="border-destructive/40 bg-destructive/10 text-destructive rounded-sm border px-3 py-2 font-mono text-sm"
-							>
-								{submitError}
-							</div>
-						)}
-					</div>
-				</ScrollArea>
-
-				{/* ── Action footer ── */}
-				<div className="bg-card border-t px-4 py-4 sm:px-6 lg:px-14">
-					<div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-end gap-2.5">
-						<Button
-							data-testid="complexity-router-restore-defaults-button"
-							type="button"
-							variant="ghost"
-							size="sm"
-							onClick={() => setRestoreDialogOpen(true)}
-							disabled={!canUpdate || isSaving || isResetting}
-						>
-							{isResetting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-							Restore defaults
-						</Button>
-						<Button
-							data-testid="complexity-router-discard-changes-button"
-							type="button"
-							variant="outline"
-							size="sm"
-							onClick={handleDiscard}
-							disabled={!isDirty || isSaving || isResetting || isFetching}
-						>
-							Discard changes
-						</Button>
-						<Button data-testid="complexity-router-save-changes-button" type="submit" size="sm" disabled={!canSave || isSaving}>
-							{isSaving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-							{isSaving ? "Saving…" : "Save changes"}
-						</Button>
+									{isSemantic && (
+										<Button
+											data-testid="complexity-router-restore-defaults-button"
+											type="button"
+											variant="ghost"
+											size="sm"
+											onClick={() => setRestoreDialogOpen(true)}
+											disabled={!canUpdate || isSaving || isResetting}
+										>
+											{isResetting ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
+											{t("routing.restoreDefaults")}
+										</Button>
+									)}
+									<Button
+										data-testid="complexity-router-discard-changes-button"
+										type="button"
+										variant="outline"
+										size="sm"
+										onClick={handleDiscard}
+										disabled={!isDirty || isSaving || isResetting || isFetching}
+									>
+										{tcpx("discardChanges")}
+									</Button>
+									<Button data-testid="complexity-router-save-changes-button" type="submit" size="sm" disabled={!canSave || isSaving}>
+										{isSaving ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+										{isSaving ? t("routing.saving") : tcpx("saveChanges")}
+									</Button>
+								</>
+							)}
+						</div>
 					</div>
 				</div>
 			</form>
@@ -952,17 +1057,24 @@ export default function ComplexityRouterPage() {
 				isSaving={isSaving}
 				onSave={() => void submit()}
 				submitError={submitError}
+				decisionSettings={decisionSettings}
+			/>
+
+			<DecisionSettingsSheet
+				open={decisionSheetOpen && !isSemantic}
+				onOpenChange={setDecisionSheetOpen}
+				decisionSettings={decisionSettings}
+				canSave={canSave}
+				isSaving={isSaving}
+				onSave={() => void submit()}
+				submitError={submitError}
 			/>
 
 			<AlertDialog open={restoreDialogOpen} onOpenChange={setRestoreDialogOpen}>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Restore defaults</AlertDialogTitle>
-						<AlertDialogDescription>
-							This will replace the phrase to tier mapping with the default reference phrases. Your current phrases will be lost and this
-							action cannot be undone. Your embedding configuration is kept, so classification keeps running and the restored phrases are
-							embedded through the configured provider straight away.
-						</AlertDialogDescription>
+						<AlertDialogTitle>{t("routing.restoreDefaults")}</AlertDialogTitle>
+						<AlertDialogDescription>{tcpx("restoreDefaultsDesc")}</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
 						<AlertDialogCancel
@@ -970,7 +1082,7 @@ export default function ComplexityRouterPage() {
 							onClick={() => setRestoreDialogOpen(false)}
 							disabled={isResetting}
 						>
-							Cancel
+							{tc("cancel")}
 						</AlertDialogCancel>
 						<AlertDialogAction
 							data-testid="complexity-router-restore-confirm-button"
@@ -980,7 +1092,7 @@ export default function ComplexityRouterPage() {
 							}}
 							disabled={!canUpdate || isResetting}
 						>
-							Restore defaults
+							{t("routing.restoreDefaults")}
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

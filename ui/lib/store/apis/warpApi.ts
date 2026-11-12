@@ -17,16 +17,30 @@ export const warpApi = baseApi.injectEndpoints({
 		}),
 		updateWarpConfig: builder.mutation<WarpConfig, WarpConfigInput>({
 			query: (body) => ({ url: "/warp/config", method: "PUT", body }),
-			invalidatesTags: ["WarpConfig"],
+			// The status read hides a finished backfill whose embedding space is no
+			// longer the configured one, so a save has to trigger a fresh read.
+			invalidatesTags: ["WarpConfig", "WarpBackfillStatus"],
 		}),
 		startWarpBackfill: builder.mutation<WarpBackfillStatus, WarpBackfillInput>({
 			query: (body) => ({ url: "/warp/log-index/backfill", method: "POST", body }),
 		}),
 		getWarpBackfillStatus: builder.query<WarpBackfillStatus, { id?: string } | void>({
 			query: (arg) => ({ url: "/warp/log-index/backfill/status", params: arg?.id ? { id: arg.id } : {} }),
+			providesTags: ["WarpBackfillStatus"],
 		}),
 		cancelWarpBackfill: builder.mutation<WarpBackfillStatus, { id?: string } | void>({
 			query: (body) => ({ url: "/warp/log-index/backfill/cancel", method: "POST", body: body ?? {} }),
+		}),
+		// Topic clustering: the same job shape as the backfill, over the vectors
+		// the backfill and live indexing wrote.
+		startWarpTopics: builder.mutation<WarpBackfillStatus, WarpBackfillInput>({
+			query: (body) => ({ url: "/warp/log-index/topics", method: "POST", body }),
+		}),
+		getWarpTopicsStatus: builder.query<WarpBackfillStatus, { id?: string } | void>({
+			query: (arg) => ({ url: "/warp/log-index/topics/status", params: arg?.id ? { id: arg.id } : {} }),
+		}),
+		cancelWarpTopics: builder.mutation<WarpBackfillStatus, { id?: string } | void>({
+			query: (body) => ({ url: "/warp/log-index/topics/cancel", method: "POST", body: body ?? {} }),
 		}),
 		// The tray's one-glance indexing summary. Not admin-gated server-side,
 		// unlike the backfill controls above.
@@ -57,6 +71,9 @@ export const {
 	useStartWarpBackfillMutation,
 	useGetWarpBackfillStatusQuery,
 	useCancelWarpBackfillMutation,
+	useStartWarpTopicsMutation,
+	useGetWarpTopicsStatusQuery,
+	useCancelWarpTopicsMutation,
 	useGetWarpLogIndexStatusQuery,
 	useListWarpConversationsQuery,
 	useLazyGetWarpConversationQuery,

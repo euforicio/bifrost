@@ -210,7 +210,7 @@ func (provider *SarvamProvider) Speech(ctx *schemas.BifrostContext, key schemas.
 	jsonData, bifrostErr := providerUtils.CheckContextAndGetRequestBody(
 		ctx,
 		request,
-		func() (providerUtils.RequestBodyWithExtraParams, error) {
+		func() (*SarvamSpeechRequest, error) {
 			return ToSarvamSpeechRequest(request), nil
 		})
 	if bifrostErr != nil {
@@ -298,7 +298,7 @@ func (provider *SarvamProvider) SpeechStream(ctx *schemas.BifrostContext, postHo
 	jsonBody, bifrostErr := providerUtils.CheckContextAndGetRequestBody(
 		ctx,
 		request,
-		func() (providerUtils.RequestBodyWithExtraParams, error) {
+		func() (*SarvamSpeechRequest, error) {
 			return ToSarvamSpeechRequest(request), nil
 		})
 	if bifrostErr != nil {
@@ -371,6 +371,7 @@ func (provider *SarvamProvider) SpeechStream(ctx *schemas.BifrostContext, postHo
 		stopCancellation := providerUtils.SetupStreamCancellation(ctx, resp.BodyStream(), provider.logger)
 		defer stopCancellation()
 		defer providerUtils.EnsureStreamFinalizerCalled(ctx, postHookSpanFinalizer)
+		defer providerUtils.RecoverStreamPanic(ctx, postHookRunner, responseChan, provider.logger, postHookSpanFinalizer)
 
 		buffer := make([]byte, 4096)
 		chunkIndex := -1
@@ -703,6 +704,11 @@ func (provider *SarvamProvider) BatchResults(_ *schemas.BifrostContext, _ []sche
 // CountTokens is not supported by the Sarvam provider.
 func (provider *SarvamProvider) CountTokens(_ *schemas.BifrostContext, _ schemas.Key, _ *schemas.BifrostResponsesRequest) (*schemas.BifrostCountTokensResponse, *schemas.BifrostError) {
 	return nil, providerUtils.NewUnsupportedOperationError(schemas.CountTokensRequest, provider.GetProviderKey())
+}
+
+// ModelRetrieve is not supported by the Sarvam provider.
+func (provider *SarvamProvider) ModelRetrieve(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostModelRetrieveRequest) (*schemas.BifrostModelRetrieveResponse, *schemas.BifrostError) {
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.ModelRetrieveRequest, provider.GetProviderKey())
 }
 
 // Compaction is not supported by the Sarvam provider.

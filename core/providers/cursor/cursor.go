@@ -102,7 +102,7 @@ func (provider *CursorProvider) resolveHeaders(ctx context.Context, key schemas.
 	}
 	headers := make(http.Header, len(extra)+8)
 	for name, value := range provider.networkConfig.ExtraHeaders {
-		headers.Set(name, value)
+		headers.Set(name, value.GetValue())
 	}
 	for name, value := range extra {
 		headers.Set(name, value)

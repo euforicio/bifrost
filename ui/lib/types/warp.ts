@@ -3,6 +3,14 @@
  * telemetry. These types mirror core/schemas/warp.go.
  */
 
+/** One provider and model pair Warp may run on. Mirrors schemas.WarpModel. */
+export interface WarpModel {
+	provider: string;
+	model: string;
+	/** Which of the provider's keys this model is pinned to. Empty for any key. */
+	api_key_id?: string;
+}
+
 /** What the read API returns. The stored credential is never included. */
 export interface WarpConfig {
 	/**
@@ -19,6 +27,11 @@ export interface WarpConfig {
 	 * credential, so it round-trips in the clear. Empty when none is needed.
 	 */
 	api_key_id?: string;
+	/**
+	 * The other models an operator exposed. `provider` and `model` above stay
+	 * the default; the panel's switcher offers the default followed by these.
+	 */
+	additional_models?: WarpModel[];
 	max_iterations: number;
 	request_timeout_seconds: number;
 	/**
@@ -46,6 +59,8 @@ export interface WarpConfig {
 	log_vector_store_namespace: string;
 	semantic_search_threshold: number;
 	semantic_search_limit: number;
+	/** How many requests that matched no topic start a discovery of new topics. */
+	topic_discovery_min_requests: number;
 	vector_store_connected: boolean;
 }
 
@@ -55,6 +70,8 @@ export interface WarpConfigInput {
 	provider: string;
 	model: string;
 	api_key_id?: string;
+	/** Replaced whole on every write: leaving it out clears the list. */
+	additional_models?: WarpModel[];
 	max_iterations?: number;
 	request_timeout_seconds?: number;
 	/** Zero means "use the default". There is no maximum. */
@@ -69,6 +86,8 @@ export interface WarpConfigInput {
 	log_vector_store_namespace: string;
 	semantic_search_threshold?: number;
 	semantic_search_limit?: number;
+	/** 10 to 20000. Zero means "use the default"; omitted keeps the stored value. */
+	topic_discovery_min_requests?: number;
 }
 
 /**
@@ -112,6 +131,8 @@ export interface WarpBackfillJob {
 	indexed: number;
 	skipped: number;
 	failed: number;
+	/** Topic runs only: how many themes the topics were grouped into once written. */
+	themes?: number;
 	/** Tokens the job's embedding calls have consumed so far, across resumes. */
 	embedding_tokens?: number;
 	/** USD cost of those calls. Absent when the deployment cannot price them - unknown, not free. */
@@ -156,6 +177,8 @@ export interface WarpStoredMessage {
 	content: string;
 	tool_calls?: WarpStoredToolCall[];
 	error?: string;
+	/** The error frame's code (budget_exceeded, access_denied, ...); absent on turns filed before codes were kept. */
+	error_code?: string;
 	finish_reason?: string;
 	/**
 	 * The structured clarifying question this turn ended with, when it ended by
@@ -189,9 +212,28 @@ export interface WarpConversationDetail extends WarpConversation {
  */
 export type WarpLogIndexState = "unavailable" | "not_configured" | "indexing" | "failed" | "ready";
 
+/** How live topic filing is doing, from GET /api/warp/log-index/status. */
+export interface WarpTopicHealth {
+	active_topics: number;
+	themes: number;
+	/** Requests waiting in the pool for a topic to be discovered. */
+	pooled: number;
+	requests_24h: number;
+	unmatched_24h: number;
+	/** unmatched_24h over requests_24h; 0 when nothing was filed. */
+	unmatched_share_24h: number;
+}
+
 export interface WarpLogIndexStatus {
 	state: WarpLogIndexState;
 	vector_store_connected: boolean;
 	embedding_configured: boolean;
 	backfill?: WarpBackfillStatus;
+	/** Present when the index is usable and the log store keeps topics. */
+	topics?: WarpTopicHealth;
+	/**
+	 * Whether anything is indexed to seed topics from. Only while the embedding
+	 * model has no topics; absent when the vector store cannot say.
+	 */
+	has_indexed_requests?: boolean;
 }

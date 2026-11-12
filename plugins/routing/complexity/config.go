@@ -13,12 +13,18 @@ import (
 // per input. Warmup then safely falls back to one request per exemplar.
 var ErrBatchEmbeddingsUnsupported = errors.New("batch embeddings are unsupported")
 
-// ComplexityInput is the normalized input for the analyzer.
-// The caller is responsible for extracting text from request payloads.
+// ComplexityInput is normalized classifier input extracted from a request.
 type ComplexityInput struct {
-	LastUserText   string   // last user message text
-	PriorUserTexts []string // previous user message texts (up to 10)
-	SystemText     string   // concatenated system/developer prompt text
+	LastUserText   string                // latest human-authored user message
+	PriorUserTexts []string              // earlier human-authored user messages
+	SystemText     string                // concatenated system/developer prompt text
+	Conversation   []ConversationMessage // role-preserving user/assistant text for the decision model
+}
+
+// ConversationMessage is one text-only conversational message passed to the decision model.
+type ConversationMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // ComplexityResult holds the computed complexity scores and tier classification.
@@ -29,9 +35,15 @@ type ComplexityResult struct {
 }
 
 const (
-	TierSimple  = "SIMPLE"
-	TierMedium  = "MEDIUM"
-	TierComplex = "COMPLEX"
+	// ClassifierSemantic selects embedding-based semantic classification.
+	ClassifierSemantic = configstore.ComplexityClassifierSemantic
+	// ClassifierDecision selects the decision-model classifier.
+	ClassifierDecision = configstore.ComplexityClassifierDecision
+	// SemanticFallbackDecision uses the decision model when semantic matching has no tier.
+	SemanticFallbackDecision = configstore.ComplexitySemanticFallbackDecision
+	TierSimple               = "SIMPLE"
+	TierMedium               = "MEDIUM"
+	TierComplex              = "COMPLEX"
 )
 
 // Routing mechanism values recorded when a routing rule demands a complexity
@@ -46,6 +58,8 @@ const (
 // there are no historical rows carrying it and nothing offers it as a filter.
 const (
 	MechanismSemantic = "semantic"
+	// MechanismDecision means the decision API published the tier.
+	MechanismDecision = "decision"
 	// MechanismLLM means the chat-completion classifier published the tier.
 	MechanismLLM = "llm"
 	// MechanismJev means the TypeSafe System One classifier published the tier.
@@ -81,6 +95,8 @@ type LLMConfig = configstore.ComplexityLLMConfig
 
 // JevConfig is the TypeSafe System One classifier configuration.
 type JevConfig = configstore.ComplexityJevConfig
+// DecisionConfig controls the decision-model classifier request.
+type DecisionConfig = configstore.ComplexityDecisionConfig
 
 // SessionConfig controls monotonic complexity-tier retention across requests.
 type SessionConfig = configstore.ComplexitySessionConfig
@@ -158,6 +174,7 @@ func mergeEditableKeywordsOntoDefaults(editable EditableKeywordConfig) KeywordCo
 	return keywords
 }
 
+// defaultFullKeywordConfig returns the built-in vocabulary used by the analyzer.
 func defaultFullKeywordConfig() KeywordConfig {
 	return KeywordConfig{
 		MediumKeywords:      cloneStringSlice(mediumKeywords),
@@ -193,6 +210,7 @@ func sharedTierDefaults(keywords, extra []string) []string {
 	return combined
 }
 
+// cloneStringSlice returns an independent copy of a string slice.
 func cloneStringSlice(values []string) []string {
 	if len(values) == 0 {
 		return nil

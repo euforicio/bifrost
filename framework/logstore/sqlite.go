@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/maximhq/bifrost/core/schemas"
+	"github.com/maximhq/bifrost/framework/storehooks"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -57,6 +58,7 @@ func newSqliteLogStore(ctx context.Context, config *SQLiteConfig, logger schemas
 		return nil, err
 	}
 	logger.Debug("db opened for logstore")
+	storehooks.PoolOpened(storehooks.RoleLogs, db)
 
 	s := &RDBLogStore{db: db, logger: logger}
 	// Run migrations

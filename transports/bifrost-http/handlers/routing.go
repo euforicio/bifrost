@@ -23,7 +23,7 @@ import (
 	configstoreTables "github.com/maximhq/bifrost/framework/configstore/tables"
 	"github.com/maximhq/bifrost/plugins/routing/complexity"
 	"github.com/maximhq/bifrost/plugins/routing/rules"
-	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
+	"github.com/maximhq/bifrost/transports/v2/bifrost-http/lib"
 	"github.com/valyala/fasthttp"
 )
 
@@ -76,6 +76,10 @@ type complexityStatusResponse struct {
 	// that drifts from the gateway's. It is the editable half only; the fixed
 	// tier-name reinforcement is appended server-side and never exposed.
 	LLMDefaultPrompt string `json:"llm_default_prompt,omitempty"`
+	// DecisionDefaults is the shipped decision-model per-tier criteria, served for the same
+	// reason as LLMDefaultPrompt. The fixed question, decision rule, and
+	// context rule are never exposed because they are not editable.
+	DecisionDefaults configstore.ComplexityDecisionGuidanceDefaults `json:"decision_defaults"`
 }
 
 // RoutingHandler manages HTTP requests for routing rules and complexity analyzer config.
@@ -139,6 +143,8 @@ type RoutingTarget struct {
 	Model    *string `json:"model,omitempty"`    // nil = use incoming model
 	KeyID    *string `json:"key_id,omitempty"`   // nil = no key pin
 	Weight   float64 `json:"weight"`             // must be > 0; all weights must sum to 1
+
+	TTFTTimeoutMs *int `json:"ttft_timeout_ms,omitempty"` // nil or 0 = no TTFT deadline
 }
 
 // CreateRoutingRuleRequest represents the request body for creating a routing rule
@@ -169,6 +175,26 @@ type UpdateRoutingRuleRequest struct {
 	Priority      *int                                `json:"priority,omitempty"`
 	Scope         *string                             `json:"scope,omitempty"`
 	ScopeID       *string                             `json:"scope_id,omitempty"`
+}
+
+// maxRoutingTTFTTimeoutMs caps a target's TTFT deadline; it mirrors
+// ttft_timeout_ms's maximum in config.schema.json.
+const maxRoutingTTFTTimeoutMs = 300000
+
+// validateRoutingTTFTTimeout checks a target's ttft_timeout_ms; nil and 0 mean "no deadline".
+func validateRoutingTTFTTimeout(ms *int) error {
+	if ms != nil && (*ms < 0 || *ms > maxRoutingTTFTTimeoutMs) {
+		return fmt.Errorf("ttft_timeout_ms must be between 1 and %d (0 disables it)", maxRoutingTTFTTimeoutMs)
+	}
+	return nil
+}
+
+// nilIfZero normalizes a 0 ("no deadline") ttft_timeout_ms to nil so it is stored as NULL.
+func nilIfZero(ms *int) *int {
+	if ms == nil || *ms == 0 {
+		return nil
+	}
+	return ms
 }
 
 // validRoutingScopes contains the allowed scope values for routing rules
@@ -244,18 +270,21 @@ func validateRoutingScope(scope string) error {
 	return nil
 }
 
-// validateRoutingTargets checks that all weights are positive, that no two
-// targets share the same (provider, model, key_id) identity, and that all
-// weights sum to 1.
+// validateRoutingTargets checks that every weight is greater than 0 (as
+// config.schema.json and the dashboard form require), that no two targets share
+// the same (provider, model, key_id) identity, and that all weights sum to 1.
 func validateRoutingTargets(targets []RoutingTarget) error {
 	seen := make(map[string]struct{}, len(targets))
 	total := 0.0
 	for _, t := range targets {
-		if t.Weight < 0 {
-			return fmt.Errorf("each target weight must be positive")
+		if !(t.Weight > 0) {
+			return fmt.Errorf("each target weight must be greater than 0, got %v", t.Weight)
 		}
 		if t.KeyID != nil && *t.KeyID != "" && (t.Provider == nil || *t.Provider == "") {
 			return fmt.Errorf("key_id requires provider to be set")
+		}
+		if err := validateRoutingTTFTTimeout(t.TTFTTimeoutMs); err != nil {
+			return err
 		}
 
 		// Canonicalise identity: lowercase provider/model, treat nil == "".
@@ -366,6 +395,7 @@ func (h *RoutingHandler) updateComplexityAnalyzerConfig(ctx *fasthttp.RequestCtx
 		return
 	}
 
+	before, _ := h.configStore.GetComplexityAnalyzerConfig(ctx)
 	if err := h.configStore.UpdateComplexityAnalyzerConfig(ctx, normalized); err != nil {
 		SendError(ctx, fasthttp.StatusInternalServerError, fmt.Sprintf("failed to update complexity analyzer config: %v", err))
 		return
@@ -375,6 +405,7 @@ func (h *RoutingHandler) updateComplexityAnalyzerConfig(ctx *fasthttp.RequestCtx
 		return
 	}
 
+	lib.RecordAuditChange(ctx, "complexity_analyzer_config.updated", "complexity_analyzer_config", "complexity_analyzer_config", "Complexity analyzer config", auditComplexityConfig(before), normalized)
 	SendJSON(ctx, normalized)
 }
 
@@ -400,6 +431,7 @@ func (h *RoutingHandler) resetComplexityAnalyzerConfig(ctx *fasthttp.RequestCtx)
 	// The store performs the swap: reading the record here and writing it back
 	// would leave a window in which a concurrent save of the preserved sections
 	// is read before the save and overwritten after it.
+	before, _ := h.configStore.GetComplexityAnalyzerConfig(ctx)
 	defaults := complexity.DefaultAnalyzerConfig()
 	restored, err := h.configStore.ResetComplexityAnalyzerConfig(ctx, &defaults)
 	if err != nil {
@@ -411,7 +443,16 @@ func (h *RoutingHandler) resetComplexityAnalyzerConfig(ctx *fasthttp.RequestCtx)
 		return
 	}
 
+	lib.RecordAuditChange(ctx, "complexity_analyzer_config.reset", "complexity_analyzer_config", "complexity_analyzer_config", "Complexity analyzer config", auditComplexityConfig(before), restored)
 	SendJSON(ctx, restored)
+}
+
+// auditComplexityConfig returns cfg for the audit diff, or nil when nothing was stored.
+func auditComplexityConfig(cfg *complexity.AnalyzerConfig) any {
+	if cfg == nil {
+		return nil
+	}
+	return cfg
 }
 
 func (h *RoutingHandler) reloadComplexityAnalyzerConfig(ctx context.Context, config *complexity.AnalyzerConfig) error {
@@ -426,7 +467,7 @@ func (h *RoutingHandler) getComplexitySemanticStatus(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, fasthttp.StatusServiceUnavailable, fmt.Sprintf("failed to get semantic complexity status: %v", err))
 		return
 	}
-	response := complexityStatusResponse{SemanticStatusInfo: status}
+	response := complexityStatusResponse{SemanticStatusInfo: status, DecisionDefaults: configstore.DefaultComplexityDecisionGuidance()}
 	// The llm classifier state rides the same endpoint and must not be able to
 	// fail the whole response.
 	if llmStatus, llmErr := h.routingManager.GetComplexityLLMStatus(ctx); llmErr != nil {
@@ -455,6 +496,7 @@ func (h *RoutingHandler) retryComplexitySemanticWarmup(ctx *fasthttp.RequestCtx)
 		SendError(ctx, fasthttp.StatusConflict, "semantic complexity warmup can only be retried after a failure")
 		return
 	}
+	lib.RecordAuditChange(ctx, "complexity_analyzer.warmup_retried", "complexity_analyzer", "complexity_analyzer", "Complexity analyzer", nil, map[string]any{"retried": true})
 	SendJSONWithStatus(ctx, complexityStatusResponse{SemanticStatusInfo: status}, fasthttp.StatusAccepted)
 }
 
@@ -635,10 +677,11 @@ func (h *RoutingHandler) createRoutingRule(ctx *fasthttp.RequestCtx) {
 	targets := make([]configstoreTables.TableRoutingTarget, 0, len(req.Targets))
 	for _, t := range req.Targets {
 		targets = append(targets, configstoreTables.TableRoutingTarget{
-			Provider: t.Provider,
-			Model:    t.Model,
-			KeyID:    t.KeyID,
-			Weight:   t.Weight,
+			Provider:      t.Provider,
+			Model:         t.Model,
+			KeyID:         t.KeyID,
+			Weight:        t.Weight,
+			TTFTTimeoutMs: nilIfZero(t.TTFTTimeoutMs),
 		})
 	}
 
@@ -669,6 +712,14 @@ func (h *RoutingHandler) createRoutingRule(ctx *fasthttp.RequestCtx) {
 
 	// Create in database
 	if err := h.configStore.CreateRoutingRule(ctx, rule); err != nil {
+		if errors.Is(err, configstore.ErrRoutingRulePriorityTaken) {
+			SendError(ctx, fasthttp.StatusConflict, fmt.Sprintf("%v; use a different priority", err))
+			return
+		}
+		if errors.Is(err, configstore.ErrAlreadyExists) {
+			SendError(ctx, fasthttp.StatusConflict, err.Error())
+			return
+		}
 		SendError(ctx, 500, fmt.Sprintf("Failed to create routing rule: %v", err))
 		return
 	}
@@ -679,6 +730,7 @@ func (h *RoutingHandler) createRoutingRule(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	lib.RecordAuditChange(ctx, "routing_rule.created", "routing_rule", rule.ID, rule.Name, nil, rule)
 	SendJSON(ctx, map[string]interface{}{
 		"message": "Routing rule created successfully",
 		"rule":    rule,
@@ -706,6 +758,7 @@ func (h *RoutingHandler) updateRoutingRule(ctx *fasthttp.RequestCtx) {
 		SendError(ctx, 500, "Failed to retrieve routing rule")
 		return
 	}
+	before := lib.AuditSnapshot(rule)
 
 	// Update fields if provided
 	if req.Name != nil && *req.Name != "" {
@@ -741,10 +794,11 @@ func (h *RoutingHandler) updateRoutingRule(ctx *fasthttp.RequestCtx) {
 		newTargets := make([]configstoreTables.TableRoutingTarget, 0, len(req.Targets))
 		for _, t := range req.Targets {
 			newTargets = append(newTargets, configstoreTables.TableRoutingTarget{
-				Provider: t.Provider,
-				Model:    t.Model,
-				KeyID:    t.KeyID,
-				Weight:   t.Weight,
+				Provider:      t.Provider,
+				Model:         t.Model,
+				KeyID:         t.KeyID,
+				Weight:        t.Weight,
+				TTFTTimeoutMs: nilIfZero(t.TTFTTimeoutMs),
 			})
 		}
 		rule.Targets = newTargets
@@ -791,6 +845,14 @@ func (h *RoutingHandler) updateRoutingRule(ctx *fasthttp.RequestCtx) {
 
 	// Update in database
 	if err := h.configStore.UpdateRoutingRule(ctx, rule); err != nil {
+		if errors.Is(err, configstore.ErrRoutingRulePriorityTaken) {
+			SendError(ctx, fasthttp.StatusConflict, fmt.Sprintf("%v; use a different priority", err))
+			return
+		}
+		if errors.Is(err, configstore.ErrAlreadyExists) {
+			SendError(ctx, fasthttp.StatusConflict, err.Error())
+			return
+		}
 		SendError(ctx, 500, fmt.Sprintf("Failed to update routing rule in database: %v", err))
 		return
 	}
@@ -801,6 +863,7 @@ func (h *RoutingHandler) updateRoutingRule(ctx *fasthttp.RequestCtx) {
 		return
 	}
 
+	lib.RecordAuditChange(ctx, "routing_rule.updated", "routing_rule", rule.ID, rule.Name, before, rule)
 	SendJSON(ctx, map[string]interface{}{
 		"message": "Routing rule updated successfully",
 		"rule":    rule,
@@ -811,6 +874,7 @@ func (h *RoutingHandler) updateRoutingRule(ctx *fasthttp.RequestCtx) {
 func (h *RoutingHandler) deleteRoutingRule(ctx *fasthttp.RequestCtx) {
 	ruleID := ctx.UserValue("rule_id").(string)
 
+	existing, _ := h.configStore.GetRoutingRule(ctx, ruleID)
 	// Delete from database
 	if err := h.configStore.DeleteRoutingRule(ctx, ruleID); err != nil {
 		if errors.Is(err, configstore.ErrNotFound) {
@@ -826,6 +890,13 @@ func (h *RoutingHandler) deleteRoutingRule(ctx *fasthttp.RequestCtx) {
 		logger.Error("failed to remove routing rule from memory: %v", err)
 	}
 
+	targetName := ruleID
+	var before any
+	if existing != nil {
+		targetName = existing.Name
+		before = existing
+	}
+	lib.RecordAuditChange(ctx, "routing_rule.deleted", "routing_rule", ruleID, targetName, before, nil)
 	SendJSON(ctx, map[string]interface{}{
 		"message": "Routing rule deleted successfully",
 	})
@@ -881,5 +952,6 @@ func (h *RoutingHandler) deleteComplexityGeneration(ctx *fasthttp.RequestCtx) {
 		}
 		return
 	}
+	lib.RecordAuditChange(ctx, "complexity_generation.deleted", "complexity_generation", namespace, namespace, map[string]any{"namespace": namespace}, nil)
 	SendJSON(ctx, map[string]string{"status": "deleted", "namespace": namespace})
 }

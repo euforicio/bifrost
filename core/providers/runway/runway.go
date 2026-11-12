@@ -148,7 +148,7 @@ func (provider *RunwayProvider) ImageGeneration(ctx *schemas.BifrostContext, key
 	jsonData, bifrostErr := providerUtils.CheckContextAndGetRequestBody(
 		ctx,
 		bifrostReq,
-		func() (providerUtils.RequestBodyWithExtraParams, error) {
+		func() (*RunwayImageGenerationRequest, error) {
 			return ToRunwayImageGenerationRequest(bifrostReq)
 		})
 	if bifrostErr != nil {
@@ -337,7 +337,7 @@ func (provider *RunwayProvider) ImageEdit(ctx *schemas.BifrostContext, key schem
 	jsonData, bifrostErr := providerUtils.CheckContextAndGetRequestBody(
 		ctx,
 		bifrostReq,
-		func() (providerUtils.RequestBodyWithExtraParams, error) {
+		func() (*RunwayImageGenerationRequest, error) {
 			return ToRunwayImageEditRequest(bifrostReq)
 		})
 	if bifrostErr != nil {
@@ -366,7 +366,7 @@ func (provider *RunwayProvider) VideoGeneration(ctx *schemas.BifrostContext, key
 	jsonData, bifrostErr := providerUtils.CheckContextAndGetRequestBody(
 		ctx,
 		bifrostReq,
-		func() (providerUtils.RequestBodyWithExtraParams, error) {
+		func() (*RunwayVideoGenerationRequest, error) {
 			return ToRunwayVideoGenerationRequest(bifrostReq)
 		})
 	if bifrostErr != nil {
@@ -735,6 +735,11 @@ func (provider *RunwayProvider) BatchResults(_ *schemas.BifrostContext, _ []sche
 // CountTokens is not supported by the Runway provider.
 func (provider *RunwayProvider) CountTokens(_ *schemas.BifrostContext, _ schemas.Key, _ *schemas.BifrostResponsesRequest) (*schemas.BifrostCountTokensResponse, *schemas.BifrostError) {
 	return nil, providerUtils.NewUnsupportedOperationError(schemas.CountTokensRequest, provider.GetProviderKey())
+}
+
+// ModelRetrieve is not supported by the Runway provider.
+func (provider *RunwayProvider) ModelRetrieve(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostModelRetrieveRequest) (*schemas.BifrostModelRetrieveResponse, *schemas.BifrostError) {
+	return nil, providerUtils.NewUnsupportedOperationError(schemas.ModelRetrieveRequest, provider.GetProviderKey())
 }
 
 // Compaction is not supported by the Runway provider.

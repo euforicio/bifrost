@@ -92,10 +92,12 @@ func xaiUnauthorized(err *schemas.BifrostError) bool {
 	return err != nil && err.StatusCode != nil && *err.StatusCode == fasthttp.StatusUnauthorized
 }
 
-func mergeHeaders(base, additional map[string]string) map[string]string {
-	merged := make(map[string]string, len(base)+len(additional))
+func mergeHeaders(base map[string]schemas.SecretVar, additional map[string]string) map[string]schemas.SecretVar {
+	merged := make(map[string]schemas.SecretVar, len(base)+len(additional))
 	maps.Copy(merged, base)
-	maps.Copy(merged, additional)
+	for name, value := range additional {
+		merged[name] = schemas.SecretVar{Val: value}
+	}
 	return merged
 }
 
@@ -135,6 +137,31 @@ func (provider *XAIProvider) ListModels(ctx *schemas.BifrostContext, keys []sche
 		panic("unreachable")
 	}
 	return providerUtils.HandleMultipleListModelsRequests(ctx, keys, request, listByKey)
+}
+
+// ModelRetrieve retrieves a single model's metadata from the xAI API.
+func (provider *XAIProvider) ModelRetrieve(ctx *schemas.BifrostContext, key schemas.Key, request *schemas.BifrostModelRetrieveRequest) (*schemas.BifrostModelRetrieveResponse, *schemas.BifrostError) {
+	if provider.networkConfig.BaseURL == "" {
+		return nil, providerUtils.NewConfigurationError("base_url is not set")
+	}
+	if request == nil || request.Model == "" {
+		return nil, providerUtils.NewBifrostOperationError("model is required", nil)
+	}
+	escapedModel, idErr := providerUtils.EscapeResourceID(request.Model, "model")
+	if idErr != nil {
+		return nil, idErr
+	}
+
+	return openai.HandleOpenAIModelRetrieveRequest(
+		ctx,
+		provider.client,
+		provider.networkConfig.BaseURL+providerUtils.GetPathFromContext(ctx, "/v1/models/"+escapedModel),
+		key,
+		provider.networkConfig.ExtraHeaders,
+		provider.GetProviderKey(),
+		providerUtils.ShouldSendBackRawRequest(ctx, provider.sendBackRawRequest),
+		providerUtils.ShouldSendBackRawResponse(ctx, provider.sendBackRawResponse),
+	)
 }
 
 // TextCompletion is not supported by xAI. Current xAI models use chat
