@@ -218,7 +218,8 @@ async function boundedJSON(request) {
 export default {async fetch(request,env) {
  const authority=env.FILES.getByName("qualification");
  if (new URL(request.url).pathname==="/__activate" && request.method==="POST") {
-  if (request.headers.get("X-Storage-Capability")!==env.STORAGE_TOKEN) return new Response("Not found",{status:404});
+  const supplied=request.headers.get("X-Storage-Capability") || "";
+  if (!/^[a-f0-9]{64}$/.test(supplied) || !/^[a-f0-9]{64}$/.test(env.STORAGE_TOKEN || "") || !crypto.subtle.timingSafeEqual(new TextEncoder().encode(supplied),new TextEncoder().encode(env.STORAGE_TOKEN))) return new Response("Not found",{status:404});
   const input=await boundedJSON(request); if (!input) return new Response("Invalid generation",{status:400});
   return Response.json(await authority.activate(input.sequence ?? (await authority.generation())+1,input.capability));
  }
