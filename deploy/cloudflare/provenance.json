@@ -1,5 +1,5 @@
 {
-  "storage_sha256": "f970666500123d1c6c877f6937b5b88e83c8935d474a0c65400e524a8ff600ff",
+  "storage_sha256": "b423587116464d03a6a07884ea8b38032e4385786dfcd72db27d02140a7bc497",
   "r2_sha256": "0b6802766953377a0992a7bc92d066b95d7b09b24884d265a11d6d43c7139425",
   "description": "Generic protocol authority used by the runtime and real workerd qualification; no application data or credentials."
 }
