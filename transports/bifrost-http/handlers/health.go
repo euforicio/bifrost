@@ -1,14 +1,13 @@
 package handlers
 
 import (
-	"context"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/fasthttp/router"
 	"github.com/maximhq/bifrost/core/schemas"
-	"github.com/maximhq/bifrost/transports/bifrost-http/lib"
+	"github.com/maximhq/bifrost/transports/v2/bifrost-http/lib"
 	"github.com/valyala/fasthttp"
 )
 
@@ -37,7 +36,7 @@ func (h *HealthHandler) getHealth(ctx *fasthttp.RequestCtx) {
 		return
 	}
 	// Pinging config store
-	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	reqCtx, cancel := RequestWorkContext(ctx, 10*time.Second)
 	defer cancel()
 	var errors []string
 	var mu sync.Mutex

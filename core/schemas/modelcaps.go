@@ -273,6 +273,15 @@ func (c ModelCaps) SupportsSystemMessages(fallback bool) bool {
 	return fallback
 }
 
+// SupportsDeveloperRole reports whether the model accepts role "developer".
+// Models that do not are sent developer messages as system instead.
+func (c ModelCaps) SupportsDeveloperRole(fallback bool) bool {
+	if c.record != nil && c.record.SupportsDeveloperRole != nil {
+		return *c.record.SupportsDeveloperRole
+	}
+	return fallback
+}
+
 // SupportsAssistantPrefill reports whether a trailing assistant message may be
 // sent for the model to continue. Models without it need it trimmed.
 func (c ModelCaps) SupportsAssistantPrefill(fallback bool) bool {
@@ -305,6 +314,15 @@ func (c ModelCaps) SupportsPromptCacheBreakpoint(fallback bool) bool {
 func (c ModelCaps) SupportsAsyncTools(fallback bool) bool {
 	if c.record != nil && c.record.SupportsAsyncTools != nil {
 		return *c.record.SupportsAsyncTools
+	}
+	return fallback
+}
+
+// SupportsCustomTools reports whether the model accepts OpenAI custom (freeform)
+// tools. Models that do not are sent each custom tool as a function tool instead.
+func (c ModelCaps) SupportsCustomTools(fallback bool) bool {
+	if c.record != nil && c.record.SupportsCustomTools != nil {
+		return *c.record.SupportsCustomTools
 	}
 	return fallback
 }
@@ -368,6 +386,19 @@ func (c ModelCaps) ToolChoiceAnySupported(fallback bool) bool {
 func (c ModelCaps) SupportsForcedToolChoice(fallback bool) bool {
 	if c.record != nil && c.record.SupportsForcedToolChoice != nil {
 		return *c.record.SupportsForcedToolChoice
+	}
+	return fallback
+}
+
+// SupportsDecisions reports whether the model is served on its provider's
+// native decisions endpoint, such as OpenAI's POST /v1/decisions. A model
+// without it answers decision requests through emulation on its chat API. A
+// datasheet row decides in either direction, so a new decisions model needs
+// only a row; with no row the caller's fallback (DefaultSupportsDecisions)
+// applies.
+func (c ModelCaps) SupportsDecisions(fallback bool) bool {
+	if c.record != nil && c.record.SupportsDecisions != nil {
+		return *c.record.SupportsDecisions
 	}
 	return fallback
 }
@@ -582,6 +613,43 @@ func (c ModelCaps) ReservedToolNamespaces(fallback []string) []string {
 	return fallback
 }
 
+// SupportsRegexLookaround reports whether the model accepts lookaround assertions in
+// tool-schema patterns. A row decides in either direction; absent returns fallback.
+func (c ModelCaps) SupportsRegexLookaround(fallback bool) bool {
+	if c.record != nil && c.record.SupportsRegexLookaround != nil {
+		return *c.record.SupportsRegexLookaround
+	}
+	return fallback
+}
+
+// SupportsRegexNULEscape reports whether the model accepts the `\0` escape in
+// tool-schema patterns. A row decides in either direction; absent returns fallback.
+func (c ModelCaps) SupportsRegexNULEscape(fallback bool) bool {
+	if c.record != nil && c.record.SupportsRegexNULEscape != nil {
+		return *c.record.SupportsRegexNULEscape
+	}
+	return fallback
+}
+
+// SupportsSchemaPattern reports whether the model accepts the `pattern` keyword in
+// tool schemas at all. A row decides in either direction; absent returns fallback.
+func (c ModelCaps) SupportsSchemaPattern(fallback bool) bool {
+	if c.record != nil && c.record.SupportsSchemaPattern != nil {
+		return *c.record.SupportsSchemaPattern
+	}
+	return fallback
+}
+
+// SupportedSchemaFormats returns the string `format` values the model accepts in tool
+// schemas. A non-empty row replaces fallback; absent or empty returns it. A nil result
+// means every format is accepted.
+func (c ModelCaps) SupportedSchemaFormats(fallback []string) []string {
+	if c.record != nil && len(c.record.SupportedSchemaFormats) > 0 {
+		return c.record.SupportedSchemaFormats
+	}
+	return fallback
+}
+
 // SupportsAdvisorTool reports whether the model accepts advisor_tool_result blocks.
 func (c ModelCaps) SupportsAdvisorTool(fallback bool) bool {
 	if c.record != nil && c.record.SupportsAdvisorTool != nil {
@@ -725,6 +793,16 @@ func (c ModelCaps) BedrockAPIs() []BedrockAPI {
 func (c ModelCaps) MinOutputTokens(fallback int) int {
 	if c.record != nil && c.record.MinOutputTokens != nil {
 		return *c.record.MinOutputTokens
+	}
+	return fallback
+}
+
+// MaxOutputTokens returns the ceiling the model enforces on max_output_tokens.
+// A row with a positive max_output_tokens wins; absent or non-positive returns
+// fallback. Zero means no ceiling, so callers clamp only above zero.
+func (c ModelCaps) MaxOutputTokens(fallback int) int {
+	if c.record != nil && c.record.MaxOutputTokens != nil && *c.record.MaxOutputTokens > 0 {
+		return *c.record.MaxOutputTokens
 	}
 	return fallback
 }

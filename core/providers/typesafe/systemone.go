@@ -81,7 +81,7 @@ func (provider *TypeSafeProvider) SystemOne(ctx *schemas.BifrostContext, key sch
 	jsonData, bifrostErr := providerUtils.CheckContextAndGetRequestBody(
 		ctx,
 		request,
-		func() (providerUtils.RequestBodyWithExtraParams, error) {
+		func() (*TypeSafeSystemOneRequest, error) {
 			return ToTypeSafeSystemOneRequest(request)
 		},
 	)

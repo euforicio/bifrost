@@ -40,6 +40,7 @@ export const useGetMyVKCreationPolicyQuery = (
 	error: null,
 	refetch: () => {},
 });
+
 // OSS build has no access-profile backend, so no entity can hold one: the budget editors that ask
 // this in order to lock themselves stay unlocked, which is correct here because the entity's own
 // budget is the only thing enforcing anything.

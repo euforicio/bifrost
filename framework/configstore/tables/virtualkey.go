@@ -15,7 +15,7 @@ import (
 // between TableVirtualKeyProviderConfig and TableKey
 type TableVirtualKeyProviderConfigKey struct {
 	TableVirtualKeyProviderConfigID uint `gorm:"primaryKey;uniqueIndex:idx_vk_provider_config_key"`
-	TableKeyID                      uint `gorm:"primaryKey;uniqueIndex:idx_vk_provider_config_key"`
+	TableKeyID                      uint `gorm:"primaryKey;uniqueIndex:idx_vk_provider_config_key;index:idx_vkpc_keys_table_key_id"`
 }
 
 // TableName sets the table name for the join table
@@ -26,8 +26,8 @@ func (TableVirtualKeyProviderConfigKey) TableName() string {
 // TableVirtualKeyProviderConfig represents a provider configuration for a virtual key
 type TableVirtualKeyProviderConfig struct {
 	ID                uint              `gorm:"primaryKey;autoIncrement" json:"id"`
-	VirtualKeyID      string            `gorm:"type:varchar(255);not null" json:"virtual_key_id"`
-	Provider          string            `gorm:"type:varchar(50);not null" json:"provider"`
+	VirtualKeyID      string            `gorm:"type:varchar(255);not null;index:idx_vk_provider_configs_virtual_key_id" json:"virtual_key_id"`
+	Provider          string            `gorm:"type:varchar(50);not null;index:idx_vk_provider_configs_provider" json:"provider"`
 	Weight            *float64          `json:"weight"`
 	AllowedModels     schemas.WhiteList `gorm:"type:text;serializer:json" json:"allowed_models"`     // ["*"] allows all models; empty denies all (deny-by-default)
 	BlacklistedModels schemas.BlackList `gorm:"type:text;serializer:json" json:"blacklisted_models"` // ["*"] blocks all models; empty blocks none
@@ -186,6 +186,17 @@ func (pc *TableVirtualKeyProviderConfig) AfterFind(tx *gorm.DB) error {
 			key.BedrockMantleRoleSessionName = nil
 			key.BedrockMantleKeyConfig = nil
 
+			// Clear all SageMaker-related sensitive fields
+			key.SageMakerAccessKey = nil
+			key.SageMakerSecretKey = nil
+			key.SageMakerSessionToken = nil
+			key.SageMakerRegion = nil
+			key.SageMakerRoleARN = nil
+			key.SageMakerExternalID = nil
+			key.SageMakerRoleSessionName = nil
+			key.SageMakerEndpointsJSON = nil
+			key.SageMakerKeyConfig = nil
+
 			pc.Keys[i] = *key
 		}
 	}
@@ -195,7 +206,7 @@ func (pc *TableVirtualKeyProviderConfig) AfterFind(tx *gorm.DB) error {
 type TableVirtualKeyMCPConfig struct {
 	ID             uint              `gorm:"primaryKey;autoIncrement" json:"id"`
 	VirtualKeyID   string            `gorm:"type:varchar(255);not null;uniqueIndex:idx_vk_mcpclient" json:"virtual_key_id"`
-	MCPClientID    uint              `gorm:"not null;uniqueIndex:idx_vk_mcpclient" json:"mcp_client_id"`
+	MCPClientID    uint              `gorm:"not null;uniqueIndex:idx_vk_mcpclient;index:idx_vk_mcp_configs_mcp_client_id" json:"mcp_client_id"`
 	MCPClient      TableMCPClient    `gorm:"foreignKey:MCPClientID" json:"mcp_client"`
 	ToolsToExecute schemas.WhiteList `gorm:"type:text;serializer:json" json:"tools_to_execute"`
 
@@ -242,7 +253,7 @@ func (mc *TableVirtualKeyMCPConfig) UnmarshalJSON(data []byte) error {
 
 // TableVirtualKey represents a virtual key with budget, rate limits, and team/customer association
 type TableVirtualKey struct {
-	ID                string                          `gorm:"primaryKey;type:varchar(255)" json:"id"`
+	ID                string                          `gorm:"primaryKey;type:varchar(255);index:idx_virtual_keys_created_at_id,priority:2" json:"id"`
 	Name              string                          `gorm:"uniqueIndex:idx_virtual_key_name;type:varchar(255);not null" json:"name"`
 	Description       string                          `gorm:"type:text" json:"description,omitempty"`
 	Value             schemas.SecretVar               `gorm:"uniqueIndex:idx_virtual_key_value;type:text;not null" json:"value"`
@@ -251,6 +262,8 @@ type TableVirtualKey struct {
 	DeleteAfterExpire *bool                           `gorm:"type:boolean" json:"delete_after_expire,omitempty"`                           // Nil inherits client.delete_expired_virtual_keys; true/false override it for this key
 	ProviderConfigs   []TableVirtualKeyProviderConfig `gorm:"foreignKey:VirtualKeyID;constraint:OnDelete:CASCADE" json:"provider_configs"` // Empty means no providers allowed (deny-by-default)
 	MCPConfigs        []TableVirtualKeyMCPConfig      `gorm:"foreignKey:VirtualKeyID;constraint:OnDelete:CASCADE" json:"mcp_configs"`
+	AgentGrants       []TableVirtualKeyAgentGrant     `gorm:"foreignKey:VirtualKeyID;constraint:OnDelete:CASCADE" json:"agent_grants"`
+	RelayGrants       []TableVirtualKeyRelayGrant     `gorm:"foreignKey:VirtualKeyID;constraint:OnDelete:CASCADE" json:"relay_grants"`
 
 	// Foreign key relationships. TeamID, CustomerID and BusinessUnitID are mutually exclusive: a
 	// key belongs to at most one owner, which is what decides whose money it spends and whose
@@ -270,9 +283,15 @@ type TableVirtualKey struct {
 	// DisableContentLogging is the key's own say on whether request and response content is
 	// persisted for its traffic. Tri-state on purpose: nil inherits client.disable_content_logging,
 	// true forces content off for every sink, false forces content on for the log store only (each
-	// observability connector keeps its own flag). No gorm default: a default tag would make GORM
-	// write the default for a nil pointer on insert and collapse "inherit" into "false".
+	// observability connector keeps its own flag). A project a request is scoped to can override it
+	// either way. No gorm default: a default tag would make GORM write the default for a nil pointer
+	// on insert and collapse "inherit" into "false".
 	DisableContentLogging *bool `gorm:"type:boolean" json:"disable_content_logging,omitempty"`
+
+	// Metadata is free-form key/value data the operator attaches to the key (cost center, project,
+	// owner, environment, ...) for cost attribution. Validated by ValidateVirtualKeyMetadata; an
+	// empty map is stored as NULL, and a nil map on UpdateVirtualKey keeps the stored value.
+	Metadata map[string]string `gorm:"type:text;serializer:json" json:"metadata,omitempty"`
 
 	// Relationships
 	Team      *TableTeam      `gorm:"foreignKey:TeamID" json:"team,omitempty"`
@@ -328,7 +347,7 @@ type TableVirtualKey struct {
 
 	CreatedByUserID *string `gorm:"type:varchar(255);index:idx_virtual_key_created_by" json:"created_by_user_id,omitempty"`
 
-	CreatedAt time.Time `gorm:"index;not null" json:"created_at"`
+	CreatedAt time.Time `gorm:"index;index:idx_virtual_keys_created_at_id,priority:1;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"index;not null" json:"updated_at"`
 }
 
@@ -478,6 +497,14 @@ func (vk *TableVirtualKey) BeforeSave(tx *gorm.DB) error {
 	}
 	if owners > 1 {
 		return fmt.Errorf("virtual key cannot belong to more than one of team, customer or business unit")
+	}
+
+	if err := ValidateVirtualKeyMetadata(vk.Metadata); err != nil {
+		return err
+	}
+	// One representation for "no metadata": NULL, never "{}".
+	if len(vk.Metadata) == 0 {
+		vk.Metadata = nil
 	}
 
 	// Hash must be computed before encryption (from plaintext value).

@@ -68,22 +68,28 @@ func semanticSearchLogsTool() Tool {
 	return Tool{
 		name: SemanticSearchToolName,
 		description: "Find logged conversations by meaning. Use this when the question is about what users discussed, wanted, reported, or what assistants answered, even when the wording differs. " +
+			"Give several phrasings of the same topic in one call; they are searched together and each conversation keeps its closest score. " +
+			"Results are ranked by similarity, not judged: real matches often score only 0.6 to 0.75, and unrelated conversations can score close to them. " +
+			"Read each row's content and keep only the rows actually about what was asked before you count, quote or summarize them; if none are, report that no matching conversations were found. " +
 			"Use query_logs, count_logs, or query_metrics for exact fields, counts, latency, cost, and trends.",
 		schemaJSON: `{
   "type": "object",
   "properties": {
-    "query": {"type": "string", "maxLength": ` + strconv.Itoa(MaxSemanticQueryChars) + `, "description": "A natural-language description of the conversations to find."},
+    "queries": {"type": "array", "minItems": 1, "maxItems": ` + strconv.Itoa(MaxSemanticQueries) + `, "items": {"type": "string", "maxLength": ` + strconv.Itoa(MaxSemanticQueryChars) + `}, "description": "2 to ` + strconv.Itoa(MaxSemanticQueries) + ` phrasings of the conversations to find, searched together. Describe the requests themselves (\"users asking for help planning a trip\", \"travel itinerary for a city\"), not a bare keyword (\"travel\") - a description scores far closer to a logged conversation."},
     "filters": ` + FilterSchema + `,
     "limit": {"type": "integer", "minimum": 1, "maximum": 25, "description": "Matches to return. Also capped by the configured semantic search limit."}
   },
-  "required": ["query", "filters"]
+  "required": ["queries", "filters"]
 }`,
 		execute: func(ctx context.Context, deps *ToolDeps, args map[string]any) (any, error) {
-			query, _ := args["query"].(string)
+			queries, err := stringSliceArg(args, "queries")
+			if err != nil {
+				return nil, err
+			}
 			if deps.semantic == nil {
 				return nil, fmt.Errorf("semantic log search is not configured")
 			}
-			filters, err := filterArg(args, Now(), deps.scope)
+			filters, err := filterArg(args, deps.now(), deps.scope)
 			if err != nil {
 				return nil, err
 			}
@@ -93,7 +99,9 @@ func semanticSearchLogsTool() Tool {
 			if err != nil {
 				return nil, err
 			}
-			result, err := deps.semantic.Search(ctx, query, filters, limit)
+			// The caller's visibility rides along so the index is asked for
+			// their rows, rather than for the deployment's and then filtered.
+			result, err := deps.semantic.SearchVisible(ctx, queries, filters, deps.scope.Visible, limit)
 			if err != nil {
 				return nil, err
 			}
@@ -110,8 +118,10 @@ func semanticSearchLogsTool() Tool {
 				// model went off counting and listing logs instead. Say what
 				// happened and what the legitimate next moves are.
 				response["hint"] = fmt.Sprintf("No stored conversation scored above the similarity threshold of %.2f. "+
-					"Do not fall back to count_logs or query_logs to answer a question about meaning. "+
-					"Widen the time range once, rephrase the query, or report that no matching conversations were found.", result.Threshold)
+					"For a topic question - one that names something to look for - do not fall back to count_logs or query_logs to answer a question about meaning: "+
+					"widen the time range once, try other phrasings, or report that no matching conversations were found. "+
+					"For a survey question - what someone was doing, what the themes or topics are - this was the wrong first step, because a description of activity is not a conversation and does not embed near one: "+
+					"take the sample with query_logs using include_content and limit 25, and say in the answer that it was drawn from a sample and is not representative of the entire traffic.", result.Threshold)
 			}
 			return response, nil
 		},
@@ -136,7 +146,7 @@ func queryLogsTool() Tool {
   "required": ["filters"]
 }`,
 		execute: func(ctx context.Context, deps *ToolDeps, args map[string]any) (any, error) {
-			now := Now()
+			now := deps.now()
 			filters, err := filterArg(args, now, deps.scope)
 			if err != nil {
 				return nil, err
@@ -163,6 +173,9 @@ func queryLogsTool() Tool {
 			if err != nil {
 				return nil, err
 			}
+			if includeContent {
+				hydrateConversations(ctx, deps.logManager, result.Logs)
+			}
 			rows := make([]logRow, 0, len(result.Logs))
 			for i := range result.Logs {
 				rows = append(rows, projectLog(&result.Logs[i], includeContent, LogContentChars))
@@ -182,6 +195,48 @@ func queryLogsTool() Tool {
 				"window":  resolvedWindow(filters),
 			}, filters), nil
 		},
+	}
+}
+
+// hydrateConversations fills list rows in with their message history, so a
+// content preview is read from the conversation and not from the list query's
+// content_summary column - which on the plain store is every message joined
+// from the top, and for a coding agent nothing but its setup.
+//
+// Only the history and output are copied in; every other field stays the list
+// row's. A reader that cannot hydrate, or a failed read, leaves the rows as
+// they were and their previews fall back to the summary.
+func hydrateConversations(ctx context.Context, reader LogReader, logs []logstore.Log) {
+	hydrator, ok := reader.(SemanticHydrator)
+	if !ok {
+		return
+	}
+	ids := make([]string, 0, len(logs))
+	for i := range logs {
+		if !logs[i].ContentHidden {
+			ids = append(ids, logs[i].ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	full, err := hydrator.GetLogsByIDs(ctx, ids)
+	if err != nil {
+		return
+	}
+	byID := make(map[string]*logstore.Log, len(full))
+	for i := range full {
+		byID[full[i].ID] = &full[i]
+	}
+	for i := range logs {
+		entry := byID[logs[i].ID]
+		if entry == nil || entry.ContentHidden {
+			continue
+		}
+		logs[i].InputHistoryParsed = entry.InputHistoryParsed
+		logs[i].ResponsesInputHistoryParsed = entry.ResponsesInputHistoryParsed
+		logs[i].OutputMessageParsed = entry.OutputMessageParsed
+		logs[i].ResponsesOutputParsed = entry.ResponsesOutputParsed
 	}
 }
 
@@ -214,7 +269,7 @@ func getLogDetailTool() Tool {
 				return nil, fmt.Errorf("could not load log %s: %w", id, err)
 			}
 			if entry == nil {
-				return nil, fmt.Errorf("no log found with id %s", id)
+				return nil, logNotFound(id, deps.scope)
 			}
 			return projectLog(entry, true, DetailContentChars), nil
 		},
@@ -251,7 +306,7 @@ func countLogsTool() Tool {
   "required": ["filters"]
 }`,
 		execute: func(ctx context.Context, deps *ToolDeps, args map[string]any) (any, error) {
-			now := Now()
+			now := deps.now()
 			filters, err := filterArg(args, now, deps.scope)
 			if err != nil {
 				return nil, err
@@ -341,7 +396,7 @@ func queryMetricsTool() Tool {
   "required": ["filters", "metrics"]
 }`,
 		execute: func(ctx context.Context, deps *ToolDeps, args map[string]any) (any, error) {
-			now := Now()
+			now := deps.now()
 			filters, err := filterArg(args, now, deps.scope)
 			if err != nil {
 				return nil, err
@@ -402,7 +457,7 @@ func queryMetricsTool() Tool {
 				if interval == "day" {
 					bucket = 86400
 				}
-				if span := filters.EndTime.Sub(*filters.StartTime).Seconds(); span/float64(bucket) > MaxHistogramBuckets {
+				if histogramBucketCount(*filters.StartTime, *filters.EndTime, bucket) > MaxHistogramBuckets {
 					return nil, fmt.Errorf(`interval %q over this range produces more than %d buckets; use interval "day" or a shorter range`, interval, MaxHistogramBuckets)
 				}
 			}
@@ -953,7 +1008,7 @@ func queryUsageByTool() Tool {
 				return nil, fmt.Errorf("unknown dimension %q; supported: %s", raw, strings.Join(enumValues, ", "))
 			}
 
-			now := Now()
+			now := deps.now()
 			filters, err := filterArg(args, now, rankingScope(deps.scope, string(dimension)))
 			if err != nil {
 				return nil, err
@@ -967,11 +1022,21 @@ func queryUsageByTool() Tool {
 			if err != nil {
 				return nil, fmt.Errorf("%s rankings failed: %w", dimension, err)
 			}
-			return noteRequestTypes(setRankingLogsLink(map[string]any{
+			scope := scopeNote(filters, deps.scope)
+			out := map[string]any{
 				"rankings": linkDimensionRankings(result, filters, dimension),
-				"scope":    scopeNote(filters, deps.scope),
+				"scope":    scope,
 				"window":   resolvedWindow(filters),
-			}, result, filters, dimension), filters), nil
+			}
+			// A key ranking takes no default scope (rankingScope), so for an
+			// identified caller it ranks everyone's keys - and "whats my vk" was
+			// answered from its top row: "your traffic is associated with the
+			// virtual key X". Said here, with the id to copy, rather than left to
+			// the scope tag the model read past.
+			if dimension == logstore.RankingDimensionVirtualKey && deps.scope.HasIdentity && (scope == "all" || scope == "deployment") {
+				out["guidance"] = fmt.Sprintf("These are the keys everyone you may see used, not the person asking: a row here is not their key. For the keys their own requests used, call again with user_ids: [%q].", deps.scope.UserID)
+			}
+			return noteRequestTypes(setRankingLogsLink(out, result, filters, dimension), filters), nil
 		},
 	}
 }
@@ -1019,7 +1084,7 @@ func queryModelsTool() Tool {
   "required": ["filters"]
 }`,
 		execute: func(ctx context.Context, deps *ToolDeps, args map[string]any) (any, error) {
-			now := Now()
+			now := deps.now()
 			filters, err := filterArg(args, now, deps.scope)
 			if err != nil {
 				return nil, err
@@ -1088,11 +1153,16 @@ func queryModelsTool() Tool {
 // quality - a guessed model or key name returns an empty result that reads
 // exactly like a real finding of zero, and a question with no stated scope
 // has no sensible default without this.
+// filterSpaceCoverage rides on every describe_filter_space result. It is one
+// sentence because the result is replayed for the rest of the turn.
+const filterSpaceCoverage = "These are values seen in logged traffic, not the configured set: a virtual key, team or customer with no requests is not listed. describe_virtual_key looks a key up by exact name or id regardless of traffic."
+
 func describeFilterSpaceTool() Tool {
 	return Tool{
 		name: "describe_filter_space",
 		description: "Report who is asking, what teams/customers/business units they could mean, and the real values that appear in this deployment's logs - models, apps, stop reasons, virtual keys, routing rules, provider keys, aliases, routing engines, tool call names and metadata keys - up to 50 of each, not necessarily every one that exists. " +
 			"Call this before filtering by a name you are not certain about: guessing a model or key name returns an empty result that looks like a real finding. " +
+			"Every list here is what logged traffic contains, not what is configured - the result's coverage note says so - so a virtual key that exists but has not been used is absent here and is still found by describe_virtual_key by its exact name. " +
 			"If a deployment has more than 50 of something, this list is a sample, not the full set - pass search to narrow to the specific value you need rather than treating an absence here as proof it does not exist. " +
 			"Also call it whenever a question about usage, spend or performance does not say whose traffic it means - with a known user, their own traffic is the default; without one there is no default, so ask. " +
 			"ask_user accepts at most 8 options, well under what teams, customers and business units here can add up to together, so narrow before asking: use any wording already in the question to filter this tool's results down to a short list, or, if the question gives no hint which of team, customer or business unit it means, ask that first and only list one dimension's values (still narrowed to 8) once they answer. Never pass every team, customer and business unit into one ask_user call.",
@@ -1120,6 +1190,15 @@ func describeFilterSpaceTool() Tool {
 			out := map[string]any{
 				"caller_is_identified": deps.scope.HasIdentity,
 				"default_scope": func() string {
+					// The deployment, for a caller nothing restricts: their own
+					// traffic is usually dashboard checks, and "we" means the lot.
+					if deps.scope.Unrestricted {
+						note := "the whole deployment - nothing restricts this caller, so query without asking whose traffic is meant"
+						if deps.scope.HasIdentity {
+							note += fmt.Sprintf("; for their own traffic alone (\"I\", \"my\") pass user_ids: [%q]", deps.scope.UserID)
+						}
+						return note
+					}
 					if deps.scope.HasIdentity {
 						return "the person asking"
 					}
@@ -1131,6 +1210,12 @@ func describeFilterSpaceTool() Tool {
 			}
 			if deps.scope.HasIdentity {
 				out["caller_user_id"] = deps.scope.UserID
+			}
+			// What "all" covers for this caller. Without it the model can only
+			// say "everything you may see", which is true and tells the reader
+			// nothing about whether a total is their own, their team's or wider.
+			if deps.scope.Visibility != "" {
+				out["caller_can_see"] = deps.scope.Visibility
 			}
 
 			models, err := deps.logManager.GetAvailableModels(ctx, limit, query)
@@ -1237,6 +1322,11 @@ func describeFilterSpaceTool() Tool {
 				}
 				out[entry.key] = keyPairLabels(results[index])
 			}
+			// Said on every result, not only an empty one: asked for a key that had
+			// been created minutes earlier, Warp searched here, found nothing, and
+			// reported that no such key existed. These lists are what traffic
+			// contains, and the model has to know that to read an absence right.
+			out["coverage"] = filterSpaceCoverage
 			// A search that matched nothing reads like "nothing exists" unless it
 			// says otherwise - a live run searched "team", got no teams whose
 			// names contain the word, and reported that no team had traffic.
@@ -1247,7 +1337,7 @@ func describeFilterSpaceTool() Tool {
 					found += len(values)
 				}
 				if found == 0 {
-					out["guidance"] = fmt.Sprintf("Nothing matched search %q. search matches part of a value's name, not a kind of value; call describe_filter_space again without search to list every team, customer, model and key before concluding none exist.", query)
+					out["guidance"] = fmt.Sprintf("Nothing matched search %q. search matches part of a value's name, not a kind of value; call describe_filter_space again without search to list every team, customer, model and key before concluding none exist. A virtual key with no traffic is never listed here: describe_virtual_key finds it by exact name.", query)
 				}
 			}
 			return out, nil

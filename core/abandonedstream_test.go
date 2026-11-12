@@ -96,6 +96,7 @@ func (p *abandonedUpstreamProvider) ChatCompletion(_ *schemas.BifrostContext, _ 
 // was: the worker's shutdown drain also bills abandoned messages, and a test that
 // only counts could be satisfied by that path instead of the one under test.
 type terminalHookCounter struct {
+	pre     atomic.Int64
 	results atomic.Int64
 	errors  atomic.Int64
 
@@ -116,6 +117,7 @@ func (c *terminalHookCounter) PreRequestHook(_ *schemas.BifrostContext, _ *schem
 	return nil
 }
 func (c *terminalHookCounter) PreLLMHook(_ *schemas.BifrostContext, req *schemas.BifrostRequest) (*schemas.BifrostRequest, *schemas.LLMPluginShortCircuit, error) {
+	c.pre.Add(1)
 	return req, nil, nil
 }
 func (c *terminalHookCounter) PostLLMHook(_ *schemas.BifrostContext, resp *schemas.BifrostResponse, bifrostErr *schemas.BifrostError) (*schemas.BifrostResponse, *schemas.BifrostError, error) {
@@ -139,7 +141,7 @@ func (c *terminalHookCounter) PostLLMHook(_ *schemas.BifrostContext, resp *schem
 // both a ready send (cap-1 channel, drained on acquire) and a ready ctx.Done(); Go
 // picks uniformly among ready cases, so n iterations expose that with probability
 // 1 - 2^-n.
-func runAbandonedRequests(t *testing.T, n int, fail bool) *terminalHookCounter {
+func runAbandonedRequests(t *testing.T, n int, fail bool, tracerOverride ...schemas.Tracer) *terminalHookCounter {
 	t.Helper()
 
 	counter := &terminalHookCounter{}
@@ -181,7 +183,13 @@ func runAbandonedRequests(t *testing.T, n int, fail bool) *terminalHookCounter {
 	for i := 0; i < n; i++ {
 		ctx, cancel := schemas.NewBifrostContextWithCancel(context.Background())
 		// tryRequest stamps the tracer before enqueue; the retry loop refuses a context without one.
-		ctx.SetValue(schemas.BifrostContextKeyTracer, client.getTracer())
+		tracer := client.getTracer()
+		if len(tracerOverride) > 0 && tracerOverride[0] != nil {
+			tracer = tracerOverride[0]
+		}
+		ctx.SetValue(schemas.BifrostContextKeyTracer, tracer)
+		// A real request always carries one, and trace completion needs it.
+		ctx.SetValue(schemas.BifrostContextKeyTraceID, tracer.CreateTrace(""))
 		msg := client.getChannelMessage(schemas.BifrostRequest{
 			RequestType: schemas.ChatCompletionRequest,
 			ChatRequest: &schemas.BifrostChatRequest{
@@ -381,7 +389,7 @@ func runClaimedDeliveriesWithDeadCaller(t *testing.T, n int, fail bool) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("iteration %d: worker never reached the provider", i)
 		}
-		cancel()                      // the caller's context ends...
+		cancel()                       // the caller's context ends...
 		upstream.release <- struct{}{} // ...and the upstream completes at that same instant
 
 		// The caller has NOT abandoned: this models tryRequest losing the CAS race.
@@ -535,6 +543,89 @@ func TestRequestWorkerBillsAbandonedKeySelectionError(t *testing.T) {
 	for i, msg := range counter.errorMessages() {
 		if !strings.Contains(msg, "no keys found that support model: gpt-4o-mini") {
 			t.Fatalf("billed error %d is %q, want the key-selection error", i, msg)
+		}
+	}
+}
+
+// A caller that disconnects leaves its worker still writing the response attributes and
+// plugin logs, so the transport defers completion and the worker must complete the trace
+// itself. Without this every abandoned request exports a trace missing its cost and model.
+func TestRequestWorkerCompletesEveryAbandonedTrace(t *testing.T) {
+	const n = 64
+	tracer := newRecordingTracer()
+	runAbandonedRequests(t, n, false, tracer)
+
+	if got := tracer.deferred.Load(); got != n {
+		t.Errorf("completion deferred for %d of %d abandoned requests; the transport would flush an incomplete trace for the rest", got, n)
+	}
+	if got := tracer.completed.Load(); got != n {
+		t.Errorf("worker completed %d of %d abandoned traces; the rest are never exported", got, n)
+	}
+	if got := tracer.cleared.Load(); got != n {
+		t.Errorf("deferral marker cleared %d of %d times; leftovers would strand later traces", got, n)
+	}
+}
+
+// TestDroppedRequestRunsPostHooks pins that a request rejected before it reaches a worker
+// (dropExcessRequests on a full queue) still runs the post-hooks its pre-hooks paired with.
+// Without them, plugin state opened in PreLLMHook (e.g. bifrost_active_requests) leaks per drop.
+func TestDroppedRequestRunsPostHooks(t *testing.T) {
+	counter := &terminalHookCounter{}
+	account := NewMockAccount()
+	account.AddProvider(schemas.OpenAI, 1, 1)
+	account.SetKeysForProvider(schemas.OpenAI, []schemas.Key{{
+		ID: "k", Value: *schemas.NewSecretVar("sk-test"), Models: schemas.WhiteList{"*"}, Weight: 100,
+	}})
+	client, err := Init(context.Background(), schemas.BifrostConfig{
+		Account: account, Logger: NewNoOpLogger(), LLMPlugins: []schemas.LLMPlugin{counter}, DropExcessRequests: true,
+	})
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+	t.Cleanup(client.Shutdown)
+
+	// Swap in a full queue with no worker so every enqueue hits the drop branch.
+	realPq, err := client.getProviderQueue(schemas.OpenAI)
+	if err != nil {
+		t.Fatalf("getProviderQueue: %v", err)
+	}
+	full := &ProviderQueue{queue: make(chan *ChannelMessage, 1), done: make(chan struct{})}
+	full.queue <- &ChannelMessage{}
+	client.requestQueues.Store(schemas.OpenAI, full)
+	t.Cleanup(func() { client.requestQueues.Store(schemas.OpenAI, realPq) })
+
+	newReq := func() *schemas.BifrostChatRequest {
+		return &schemas.BifrostChatRequest{Provider: schemas.OpenAI, Model: "gpt-4o-mini",
+			Input: []schemas.ChatMessage{{Role: schemas.ChatMessageRoleUser, Content: &schemas.ChatMessageContent{ContentStr: new("hi")}}}}
+	}
+	assertDropped := func(t *testing.T, bifrostErr *schemas.BifrostError) {
+		t.Helper()
+		if bifrostErr == nil || bifrostErr.StatusCode == nil || *bifrostErr.StatusCode != 503 {
+			t.Fatalf("want 503 queue-full error, got %+v", bifrostErr)
+		}
+	}
+
+	const n = 5
+	for range n {
+		ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+		_, bifrostErr := client.ChatCompletionRequest(ctx, newReq())
+		assertDropped(t, bifrostErr)
+	}
+	for range n {
+		ctx := schemas.NewBifrostContext(context.Background(), schemas.NoDeadline)
+		stream, bifrostErr := client.ChatCompletionStreamRequest(ctx, newReq())
+		if stream != nil {
+			t.Fatal("dropped stream request returned a stream")
+		}
+		assertDropped(t, bifrostErr)
+	}
+
+	if pre, post := counter.pre.Load(), counter.errors.Load()+counter.results.Load(); pre != 2*n || post != pre {
+		t.Fatalf("PreLLMHook ran %d times, PostLLMHook %d; every dropped request must run its post-hooks", pre, post)
+	}
+	for _, msg := range counter.errorMessages() {
+		if !strings.Contains(msg, "queue is full") {
+			t.Fatalf("PostLLMHook saw %q, want the queue-full error", msg)
 		}
 	}
 }

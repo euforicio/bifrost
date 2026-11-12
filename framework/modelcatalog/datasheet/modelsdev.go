@@ -302,11 +302,11 @@ func (s *Store) mergeOfficialPricingRows(ctx context.Context, rows []configstore
 		}
 		existing := make(map[string]configstoreTables.TableModelPricing, len(existingRows))
 		for _, row := range existingRows {
-			existing[makeKey(row.Model, row.Provider, row.Mode)] = row
+			existing[makeKeyNormalized(row.Model, row.Provider, row.Mode)] = row
 		}
 		merged := make([]configstoreTables.TableModelPricing, 0, len(rows))
 		for _, row := range rows {
-			key := makeKey(row.Model, row.Provider, row.Mode)
+			key := makeKeyNormalized(row.Model, row.Provider, row.Mode)
 			merged = append(merged, mergeModelsDevRow(existing[key], row))
 		}
 		if err := s.configStore.UpsertModelPricesBatch(ctx, merged); err != nil {
@@ -317,10 +317,14 @@ func (s *Store) mergeOfficialPricingRows(ctx context.Context, rows []configstore
 
 	s.mu.Lock()
 	for _, row := range rows {
-		key := makeKey(row.Model, row.Provider, row.Mode)
+		key := makeKeyNormalized(row.Model, row.Provider, row.Mode)
 		s.pricingData[key] = mergeModelsDevRow(s.pricingData[key], row)
 	}
-	s.rebuildDatasheetViewUnsafe()
+	mergedRows := make([]configstoreTables.TableModelPricing, 0, len(s.pricingData))
+	for _, row := range s.pricingData {
+		mergedRows = append(mergedRows, row)
+	}
+	s.rebuildDatasheetViewUnsafe(mergedRows)
 	s.mu.Unlock()
 	return nil
 }
