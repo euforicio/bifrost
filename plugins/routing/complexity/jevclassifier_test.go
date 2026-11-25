@@ -273,5 +273,15 @@ func TestJevClassifierClassify(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, 1, calls)
 		assert.Equal(t, first, second)
+
+		other := NewJevClassifier(nil)
+		other.Configure(testJevPrimaryAnalyzerConfig())
+		other.SetSystemOneFunc(func(context.Context, *JevConfig, string, map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
+			return systemOneResponse(fixtureJevModel, "COMPLEX", 0.9, nil), nil
+		})
+		independent, err := other.Classify(ctx, ComplexityInput{LastUserText: "hello"})
+		require.NoError(t, err)
+		require.NotNil(t, independent)
+		assert.Equal(t, TierComplex, independent.Tier)
 	})
 }

@@ -96,7 +96,7 @@ func TestClassifyJevComplexity(t *testing.T) {
 				Answers: map[string]json.RawMessage{"complexity_tier": choice},
 			}, nil
 		})
-		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"})
+		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"}, plugin.jevClassifier)
 		require.NotNil(t, proposal.Result)
 		assert.Equal(t, complexity.TierSimple, proposal.Result.Tier)
 		assert.Equal(t, complexity.MechanismJev, proposal.Mechanism)
@@ -112,7 +112,7 @@ func TestClassifyJevComplexity(t *testing.T) {
 		plugin := newPlugin(func(context.Context, *complexity.JevConfig, string, map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
 			return nil, complexity.ErrJevKeyMissing
 		})
-		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"})
+		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"}, plugin.jevClassifier)
 		assert.Nil(t, proposal.Result)
 		assert.Equal(t, complexity.MechanismSkipped, proposal.Mechanism)
 		assert.Nil(t, proposal.FailClosed)
@@ -123,7 +123,7 @@ func TestClassifyJevComplexity(t *testing.T) {
 		plugin := newPlugin(func(context.Context, *complexity.JevConfig, string, map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
 			return nil, ErrJevClassificationTimeout
 		})
-		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"})
+		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"}, plugin.jevClassifier)
 		assert.Nil(t, proposal.Result)
 		assert.Nil(t, proposal.FailClosed)
 		assert.Contains(t, proposal.LogMessage, "no complexity tier is published")
@@ -137,7 +137,7 @@ func TestClassifyJevComplexity(t *testing.T) {
 				Answers: map[string]json.RawMessage{"complexity_tier": choice},
 			}, nil
 		})
-		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"})
+		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"}, plugin.jevClassifier)
 		assert.Nil(t, proposal.Result)
 		assert.Nil(t, proposal.FailClosed)
 		assert.Contains(t, proposal.LogMessage, "OTHER/UNKNOWN")
@@ -151,9 +151,36 @@ func TestClassifyJevComplexity(t *testing.T) {
 				Answers: map[string]json.RawMessage{"complexity_tier": choice},
 			}, nil
 		})
-		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"})
+		proposal := plugin.classifyJevComplexity(schemas.NewBifrostContext(context.Background(), time.Time{}), complexity.ComplexityInput{LastUserText: "hi"}, plugin.jevClassifier)
 		assert.Nil(t, proposal.Result)
 		assert.Nil(t, proposal.FailClosed)
 		assert.Contains(t, proposal.LogMessage, "no complexity tier is published")
 	})
+}
+
+// BenchmarkJevRouting measures primary classifier selection with a local System One response.
+func BenchmarkJevRouting(b *testing.B) {
+	plugin := &RoutingPlugin{jevClassifier: complexity.NewJevClassifier(nil)}
+	cfg := complexity.DefaultAnalyzerConfig()
+	cfg.Jev = testJevClassifierConfig()
+	plugin.complexityConfig.Store(&cfg)
+	plugin.jevClassifier.Configure(&cfg)
+	response := &schemas.BifrostSystemOneResponse{
+		Model: "jev-latest",
+		Answers: map[string]json.RawMessage{
+			"complexity_tier": json.RawMessage(`{"type":"choice","choice":"SIMPLE","confidence":0.9}`),
+		},
+	}
+	plugin.jevClassifier.SetSystemOneFunc(func(context.Context, *complexity.JevConfig, string, map[string]json.RawMessage) (*schemas.BifrostSystemOneResponse, error) {
+		return response, nil
+	})
+	input := complexity.ComplexityInput{LastUserText: "hi"}
+	b.ReportAllocs()
+	for b.Loop() {
+		ctx := schemas.NewBifrostContext(b.Context(), schemas.NoDeadline)
+		if proposal := plugin.classifyComplexityInput(ctx, input); proposal.Mechanism != complexity.MechanismJev {
+			b.Fatal(proposal.LogMessage)
+		}
+		ctx.Cancel()
+	}
 }

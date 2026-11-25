@@ -1218,6 +1218,7 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 								} else {
 									form.setValue("key.databricks_key_config.client_id", undefined, { shouldDirty: true });
 									form.setValue("key.databricks_key_config.client_secret", undefined, { shouldDirty: true });
+									form.setValue("key.databricks_key_config.scopes", undefined, { shouldDirty: true });
 								}
 							}}
 						>
@@ -1285,6 +1286,26 @@ export function ApiKeyFormFragment({ control, providerName, baseProviderType, fo
 												placeholder={t("providers.keys.databricksClientSecretPlaceholder")}
 												type="text"
 												{...field}
+											/>
+										</FormControl>
+										<FormMessage />
+									</FormItem>
+								)}
+							/>
+							<FormField
+								control={control}
+								name="key.databricks_key_config.scopes"
+								render={({ field }) => (
+									<FormItem>
+										<FormLabel>{t("providers.keys.scopesOptional")}</FormLabel>
+										<FormDescription>{t("providers.keys.databricksScopesHelp")}</FormDescription>
+										<FormControl>
+											<TagInput
+												data-testid="key-input-databricks-scopes"
+												placeholder={t("providers.keys.addScopePlaceholder")}
+												value={field.value ?? []}
+												// Scopes go out space-joined, so a pasted "a b" is two scopes, not one.
+												onValueChange={(v) => field.onChange(v.flatMap((s) => s.split(/\s+/)).filter(Boolean))}
 											/>
 										</FormControl>
 										<FormMessage />

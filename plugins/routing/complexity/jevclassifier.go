@@ -35,7 +35,7 @@ var ErrJevLowConfidence = errors.New("jev choice confidence below min_confidence
 // request does not force SIMPLE/MEDIUM/COMPLEX.
 var ErrJevUnresolvedChoice = errors.New("jev choice is OTHER or UNKNOWN")
 
-type jevEvalOnceKey struct{}
+type jevEvalOnceKey struct{ classifier *JevClassifier }
 
 type jevEvalOnceState struct {
 	once   sync.Once
@@ -89,7 +89,10 @@ func NewJevClassifier(logger schemas.Logger) *JevClassifier {
 
 func (c *JevClassifier) Configure(config *AnalyzerConfig) {
 	c.mu.Lock()
-	c.config = cloneAnalyzerConfig(config)
+	c.config = nil
+	if config != nil && config.Jev != nil {
+		c.config = cloneAnalyzerConfig(config)
+	}
 	c.mu.Unlock()
 }
 
@@ -134,7 +137,7 @@ func (c *JevClassifier) Timeout() time.Duration {
 }
 
 func (c *JevClassifier) Classify(ctx context.Context, input ComplexityInput) (*JevResult, error) {
-	if state := jevEvalOnceFromContext(ctx); state != nil {
+	if state := c.jevEvalOnceFromContext(ctx); state != nil {
 		state.once.Do(func() {
 			state.result, state.err = c.classifyUncached(ctx, input)
 		})
@@ -354,15 +357,15 @@ func isJevUnresolvedChoice(tier string) bool {
 	return tier == jevChoiceOther || tier == jevChoiceUnknown
 }
 
-func jevEvalOnceFromContext(ctx context.Context) *jevEvalOnceState {
+func (c *JevClassifier) jevEvalOnceFromContext(ctx context.Context) *jevEvalOnceState {
 	bfCtx, ok := ctx.(*schemas.BifrostContext)
 	if !ok || bfCtx == nil {
 		return nil
 	}
-	if existing, ok := bfCtx.Value(jevEvalOnceKey{}).(*jevEvalOnceState); ok && existing != nil {
+	if existing, ok := bfCtx.Value(jevEvalOnceKey{classifier: c}).(*jevEvalOnceState); ok && existing != nil {
 		return existing
 	}
 	state := &jevEvalOnceState{}
-	bfCtx.SetValue(jevEvalOnceKey{}, state)
+	bfCtx.SetValue(jevEvalOnceKey{classifier: c}, state)
 	return state
 }

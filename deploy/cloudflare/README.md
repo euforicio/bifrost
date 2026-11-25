@@ -62,9 +62,9 @@ backup and verify byte-level native imports before enabling production writers.
 
 ## Stable upstream release
 
-This fork includes the stable open-source `transports/v2.5.1` release
-(`7cb75fb2f8276ca48d0792c857fecb67b8879e2f`, published 2026-11-10).
-The production transport uses core 1.15.2, framework 1.12.2 and the matching
+This fork includes the stable open-source `transports/v2.6.0` release
+(`172617bb045c6f43d697843c115e64f0155ed143`, published 2026-11-19).
+The production transport uses core 1.16.0, framework 1.13.0 and the matching
 plugin releases, built from local workspace sources to retain Cloudflare storage,
 provider account login, subscription pricing and Jev System One routing.
 The fork's Jev classifier remains available alongside upstream's decision classifier.

@@ -61,7 +61,7 @@ func Initialize(ctx context.Context, rawDSN, schema string, logger schemas.Logge
 		Enabled: true,
 		Type:    configstore.ConfigStoreTypePostgres,
 		Config:  &connection,
-	}, logger)
+	}, logger, configstore.WithoutRSSFeedSeeds())
 	if err != nil {
 		return fmt.Errorf("initialize native config store schema: %w", err)
 	}

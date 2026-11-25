@@ -37,12 +37,14 @@ func (p *RoutingPlugin) SetSystemOneRequestExecutor(executor SystemOneRequestExe
 		if p.jevClassifier != nil {
 			p.jevClassifier.SetSystemOneFunc(nil)
 		}
+		p.forEachModelRouter(func(rt *modelRouterRuntime) { rt.jev.SetSystemOneFunc(nil) })
 		return
 	}
 	p.systemOneRequestExecutor.Store(&executor)
 	if p.jevClassifier != nil {
 		p.jevClassifier.SetSystemOneFunc(p.classifyComplexityTextViaJev)
 	}
+	p.forEachModelRouter(func(rt *modelRouterRuntime) { rt.jev.SetSystemOneFunc(p.classifyComplexityTextViaJev) })
 }
 
 func (p *RoutingPlugin) systemOneExecutor() SystemOneRequestExecutor {
@@ -161,8 +163,8 @@ func recordRoutingJevUsage(ctx context.Context, jev *complexity.JevConfig, input
 	})
 }
 
-func (p *RoutingPlugin) classifyJevComplexity(ctx *schemas.BifrostContext, input complexity.ComplexityInput) complexityProposal {
-	result, err := p.jevClassifier.Classify(ctx, input)
+func (p *RoutingPlugin) classifyJevComplexity(ctx *schemas.BifrostContext, input complexity.ComplexityInput, classifier *complexity.JevClassifier) complexityProposal {
+	result, err := classifier.Classify(ctx, input)
 	if err == nil && result != nil {
 		out := &complexity.ComplexityResult{Tier: result.Tier}
 		confidence := result.Confidence
@@ -198,7 +200,7 @@ func (p *RoutingPlugin) classifyJevComplexity(ctx *schemas.BifrostContext, input
 	case errors.Is(err, ErrJevClassificationTimeout):
 		unavailableLog = fmt.Sprintf(
 			"Jev complexity classification timed out after %s, so no complexity tier is published",
-			p.jevClassifier.Timeout(),
+			classifier.Timeout(),
 		)
 	case errors.Is(err, complexity.ErrJevLowConfidence):
 		unavailableLog = fmt.Sprintf("Jev complexity confidence below threshold, so no complexity tier is published: %v", err)

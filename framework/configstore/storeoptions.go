@@ -14,6 +14,7 @@ type storeOptions struct {
 	// migrationMatViewPause, when set, replaces the default matview pause used by
 	// this store's schema migrations.
 	migrationMatViewPause *logstore.MatViewPauseOptions
+	omitRSSFeedSeeds      bool
 }
 
 // MigrationLockRetryOptions returns the lock-timeout retry options a config
@@ -37,4 +38,12 @@ func MigrationLockRetryOptions(cfg *Config, logger schemas.Logger) postgresconn.
 // Without it the default cancel delay applies.
 func WithMigrationMatViewPause(pause logstore.MatViewPauseOptions) Option {
 	return func(o *storeOptions) { o.migrationMatViewPause = &pause }
+}
+
+type omitRSSFeedSeedsKey struct{}
+
+// WithoutRSSFeedSeeds creates an empty RSS table for snapshot imports.
+// The source snapshot supplies the feed rows, including admin preferences.
+func WithoutRSSFeedSeeds() Option {
+	return func(o *storeOptions) { o.omitRSSFeedSeeds = true }
 }
