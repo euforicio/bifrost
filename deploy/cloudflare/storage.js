@@ -80,6 +80,19 @@ export class SQLiteFiles extends DurableObject {
     });
     return {verified:true};
   }
+  // A new, empty authority for an application that starts from nothing (the
+  // Rift server's stores, backends/native/rift-server.js): only on a store that
+  // has never held a file, an import or a commit. Its receipt records the empty
+  // start, so the store then claims like a verified import.
+  establishEmpty() {
+    return this.ctx.storage.transactionSync(()=>{
+      const state=this.readiness();
+      if (state.verified_import) return {established:true};
+      if (state.revision!==0 || state.size!==0 || this.sql.exec("SELECT count(*) AS n FROM files").one().n!==0) throw new Error("Store is not empty");
+      this.sql.exec("INSERT INTO import_receipt VALUES(1,0,?)","e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+      return {established:true};
+    });
+  }
   initializeImport(capability) {
     if (this.readiness().ready) throw new Error("Database already imported");
     return this.activate(this.generation()+1,capability);
